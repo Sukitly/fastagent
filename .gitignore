@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.fastagent/
+*.log
+.DS_Store
