@@ -24,7 +24,6 @@ export { piDefaultTools, piReadOnlyTools } from "./engines/pi/tools.ts";
 export {
   defineConfig,
   loadConfig,
-  pickModelSpec,
   resolveModel,
   type FastagentConfig,
   type LoadedConfig,
@@ -39,11 +38,4 @@ export {
   type PiHarnessConfig,
   type SessionRepoLike,
 } from "./engines/pi/harness.ts";
-export {
-  type Auth,
-  type AuthResolver,
-  envAuth,
-  piOAuthAuth,
-  resolvePiAuth,
-  PI_AUTH_PATH,
-} from "./engines/pi/auth.ts";
+export { type Auth, type AuthResolver, envAuth, piOAuthAuth, resolvePiAuth } from "./engines/pi/auth.ts";

@@ -1,19 +1,19 @@
 /**
- * 旗舰 demo:「指向定义文件夹 → agent」(#3 driver)。
+ * Library embedding example: "point at a definition folder → agent" via the
+ * library API (createPiAgentFromDefinition) instead of the `fastagent dev` CLI.
+ * Use this pattern when embedding fastagent inside your own app/server.
+ * For the product path (config + CLI), see examples/agent/fastagent.config.ts.
  *
- * examples/agent/ 里只有标准文件(AGENTS.md + skills/),零代码;
- * driver 读出 instructions + skills,组装 system prompt,挂上 read 工具 → 可服务的 agent。
- *
- * 运行:
+ * Run:
  *   node examples/definition.ts "My app crashes when I click save"
- *   node examples/definition.ts "Can I get my money back? Bought it 3 weeks ago"   # 触发 refund-policy skill
+ *   node examples/definition.ts "Can I get my money back? Bought it 3 weeks ago"   # triggers refund-policy skill
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { getModel } from "@earendil-works/pi-ai";
 import { createPiAgentFromDefinition, piDefaultTools } from "../src/index.ts";
-import lookupOrderTool from "./lookup-order-tool.ts";
+import lookupOrderTool from "./agent/lookup-order-tool.ts";
 
 setGlobalDispatcher(new EnvHttpProxyAgent());
 

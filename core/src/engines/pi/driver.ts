@@ -72,7 +72,7 @@ export async function loadAgentDefinition(
   }
   const root = rootResult.value;
 
-  const agentsPath = `${root}/AGENTS.md`;
+  const agentsPath = join(root, "AGENTS.md");
   const read = await e.readTextFile(agentsPath);
   // Only not_found means "no AGENTS.md". Anything else (permission, io) must surface,
   // otherwise the agent silently runs without instructions (AGENTS.md rule 8).
@@ -83,7 +83,7 @@ export async function loadAgentDefinition(
 
   // 定义内 skills 在前 → 碰撞时定义赢(先到者赢)。缺省追加全局目录(pi parity)。
   const { skills: raw, diagnostics } = await loadSkills(e, [
-    `${root}/skills`,
+    join(root, "skills"),
     ...(options.skillPaths ?? defaultGlobalSkillPaths()),
   ]);
   const byName = new Map<string, Skill>();

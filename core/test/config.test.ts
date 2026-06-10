@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { loadConfig, pickModelSpec, resolveModel } from "../src/index.ts";
+import { loadConfig, resolveModel } from "../src/index.ts";
+import { pickModelSpec } from "../src/engines/pi/config.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 

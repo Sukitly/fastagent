@@ -5,7 +5,7 @@
  * 跑:node ../../src/cli.ts dev .   (真实用户:fastagent dev)
  */
 import { defineConfig } from "../../src/index.ts"; // 真实用户:from "@fastagent/core"
-import lookupOrderTool from "../lookup-order-tool.ts";
+import lookupOrderTool from "./lookup-order-tool.ts";
 
 export default defineConfig({
   model: "openai-codex/gpt-5.5",
