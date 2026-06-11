@@ -28,10 +28,12 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(join(fixtures, "bad-config"))).rejects.toThrow(/must default-export/);
   });
 
-  it("http 形状也校验（http.port 非数字 → 抛）", async () => {
+  it("http 形状也校验（http.port 非数字/超范围 → 抛）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: "oops" } };`);
-    await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be a number/);
+    await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be an integer/);
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: 99999 } };`);
+    await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be an integer/);
   });
 
   it("未知键 → 抛（typo 不得静默退化成 zero-config）", async () => {

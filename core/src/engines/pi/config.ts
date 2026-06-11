@@ -86,8 +86,11 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
         throw new Error(`${path}: unknown key "http.${key}" (valid keys: port)`);
       }
     }
-    if (c.http?.port !== undefined && typeof c.http.port !== "number") {
-      throw new Error(`${path}: "http.port" must be a number`);
+    if (
+      c.http?.port !== undefined &&
+      (typeof c.http.port !== "number" || !Number.isInteger(c.http.port) || c.http.port < 0 || c.http.port > 65535)
+    ) {
+      throw new Error(`${path}: "http.port" must be an integer 0-65535`);
     }
     return { config: c, path };
   }

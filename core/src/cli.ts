@@ -39,6 +39,14 @@ if (command !== "dev") usage(1);
 
 const dir = resolve(dirArg ?? ".");
 
+// Validate flags before any assembly work: argument errors must fail instantly,
+// not after the startup report. (config's http.port is range-checked by loadConfig.)
+const portFlag = values.port === undefined ? undefined : Number(values.port);
+if (portFlag !== undefined && (!Number.isInteger(portFlag) || portFlag < 0 || portFlag > 65535)) {
+  console.error(`invalid --port "${values.port}": must be an integer 0-65535`);
+  process.exit(1);
+}
+
 // .env (secrets) → process.env. Only a missing file is normal; surface anything else.
 try {
   process.loadEnvFile(join(dir, ".env"));
@@ -72,11 +80,7 @@ for (const d of definition.diagnostics) {
   console.error(`[fastagent] warn: ${d.code}: ${d.message} (${d.path})`);
 }
 
-const port = Number(values.port ?? config.http?.port ?? 8787);
-if (!Number.isInteger(port) || port < 0 || port > 65535) {
-  console.error(`invalid --port "${values.port ?? config.http?.port}": must be an integer 0-65535`);
-  process.exit(1);
-}
+const port = portFlag ?? config.http?.port ?? 8787;
 createServer(createInvokeHandler(agent)).listen(port, () => {
   console.error(`[fastagent] http channel on :${port}`);
   console.error(`  curl -N -X POST localhost:${port}/invoke -d '{"session":"s1","text":"hi"}'`);
