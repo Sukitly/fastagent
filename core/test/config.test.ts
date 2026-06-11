@@ -85,6 +85,14 @@ describe("L3: createPiAgentFromWorkspace(config 驱动装配收口引擎侧)", (
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag 赢
   });
 
+  it("L3 自建 workspace state：.fastagent/.gitignore 存在（库调用者与 CLI 同样待遇）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await createPiAgentFromWorkspace(dir);
+    const { readFile } = await import("node:fs/promises");
+    expect(await readFile(join(dir, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
   it("无任何 model 来源 → 启动时抛清晰错误(fail visibly)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     const saved = process.env.FASTAGENT_MODEL;

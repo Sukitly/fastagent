@@ -53,6 +53,7 @@
  *    this boundary must be re-cut: either config grows K keys (L3 inherits them)
  *    or L3 options grow K overrides. Decide from real backends; do not pre-wire.
  */
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
@@ -313,13 +314,20 @@ export async function createPiAgentFromWorkspace(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
+  // Workspace rung owns workspace state: .fastagent/ (layer-3 machine state —
+  // gitignored, deletable, rebuildable) is created HERE, not in the CLI, so library
+  // callers of L3 get the same self-gitignored dir (vite/next-style).
+  const stateDir = join(dir, ".fastagent");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== "EEXIST") throw e;
+  });
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: resolveModel(modelSpec),
     tools: resolveTools(config, dir),
-    // Workspace rung owns workspace state: sessions persist under .fastagent/
-    // (layer-3 machine state — gitignored, deletable, rebuildable). `fastagent dev`
-    // restarts keep conversations — faithful to local pi, which persists sessions too.
-    sessions: jsonlSessionStore({ dir: join(dir, ".fastagent", "sessions"), cwd: dir }),
+    // Sessions persist under the state dir: `fastagent dev` restarts keep
+    // conversations — faithful to local pi, which persists sessions too.
+    sessions: jsonlSessionStore({ dir: join(stateDir, "sessions"), cwd: dir }),
   });
   return { agent, definition, config, configPath, modelSpec };
 }

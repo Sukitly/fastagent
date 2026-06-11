@@ -37,14 +37,14 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
   it("重启存活:新 store 实例(同目录)看得到上一进程的对话历史", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
 
-    // “进程 1”:跑一轮并落盘
+    // "进程 1":跑一轮并落盘
     const agent1 = makeAgent(jsonlSessionStore({ dir }), [
       fauxAssistantMessage("the answer is blue"),
     ]);
     const e1 = await drain(agent1.invoke({ session: "conv" }, { text: "what color?" }));
     expect(e1.at(-1)?.type).toBe("completed");
 
-    // “进程 2”:全新 store 实例,同一目录 → 历史必须还在(磁盘是真相)
+    // "进程 2":全新 store 实例,同一目录 → 历史必须还在(磁盘是真相)
     let turn2: unknown;
     const agent2 = makeAgent(jsonlSessionStore({ dir }), [
       (context) => {
@@ -82,7 +82,31 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
     expect(JSON.stringify(other)).not.toContain("hunter2");
   });
 
-  it("恶意 session id 不逃出 sessions 目录(编码进文件名,且可往返续接)", async () => {
+  it("同 sessionsRoot 不同 cwd 的两个 store 互不打开对方的 session（按项目隔离）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
+    const cwdA = await mkdtemp(join(tmpdir(), "fa-proj-a-"));
+    const cwdB = await mkdtemp(join(tmpdir(), "fa-proj-b-"));
+
+    await drain(
+      makeAgent(jsonlSessionStore({ dir, cwd: cwdA }), [fauxAssistantMessage("secret hunter2")]).invoke(
+        { session: "same-id" },
+        { text: "remember the secret" },
+      ),
+    );
+    let other: unknown;
+    await drain(
+      makeAgent(jsonlSessionStore({ dir, cwd: cwdB }), [
+        (context) => {
+          other = context.messages;
+          return fauxAssistantMessage("nothing");
+        },
+      ]).invoke({ session: "same-id" }, { text: "what do you know?" }),
+    );
+
+    expect(JSON.stringify(other)).not.toContain("hunter2"); // B 看不到 A 的同名 session
+  });
+
+  it("恶意 session id 不逃出 sessions 目录（编码进文件名,且可往返续接）", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const dir = join(root, "sessions");
     const store = jsonlSessionStore({ dir, cwd: root });
@@ -93,7 +117,7 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
     );
     expect(e1.at(-1)?.type).toBe("completed");
 
-    // root 下只多了 sessions/ 这一个目录 —— 没有 escape/ 之类的外溢
+    // root 下只多了 sessions/ 这一个目录 -- 没有 escape/ 之类的外溢
     expect((await readdir(root)).sort()).toEqual(["sessions"]);
 
     // 同一个怪 id 续接命中同一 session(编码是确定且单射的)

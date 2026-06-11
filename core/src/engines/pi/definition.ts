@@ -14,7 +14,8 @@
  *   - bundleAgentDefinition is a **build-time** operation and uses node:fs directly
  *     (it runs on the build machine by definition);
  *   - the invoke path (invoke.ts/harness.ts) never touches the disk itself;
- *   - config.ts / auth.ts / sessions.ts are Node composition-root modules and may use node fs.
+ *   - config.ts / auth.ts / sessions.ts (and create.ts's L3 workspace-state setup)
+ *     are Node composition-root code and may use node fs.
  *
  * Error conventions on this path:
  *   - ExecutionEnv layer returns Result (pi's contract);
@@ -23,7 +24,7 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { cp, copyFile, mkdir } from "node:fs/promises";
+import { cp, copyFile, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
@@ -145,6 +146,12 @@ export async function bundleAgentDefinition(
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
   const definition = await loadAgentDefinition(srcDir, options);
+  // Deterministic rebuild: remove the outputs this bundle owns (AGENTS.md + skills/)
+  // before copying, so a skill dropped from the definition cannot survive as a stale
+  // artifact file ("the artifact is the truth"). Only owned paths are touched —
+  // never the whole outDir (it may be a user directory).
+  await rm(join(outDir, "AGENTS.md"), { force: true });
+  await rm(join(outDir, "skills"), { recursive: true, force: true });
   await mkdir(join(outDir, "skills"), { recursive: true });
   if (definition.instructions !== undefined) {
     await copyFile(join(definition.dir, "AGENTS.md"), join(outDir, "AGENTS.md"));

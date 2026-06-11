@@ -52,7 +52,9 @@ export function jsonlSessionStore(options: { dir: string; cwd?: string }): Sessi
       // Caller-provided session ids land verbatim in jsonl FILENAMES — encode
       // anything unsafe (path separators, "..") before they reach the disk.
       const id = encodeSessionId(sessionId);
-      const existing = (await repo.list()).find((m) => m.id === id);
+      // Scope the lookup to this store's cwd: pi groups sessions by project dir,
+      // and two stores sharing a sessionsRoot must not open each other's sessions.
+      const existing = (await repo.list({ cwd })).find((m) => m.id === id);
       return existing ? repo.open(existing) : repo.create({ id, cwd });
     },
   };

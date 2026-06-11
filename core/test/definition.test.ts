@@ -205,4 +205,14 @@ describe("definition: bundleAgentDefinition(构建时把额外挂载物化进可
     const reloaded = await loadAgentDefinition(outDir, { skillPaths: [] });
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
   });
+
+  it("重建确定性：同 outDir 再 build，被移除的 skill 不得作为陈旧产物存活（产物是真相）", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "fa-bundle-"));
+    // build #1：含额外挂载的 cutting-words
+    await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
+    expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["cutting-words", "season-words"]);
+    // build #2：不再挂载 → cutting-words 必须消失
+    await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [] });
+    expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["season-words"]);
+  });
 });
