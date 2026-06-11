@@ -16,6 +16,7 @@ import {
   piBasePrompt,
   piDefaultTools,
   piReadOnlyTools,
+  type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
@@ -26,7 +27,7 @@ describe("driver: loadAgentDefinition", () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     expect(def.instructions).toContain("Haiku Bot");
     expect(def.instructions).toContain("5-7-5");
-    expect(def.instructionsPath).toMatch(/AGENTS\.md$/);
+    expect(def.dir).toBe(fixtureDir); // AGENTS.md path is derivable: join(dir, "AGENTS.md")
     expect(def.skills).toHaveLength(1);
     expect(def.skills[0]!.name).toBe("season-words");
     expect(def.skills[0]!.description).toContain("kigo");
@@ -85,7 +86,7 @@ describe("driver: assembleSystemPrompt(四段式)", () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     const prompt = assembleSystemPrompt({
       instructions: def.instructions,
-      instructionsPath: def.instructionsPath,
+      instructionsPath: join(fixtureDir, "AGENTS.md"),
       skills: def.skills,
       cwd: "/work",
     });
@@ -117,6 +118,19 @@ describe("driver: assembleSystemPrompt(四段式)", () => {
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
+  });
+});
+
+describe("create L2: 类型只承诺实现尊重的东西", () => {
+  it("L2 options 不接受 skills/systemPrompt(它们来自定义文件夹)", () => {
+    const base: CreatePiAgentFromDefinitionOptions = { model: {} as never };
+    expect(base.model).toBeDefined();
+    // @ts-expect-error -- skills must come from the definition folder, not the caller
+    const withSkills: CreatePiAgentFromDefinitionOptions = { model: {} as never, skills: [] };
+    // @ts-expect-error -- systemPrompt is assembled from the definition, not passed in
+    const withPrompt: CreatePiAgentFromDefinitionOptions = { model: {} as never, systemPrompt: "x" };
+    expect(withSkills).toBeDefined();
+    expect(withPrompt).toBeDefined();
   });
 });
 

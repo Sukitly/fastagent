@@ -16,7 +16,7 @@ import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { createInvokeHandler } from "./channels/http.ts";
 import { loadConfig, pickModelSpec, resolveModel } from "./engines/pi/config.ts";
-import { createPiAgentFromDefinition } from "./engines/pi/driver.ts";
+import { createPiAgentFromDefinition } from "./engines/pi/create.ts";
 import { piDefaultTools } from "./engines/pi/tools.ts";
 
 function usage(code: number): never {

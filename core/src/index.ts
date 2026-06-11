@@ -5,21 +5,32 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 // Channels (N-side; consume only the Agent contract)
 export { createInvokeHandler } from "./channels/http.ts";
 
-// pi reference implementation — high-level (folder → agent)
-export { createPiAgent, type CreatePiAgentOptions } from "./engines/pi/create.ts";
+// pi reference implementation — assembly ladder (L1/L2; L0 below)
+export {
+  createPiAgent,
+  createPiAgentFromDefinition,
+  type CreatePiAgentOptions,
+  type CreatePiAgentFromDefinitionOptions,
+} from "./engines/pi/create.ts";
+
+// pi reference implementation — definition domain (load / bundle)
 export {
   loadAgentDefinition,
-  assembleSystemPrompt,
-  createPiAgentFromDefinition,
-  piBasePrompt,
   bundleAgentDefinition,
   defaultGlobalSkillPaths,
-  type AgentDefinition,
-  type AssembleSystemPromptOptions,
-  type CreatePiAgentFromDefinitionOptions,
+  type LoadedDefinition,
   type LoadAgentDefinitionOptions,
   type SkillCollision,
-} from "./engines/pi/driver.ts";
+} from "./engines/pi/definition.ts";
+
+// pi reference implementation — prompt assembly (pure)
+export {
+  piBasePrompt,
+  assembleSystemPrompt,
+  type AssembleSystemPromptOptions,
+} from "./engines/pi/prompt.ts";
+
+// pi reference implementation — tools & config
 export { piDefaultTools, piReadOnlyTools } from "./engines/pi/tools.ts";
 export {
   defineConfig,
@@ -29,7 +40,7 @@ export {
   type LoadedConfig,
 } from "./engines/pi/config.ts";
 
-// pi reference implementation — low-level building blocks (escape hatch)
+// pi reference implementation — low-level building blocks (escape hatch; L0)
 export { createAgent, type CreateAgentOptions } from "./engines/pi/invoke.ts";
 export { type Lease, type Release, inProcessLease } from "./engines/pi/lease.ts";
 export {

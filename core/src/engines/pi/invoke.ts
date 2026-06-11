@@ -12,12 +12,11 @@
  * (stateless multi-session). Session construction and env/model/tools injection all
  * live in the caller-provided buildHarness factory.
  */
-import type { ImageContent } from "@earendil-works/pi-ai";
 import type { Agent, AgentEvent, Prompt, Scope } from "../../agent.ts";
 import type { BuildHarness } from "./harness.ts";
 import { type Lease, inProcessLease } from "./lease.ts";
 import { EventQueue } from "./queue.ts";
-import { errorToTerminal, toAgentEvent, toTerminal } from "./translate.ts";
+import { errorToTerminal, toAgentEvent, toPiPromptOptions, toTerminal } from "./translate.ts";
 
 export interface CreateAgentOptions {
   buildHarness: BuildHarness;
@@ -58,7 +57,7 @@ export function createAgent(options: CreateAgentOptions): Agent {
         if (event) queue.push(event);
       });
       try {
-        const run = harness.prompt(prompt.text, toPromptOptions(prompt));
+        const run = harness.prompt(prompt.text, toPiPromptOptions(prompt));
         // Yield text / tool_* as they happen, until run settles and the buffer drains.
         yield* queue.drainUntil(run);
         // Terminal is decided by the resolved message's stopReason; catch only
@@ -92,15 +91,4 @@ export function createAgent(options: CreateAgentOptions): Agent {
   }
 
   return { invoke };
-}
-
-function toPromptOptions(prompt: Prompt): { images?: ImageContent[] } | undefined {
-  if (!prompt.images || prompt.images.length === 0) return undefined;
-  return {
-    images: prompt.images.map((img) => ({
-      type: "image",
-      data: img.data,
-      mimeType: img.mimeType,
-    })),
-  };
 }

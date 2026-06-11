@@ -1,4 +1,9 @@
 /**
+ * The config subsystem: schema (defineConfig), loading (loadConfig), and
+ * interpretation of config values (resolveModel for the `model` string,
+ * pickModelSpec for the documented source precedence). One concern: everything
+ * about fastagent.config.ts, nothing else.
+ *
  * fastagent.config.ts — layer 2 of the three-layer workspace (production source):
  * deployment/assembly choices. Checked into git; secrets go in .env.
  *

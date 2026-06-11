@@ -1,12 +1,15 @@
 /**
- * The single pi dependency point for event mapping: pi events/finals → SPEC AgentEvent.
+ * The single pi↔SPEC translation point (both directions).
+ *   pi → SPEC:
  *   - toAgentEvent: in-stream events (text / tool_*); all other pi events return null (dropped).
  *   - toTerminal:   the AssistantMessage resolved by pi `prompt()` → completed / failed.
  *   - errorToTerminal: catch-all for genuine throws → failed.
+ *   SPEC → pi:
+ *   - toPiPromptOptions: SPEC Prompt images → pi prompt options.
  */
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent, Json } from "../../agent.ts";
+import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import type { AgentEvent, Json, Prompt } from "../../agent.ts";
 
 /** In-stream event mapping. Non text/tool_* pi events (turn_start, message_start, …) are dropped. */
 export function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
@@ -53,6 +56,18 @@ export function toTerminal(message: AssistantMessage): AgentEvent {
 export function errorToTerminal(error: unknown): AgentEvent {
   const details = error instanceof Error ? error.message : String(error);
   return { type: "failed", details, retryable: isRetryable(details) };
+}
+
+/** SPEC Prompt → pi prompt options (the reverse direction: images attachment). */
+export function toPiPromptOptions(prompt: Prompt): { images?: ImageContent[] } | undefined {
+  if (!prompt.images || prompt.images.length === 0) return undefined;
+  return {
+    images: prompt.images.map((img) => ({
+      type: "image",
+      data: img.data,
+      mimeType: img.mimeType,
+    })),
+  };
 }
 
 /**

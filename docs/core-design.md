@@ -314,7 +314,7 @@ host ─(target adapter)→ repo/env/lease 的实现接线            ┘
 ## 7. 不变量(实现的法律)
 
 1. 参考实现把 pi 的双口 fan-in 成 SPEC 单流;对 pi 的依赖收敛到 `toAgentEvent` + `toTerminal` 两个 translator。
-2. core 不读盘(吃 `LoadedHarness` 数据;`env` 是透传的执行底座)。
+2. **IO 政策(精确化)**:invoke 路径(invoke/harness)永不碰盘;运行时读定义(definition.ts 的 load)只经 `ExecutionEnv`(可移植);build-time(bundle)与 Node 组合根模块(config/auth)可直接用 node fs。错误通道约定:env 层 Result → load/config 层 throw(启动期响亮失败)→ auth 层 undefined(未配置)+ warn(异常)→ invoke 边界 failed 事件(SPEC 强制)。非致命加载发现(diagnostics/collisions)作为数据返回由 caller surface。
 3. 无状态:每 invoke 现起 harness,用完即弃;耐久状态全在 `SessionStore` 后(满足 SPEC portable conformance)。
 4. 对外 consume 标准(A2A/ACP/OCI),不另立 wire;invoke 不对外、不对齐任何 wire 数据模型。
 5. Task 编排 / Artifact 版本 / 长任务查询 = app 层(adapter + userland),不进 core。
