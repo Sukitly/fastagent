@@ -54,7 +54,9 @@ try {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
 // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
-// so blocked providers are reachable.
+// so blocked providers are reachable. undici is pinned to v7: v8 (≤8.4.1) ProxyAgent
+// corrupts proxied responses (headers lost, gzip body not decompressed → SSE turns
+// parse as empty "stop" messages; verified live 2026-06-11) — re-test before bumping.
 setGlobalDispatcher(new EnvHttpProxyAgent());
 
 const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
