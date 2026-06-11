@@ -13,7 +13,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
 import { type SessionRepoLike, piHarnessFactory } from "./harness.ts";
-import { createAgent } from "./index.ts";
+import { createAgent } from "./invoke.ts";
 import type { Lease } from "./lease.ts";
 
 export interface CreatePiAgentOptions {

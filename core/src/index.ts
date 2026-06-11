@@ -30,7 +30,7 @@ export {
 } from "./engines/pi/config.ts";
 
 // pi reference implementation — low-level building blocks (escape hatch)
-export { createAgent, type CreateAgentOptions } from "./engines/pi/index.ts";
+export { createAgent, type CreateAgentOptions } from "./engines/pi/invoke.ts";
 export { type Lease, type Release, inProcessLease } from "./engines/pi/lease.ts";
 export {
   piHarnessFactory,

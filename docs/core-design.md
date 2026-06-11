@@ -107,7 +107,7 @@ interface Agent { invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent
 pi 的 `AgentHarness` 有**两个口**:`prompt(text) => Promise<AssistantMessage>`(buffered 终值)+ `subscribe(piEvent)`(事件旁路)。SPEC 的**单一事件流**,就是把这两个口 **fan-in** 成一个 async generator:
 
 ```ts
-// invoke(scope, prompt) 的参考实现(与代码同步,见 engines/pi/index.ts):把 pi 双口 fan-in 成单流
+// invoke(scope, prompt) 的参考实现(与代码同步,见 engines/pi/invoke.ts):把 pi 双口 fan-in 成单流
 async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
   const release = lease.tryAcquire(scope.session);          // 单写者,fail-fast(见 §6.6)
   if (!release) { yield failedBusy(); return; }             // "session busy",不排队
