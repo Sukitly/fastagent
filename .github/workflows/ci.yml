@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: core/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: core
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: core
+
+      - name: Test
+        run: npm test
+        working-directory: core

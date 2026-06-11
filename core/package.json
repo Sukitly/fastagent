@@ -1,7 +1,7 @@
 {
   "name": "@fastagent/core",
   "version": "0.1.0",
-  "description": "Agent Handler 协议的参考实现：把 pi AgentHarness 的双口 fan-in 成 SPEC 单流",
+  "description": "Reference implementation of the Agent Handler contract: fan in pi AgentHarness events into the SPEC event stream.",
   "type": "module",
   "engines": {
     "node": ">=26"
