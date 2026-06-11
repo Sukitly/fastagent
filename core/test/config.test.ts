@@ -91,11 +91,12 @@ describe("L3: createPiAgentFromWorkspace(config 驱动装配收口引擎侧)", (
   });
 });
 
-describe("config: resolveModelSpec(优先级 flag > config > env)", () => {
-  it("flag 赢 config 赢 env", () => {
+describe("config: resolveModelSpec(优先级 flag > env > config)", () => {
+  it("flag 赢 env 赢 config", () => {
     const env = { FASTAGENT_MODEL: "e/m" } as NodeJS.ProcessEnv;
     expect(resolveModelSpec("f/m", { model: "c/m" }, env)).toBe("f/m");
-    expect(resolveModelSpec(undefined, { model: "c/m" }, env)).toBe("c/m");
+    expect(resolveModelSpec(undefined, { model: "c/m" }, env)).toBe("e/m");
+    expect(resolveModelSpec(undefined, { model: "c/m" }, {} as NodeJS.ProcessEnv)).toBe("c/m");
     expect(resolveModelSpec(undefined, {}, env)).toBe("e/m");
     expect(resolveModelSpec(undefined, {}, {} as NodeJS.ProcessEnv)).toBeUndefined();
   });

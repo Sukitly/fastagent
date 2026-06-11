@@ -205,7 +205,7 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 
 ### 6.3 config v1(定稿,已实现)
 
-`fastagent.config.ts` = `defineConfig({ model, tools, http })` --**只有 3 个键**,每个都过「一句话讲得清 + 有近期故事」门槛:`model`="provider/modelId" 字符串;`tools`=追加在 pi 默认工具后的自定义工具数组(即「无入口部署下 code tools 的归宿」);`http.port`。优先级 CLI flag > config > `FASTAGENT_MODEL`;无 config = zero-config 跑默认。**刻意不进 v1**:sessions/env 选型(K 轴,等 hosting 刀由真实后端定形状)、base/auth/skillPaths 覆盖(默认几乎总是对的,留库 API 作逃生舱)。选 .ts 非 yaml(旧版教训):tools 是代码需 import、类型补全、生态收敛(vite/next 同款);toolchain 要声明式数据时构建期执行 config 取 resolved 值。红线:config 只描述部署选择,绝不描述 agent 身份/行为。消费者 = **L3(`createPiAgentFromWorkspace`,config 驱动装配的收口);CLI(`fastagent dev`,已实现)经 L3 消费,自身只留进程副作用/展示/起服务;`build`/`start` 随后--业界 dev/build/start 三连,恰好对上 dev-server / bundleAgentDefinition / 跑产物)。
+`fastagent.config.ts` = `defineConfig({ model, tools, http })` --**只有 3 个键**,每个都过「一句话讲得清 + 有近期故事」门槛:`model`="provider/modelId" 字符串;`tools`=追加在 pi 默认工具后的自定义工具数组(即「无入口部署下 code tools 的归宿」);`http.port`。优先级 CLI flag > `FASTAGENT_MODEL` > config;无 config = zero-config 跑默认。**刻意不进 v1**:sessions/env 选型(K 轴,等 hosting 刀由真实后端定形状)、base/auth/skillPaths 覆盖(默认几乎总是对的,留库 API 作逃生舱)。选 .ts 非 yaml(旧版教训):tools 是代码需 import、类型补全、生态收敛(vite/next 同款);toolchain 要声明式数据时构建期执行 config 取 resolved 值。红线:config 只描述部署选择,绝不描述 agent 身份/行为。消费者 = **L3(`createPiAgentFromWorkspace`,config 驱动装配的收口);CLI(`fastagent dev`,已实现)经 L3 消费,自身只留进程副作用/展示/起服务;`build`/`start` 随后--业界 dev/build/start 三连,恰好对上 dev-server / bundleAgentDefinition / 跑产物)。
 
 ### 6.2 tools/skills 挂载口径(定稿;参照 agentskills.io 规范 + pi/Claude Code 实现)
 

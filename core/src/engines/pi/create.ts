@@ -290,7 +290,7 @@ export interface CreatePiAgentFromWorkspaceOptions {
 /**
  * L3: "point at a workspace → agent": the workspace = definition folder +
  * fastagent.config.ts (+ .env handled by the process entry). Loads the config,
- * resolves model (flag > config > env) and tools (append-after-defaults), then L2.
+ * resolves model (flag > env > config) and tools (append-after-defaults), then L2.
  * Throws a clear error when no model source is set (fail visibly at startup).
  * Returns everything an entry point needs to report what it assembled.
  */

@@ -30,7 +30,7 @@ import { getModel } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
 
 export interface FastagentConfig {
-  /** "provider/modelId", e.g. "openai-codex/gpt-5.5". Precedence: CLI --model > config > FASTAGENT_MODEL. */
+  /** "provider/modelId", e.g. "openai-codex/gpt-5.5". Precedence: CLI --model > FASTAGENT_MODEL > config. */
   model?: string;
   /** Extra custom tools, appended after pi defaults — never replaces them (materialized by resolveTools in create.ts). */
   tools?: AgentTool[];
@@ -102,11 +102,11 @@ export function resolveModel(spec: string): AnyModel {
   return model;
 }
 
-/** Model selection precedence: CLI flag > config > FASTAGENT_MODEL env var. All absent = undefined (caller errors). */
+/** Model selection precedence: CLI flag > FASTAGENT_MODEL env var > config default. All absent = undefined (caller errors). */
 export function resolveModelSpec(
   flag: string | undefined,
   config: FastagentConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return flag ?? config.model ?? env.FASTAGENT_MODEL;
+  return flag ?? env.FASTAGENT_MODEL ?? config.model;
 }
