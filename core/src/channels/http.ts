@@ -32,17 +32,20 @@ export function createInvokeHandler(agent: Agent) {
       return;
     }
 
-    let body = "";
+    const chunks: Buffer[] = [];
+    let received = 0;
     for await (const chunk of req) {
-      body += chunk;
-      if (body.length > MAX_BODY_BYTES) {
+      const buf = chunk as Buffer; // no setEncoding → chunks are Buffers; count real bytes
+      received += buf.length;
+      if (received > MAX_BODY_BYTES) {
         res.writeHead(413, { "content-type": "text/plain" }).end("body too large\n");
         return;
       }
+      chunks.push(buf);
     }
     let payload: unknown;
     try {
-      payload = JSON.parse(body);
+      payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     } catch {
       res.writeHead(400, { "content-type": "text/plain" }).end("invalid json\n");
       return;

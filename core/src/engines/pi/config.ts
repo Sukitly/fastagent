@@ -79,6 +79,13 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
       throw new Error(`${path}: "http" must be an object`);
     }
+    // Same typo discipline one level down: { http: { porrt } } must not silently
+    // fall back to the default port.
+    for (const key of Object.keys(c.http ?? {})) {
+      if (key !== "port") {
+        throw new Error(`${path}: unknown key "http.${key}" (valid keys: port)`);
+      }
+    }
     if (c.http?.port !== undefined && typeof c.http.port !== "number") {
       throw new Error(`${path}: "http.port" must be a number`);
     }

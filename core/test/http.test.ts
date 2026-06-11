@@ -113,7 +113,7 @@ describe("http channel (SSE)", () => {
     }
   });
 
-  it("超大 body → 413（不进 invoke）", async () => {
+  it("超大 body → 413（不进 invoke;按真实字节数,多字节字符不逗字符数的假）", async () => {
     const srv = await startServer([fauxAssistantMessage("x")]);
     try {
       const big = await fetch(`${srv.url}/invoke`, {
@@ -121,6 +121,12 @@ describe("http channel (SSE)", () => {
         body: JSON.stringify({ session: "s", text: "x".repeat(2 * 1024 * 1024) }),
       });
       expect(big.status).toBe(413);
+      // 多字节：40 万个“好”是 40 万字符但 1.2 MiB 字节 —— 必须被拦
+      const multibyte = await fetch(`${srv.url}/invoke`, {
+        method: "POST",
+        body: JSON.stringify({ session: "s", text: "好".repeat(400_000) }),
+      });
+      expect(multibyte.status).toBe(413);
     } finally {
       await srv.close();
     }

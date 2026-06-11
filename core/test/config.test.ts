@@ -39,6 +39,12 @@ describe("config: loadConfig", () => {
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { modle: "openai-codex/gpt-5.5" };`);
     await expect(loadConfig(dir)).rejects.toThrow(/unknown key "modle"/);
   });
+
+  it("http 子键 typo 也抛（不得静默落回默认端口）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { porrt: 9999 } };`);
+    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "http\.porrt"/);
+  });
 });
 
 describe("config: resolveTools(append-after-defaults 语义)", () => {
