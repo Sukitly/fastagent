@@ -11,7 +11,7 @@ share_updated: 2026-06-08T16:43:10+08:00
 
 > 索引 [[fastagent]] · 协议 [[SPEC]] · 同目录 [[positioning]] · [[comparisons]]
 
-> **契约层已抽到 [[SPEC]](Agent Handler 协议,引擎中立)。本文只讲 fastagent 的参考实现--怎么用 pi 实现那个协议 + 怎么部署到任意 runtime。** repo 现有实现(config.yaml + 焊死 channel)以本文为准重构,不背向后兼容。
+> **契约层已抽到 [[SPEC]](Agent Handler 协议,引擎中立)。本文只讲 fastagent 的参考实现--怎么用 pi 实现那个协议 + 怎么部署到任意 runtime。代码真相在 `core/`。**
 
 ## 0. 定位:三件套
 
@@ -155,7 +155,7 @@ createPiAgentFromWorkspace(dir, { model? }): Promise<{ agent, definition, config
 
 1. **把 pi 双口 fan-in 成 SPEC 单流**(+ 单一 event/terminal translator)
 2. **无状态多-session 编排**(每 invoke 现起 harness,用完即弃)
-3. **`SessionStore.lease`**(跨进程单写者;pi 无)
+3. **单写者 lease**(独立 `Lease` 端口;进程内 fail-fast 已落地,跨进程后端待 K 刀;pi 无)
 4. **请求级 middleware + 依赖反转 adapter 架构**
 
 删除清单(每条过 R5):
@@ -316,7 +316,7 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 ## 7. 不变量(实现的法律)
 
 1. 参考实现把 pi 的双口 fan-in 成 SPEC 单流;对 pi 的依赖收敛到 `toAgentEvent` + `toTerminal` 两个 translator。
-2. **IO 政策(精确化)**:invoke 路径(invoke/harness)永不碰盘;运行时读定义(definition.ts 的 load)只经 `ExecutionEnv`(可移植);build-time(bundle)与 Node 组合根模块(config/auth)可直接用 node fs。错误通道约定:env 层 Result → load/config 层 throw(启动期响亮失败)→ auth 层 undefined(未配置)+ warn(异常)→ invoke 边界 failed 事件(SPEC 强制)。非致命加载发现(diagnostics/collisions)作为数据返回由 caller surface。
+2. **IO 政策(精确化)**:invoke 路径(invoke/harness)永不碰盘;运行时读定义(definition.ts 的 load)只经 `ExecutionEnv`(可移植);build-time(bundle)与 Node 组合根模块(config/auth/sessions)可直接用 node fs。错误通道约定:env 层 Result → load/config 层 throw(启动期响亮失败)→ auth 层 undefined(未配置)+ warn(异常)→ invoke 边界 failed 事件(SPEC 强制)。非致命加载发现(diagnostics/collisions)作为数据返回由 caller surface。
 3. 无状态:每 invoke 现起 harness,用完即弃;耐久状态全在 `SessionStore` 后(满足 SPEC portable conformance)。
 4. 对外 consume 标准(A2A/ACP/OCI),不另立 wire;invoke 不对外、不对齐任何 wire 数据模型。
 5. Task 编排 / Artifact 版本 / 长任务查询 = app 层(adapter + userland),不进 core。
@@ -327,4 +327,4 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 - **「成为标准」是上行期权,不是 base case。** Agent Handler 技术上够格当 agent serving 的 gateway 标准,但事实标准要生态采纳,而大厂在出竞品标准(A2A / Agent Executor)。所以:把协议设计成开放可采纳的形状(已做,见 [[SPEC]]),产品价值赌「参考实现 + 部署 DX 够好用」,采纳是 huge upside。
 - **pi 失败有三条路径,translator 以 stopReason 为准**:(1)`prompt()` reject(少数,由 catch 兑);(2)resolve 带 `stopReason: error/aborted` 的 message(常态,`toTerminal` 检查);(3)subscribe 的 `AssistantMessageEvent{type:"error"}`。以 resolved message 的 stopReason 为准产出 `failed`,catch 只兑底路径(1)。
 - **lease**:进程内 fail-fast「session busy」地板已落地(见 §6.6 场景推导 + 决策)。**跨进程/多实例的分布式锁仍 deferred**(到有远程 SessionStore + 多实例/AgentCore 时再做)。
-- 还没钉死的微决策:`retryable` 判定已抽成可注入 `RetryClassifier`(L0 选项;默认字符串启发式,终解仍待 pi 导出结构化分类);分布式 `SessionStore.lease` 最小形状;`EventQueue.drainUntil` 的 backpressure;非流式引擎的 `text` 退化(发一个大 delta)。
+- 还没钉死的微决策:`retryable` 判定已抽成可注入 `RetryClassifier`(L0 选项;默认字符串启发式,终解仍待 pi 导出结构化分类);分布式 lease 最小形状(独立 `Lease` 端口,非 SessionStore 方法);`EventQueue.drainUntil` 的 backpressure;非流式引擎的 `text` 退化(发一个大 delta)。

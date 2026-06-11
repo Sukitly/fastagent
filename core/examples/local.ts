@@ -1,9 +1,9 @@
 /**
  * Run a minimal serial agent locally, for real.
  *
- * Auth, session persistence and execution env are all handled by createPiAgent's
- * defaults (dev batteries-included); this file only owns two **application-level**
- * concerns: the process-level proxy and which model to use.
+ * Auth, session continuity (in-memory, this process only) and execution env are all
+ * handled by createPiAgent's defaults (dev batteries-included); this file only owns
+ * two **application-level** concerns: the process-level proxy and which model to use.
  *
  * Run (Node 26 executes .ts natively):
  *   node examples/local.ts "say hi in 3 words"   # one-shot

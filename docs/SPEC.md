@@ -141,7 +141,7 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<{ text: strin
 | 会话状态存到哪 | SessionStore(jsonl / pg / ddb) |
 | 工具在哪个 env 跑 | 执行环境(local / sandbox / e2b) |
 | 用哪个 model | 注入 |
-| 有哪些 tools / 加载什么 agent 定义 | driver 注入 |
+| 有哪些 tools / 加载什么 agent 定义 | 装配层注入 |
 
 ## 10. Out of scope
 

@@ -283,7 +283,7 @@ export async function createPiAgentFromDefinition(
  * L2/L1) for now — see ladder rule 2 (KNOWN DEBT: re-cut when hosting lands).
  */
 export interface CreatePiAgentFromWorkspaceOptions {
-  /** Model spec override (e.g. the CLI --model flag). Precedence: this > config.model > FASTAGENT_MODEL. */
+  /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
 }
 

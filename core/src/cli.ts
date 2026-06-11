@@ -22,7 +22,7 @@ function usage(code: number): never {
   console.error(`usage: fastagent dev [dir] [--port N] [--model provider/modelId]
 
   dev   assemble the agent definition in dir (default .) and start a local HTTP channel
-        model precedence: --model > fastagent.config.ts > FASTAGENT_MODEL`);
+        model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts`);
   process.exit(code);
 }
 

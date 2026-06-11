@@ -9,7 +9,7 @@
  *
  * v1 deliberately has only 3 keys (each passes the "explainable in one sentence +
  * has a near-term story" bar):
- *   - model: which LLM ("provider/modelId" string — serializable, overridable by CLI flag);
+ *   - model: which LLM ("provider/modelId" string — serializable; a repo default overridden by env/CLI);
  *   - tools: extra custom tools, appended after pi's default tools;
  *   - http:  serving options for the built-in HTTP channel.
  *

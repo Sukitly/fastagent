@@ -8,7 +8,7 @@ last_updated: 2026-06-05
 archived: false
 domain: https://fastagent.sh
 repos:
-  - Sukitly/fastagent-mono
+  - Sukitly/fastagent-mono # 已弃;代码真相在本 repo core/(从头重建,不背兼容)
 owners:
   - alex
   - vincent
@@ -75,4 +75,4 @@ owners:
 
 ## 现状
 
-早期 — 技术探索 + 需求验证 + 产品形态探索 三轨同步。
+core v0.1 本地 dev 链路已闭合:SPEC 参考实现(pi 双口 fan-in)、L0–L3 装配阶梯、HTTP/SSE channel、`fastagent dev`、持久 session(jsonl,重启存活)。下一步:`build`/`start`,再到 AgentCore target adapter(试金石)。
