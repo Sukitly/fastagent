@@ -26,7 +26,7 @@ describe("piOAuthAuth (silent-failure discipline)", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("corrupt auth file"));
   });
 
-  it("注入 warn sink → 告警走注入的 logger，不碰 console", async () => {
+  it("injected warn sink routes warnings to the injected logger without touching console", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-auth-"));
     const path = join(dir, "auth.json");
     await writeFile(path, "{not valid json");
@@ -40,7 +40,7 @@ describe("piOAuthAuth (silent-failure discipline)", () => {
     expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("valid oauth cred → access token as apiKey; expired → undefined 且告警(不静默降级)", async () => {
+  it("valid oauth credential returns access token as apiKey; expired credential returns undefined with warning instead of silently degrading", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-auth-"));
     const path = join(dir, "auth.json");
     await writeFile(

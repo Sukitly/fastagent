@@ -48,7 +48,7 @@ const terminals = (events: AgentEvent[]) => events.filter((e) => TERMINAL.has(e.
 /** Register the SPEC v0.1 Agent-side conformance suite for one subject. */
 export function describeSpecConformance(name: string, subject: ConformanceSubject): void {
   describe(`SPEC conformance: ${name}`, () => {
-    it("MUST 1 终局唯一 — 成功流:恰一个终局,是 completed,且是最后一个事件", async () => {
+    it("MUST 1 single terminal — success stream has exactly one terminal, completed, and it is last", async () => {
       const agent = await subject.completing();
       const events = await drain(agent.invoke({ session: "spec-ok" }, { text: "go" }));
       expect(events.length).toBeGreaterThan(0);
@@ -56,7 +56,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       expect(events.at(-1)?.type).toBe("completed");
     });
 
-    it("MUST 1+2 失败即事件 — 引擎失败:迭代不 throw,恰一个终局,是 failed{details, retryable}", async () => {
+    it("MUST 1+2 failures are events — engine failure does not throw during iteration and yields exactly one failed{details,retryable} terminal", async () => {
       const agent = await subject.failing();
       // MUST 2: the iteration itself must not throw — drain() rejecting = violation.
       const events = await drain(agent.invoke({ session: "spec-fail" }, { text: "go" }));
@@ -69,7 +69,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       }
     });
 
-    it("MUST 3 cancel — 消费者 break:无终局事件,且引擎在飞工作被清理", async () => {
+    it("MUST 3 cancel — consumer break yields no terminal event and cleans up in-flight engine work", async () => {
       let cleaned = false;
       let resolveCleaned!: () => void;
       const cleanedSeen = new Promise<void>((r) => (resolveCleaned = r));
@@ -94,7 +94,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       expect(terminals(seen)).toHaveLength(0); // (c) cancelled: no terminal expected
     });
 
-    it("§5 事件可 JSON 序列化(成功与失败两条路径)", async () => {
+    it("§5 events are JSON-serializable on both success and failure paths", async () => {
       for (const make of [subject.completing, subject.failing]) {
         const agent = await make.call(subject);
         const events = await drain(agent.invoke({ session: "spec-json" }, { text: "go" }));
@@ -105,7 +105,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
     });
 
     if (subject.pair) {
-      it("MUST 6 portable — 同 session 跨实例连续:实例 B 看到实例 A 的 turn(无位置依赖)", async () => {
+      it("MUST 6 portable — same session continues across instances: instance B sees instance A turn without location dependence", async () => {
         const { a, b, sawHistory } = await subject.pair!();
         const e1 = await drain(a.invoke({ session: "spec-portable" }, { text: "turn one" }));
         expect(e1.at(-1)?.type).toBe("completed");

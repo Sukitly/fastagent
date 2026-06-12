@@ -33,18 +33,18 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   return out;
 }
 
-describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
-  it("重启存活:新 store 实例(同目录)看得到上一进程的对话历史", async () => {
+describe("jsonlSessionStore (persistent sessions, first K-axis backend)", () => {
+  it("restart survival: a new store instance using the same directory sees the previous process history", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
 
-    // "进程 1":跑一轮并落盘
+    // "process 1":run one turn and persist it
     const agent1 = makeAgent(jsonlSessionStore({ dir }), [
       fauxAssistantMessage("the answer is blue"),
     ]);
     const e1 = await drain(agent1.invoke({ session: "conv" }, { text: "what color?" }));
     expect(e1.at(-1)?.type).toBe("completed");
 
-    // "进程 2":全新 store 实例,同一目录 → 历史必须还在(磁盘是真相)
+    // "process 2":new store instance, same directory: history must remain because disk is the source of truth
     let turn2: unknown;
     const agent2 = makeAgent(jsonlSessionStore({ dir }), [
       (context) => {
@@ -61,7 +61,7 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
     expect(dump).toContain("remind me"); // turn-2 user
   });
 
-  it("不同 session 互不串味(同一 store)", async () => {
+  it("different sessions do not leak into each other within one store", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const store = jsonlSessionStore({ dir });
 
@@ -82,7 +82,7 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
     expect(JSON.stringify(other)).not.toContain("hunter2");
   });
 
-  it("同 sessionsRoot 不同 cwd 的两个 store 互不打开对方的 session（按项目隔离）", async () => {
+  it("two stores with the same sessionsRoot but different cwd do not open each other sessions (project isolation)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const cwdA = await mkdtemp(join(tmpdir(), "fa-proj-a-"));
     const cwdB = await mkdtemp(join(tmpdir(), "fa-proj-b-"));
@@ -103,10 +103,10 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
       ]).invoke({ session: "same-id" }, { text: "what do you know?" }),
     );
 
-    expect(JSON.stringify(other)).not.toContain("hunter2"); // B 看不到 A 的同名 session
+    expect(JSON.stringify(other)).not.toContain("hunter2"); // B cannot see A same-named session
   });
 
-  it("恶意 session id 不逃出 sessions 目录（编码进文件名,且可往返续接）", async () => {
+  it("malicious session id cannot escape the sessions directory because it is filename-encoded and can round-trip", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const dir = join(root, "sessions");
     const store = jsonlSessionStore({ dir, cwd: root });
@@ -117,10 +117,10 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
     );
     expect(e1.at(-1)?.type).toBe("completed");
 
-    // root 下只多了 sessions/ 这一个目录 -- 没有 escape/ 之类的外溢
+    // only sessions/ is created under root; no escape/ or other path breakout appears
     expect((await readdir(root)).sort()).toEqual(["sessions"]);
 
-    // 同一个怪 id 续接命中同一 session(编码是确定且单射的)
+    // the same odd id resumes the same session because encoding is deterministic and injective
     let turn2: unknown;
     await drain(
       makeAgent(store, [
@@ -130,6 +130,6 @@ describe("jsonlSessionStore(持久 session,K 轴第一个后端)", () => {
         },
       ]).invoke({ session: evil }, { text: "continue" }),
     );
-    expect(JSON.stringify(turn2)).toContain("hi"); // turn-1 还在
+    expect(JSON.stringify(turn2)).toContain("hi"); // turn 1 is still present
   });
 });

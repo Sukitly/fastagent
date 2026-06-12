@@ -5,8 +5,8 @@ async function* stream(...events: AgentEvent[]): AsyncIterable<AgentEvent> {
   for (const e of events) yield e;
 }
 
-describe("collect (buffered 消费)", () => {
-  it("拼接 text,completed 返回 {text, data}", async () => {
+describe("collect (buffered consumption)", () => {
+  it("concatenates text events and returns {text, data} on completed", async () => {
     const result = await collect(
       stream(
         { type: "text", delta: "hello " },
@@ -17,14 +17,14 @@ describe("collect (buffered 消费)", () => {
     expect(result).toEqual({ text: "hello world", data: { ok: true } });
   });
 
-  it("failed → throw AgentFailure(带 details/retryable)", async () => {
+  it("failed terminal throws AgentFailure with details/retryable", async () => {
     await expect(
       collect(stream({ type: "text", delta: "x" }, { type: "failed", details: "boom", retryable: true })),
     ).rejects.toMatchObject({ name: "AgentFailure", details: "boom", retryable: true });
     expect(AgentFailure).toBeTypeOf("function");
   });
 
-  it("无终局 → throw(违反 MUST 1)", async () => {
+  it("missing terminal event throws (MUST 1 violation)", async () => {
     await expect(collect(stream({ type: "text", delta: "x" }))).rejects.toThrow(/terminal/);
   });
 });

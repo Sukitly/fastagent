@@ -49,7 +49,7 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 describe("invoke fan-in", () => {
-  it("纯文本 → completed 终局唯一", async () => {
+  it("plain text produces exactly one completed terminal", async () => {
     const { agent } = makeAgent([fauxAssistantMessage("hello world")]);
 
     const events = await drain(agent.invoke({ session: "s1" }, { text: "hi" }));
@@ -60,7 +60,7 @@ describe("invoke fan-in", () => {
     expect(events.filter((e) => e.type === "completed" || e.type === "failed")).toHaveLength(1);
   });
 
-  it("text → tool → completed 顺序保持", async () => {
+  it("preserves text → tool → completed order", async () => {
     const { agent } = makeAgent([
       fauxAssistantMessage(fauxToolCall("echo", { value: "ping" }, { id: "call-1" })),
       fauxAssistantMessage("done"),
@@ -82,7 +82,7 @@ describe("invoke fan-in", () => {
     expect(ended.isError).toBe(false);
   });
 
-  it("模型 error(不 throw,resolve 带 stopReason)→ failed,而非漏终局", async () => {
+  it("model error resolves to failed terminal instead of throwing or omitting terminal", async () => {
     const { agent } = makeAgent([
       fauxAssistantMessage("boom", { stopReason: "error", errorMessage: "rate limit 429" }),
     ]);
@@ -95,7 +95,7 @@ describe("invoke fan-in", () => {
     expect(terminal.retryable).toBe(true);
   });
 
-  it("cancel(break)→ 无终局事件,且 harness 被 abort", async () => {
+  it("consumer break cancels without terminal event and aborts the harness", async () => {
     let aborted = false;
     const repo = new InMemorySessionRepo();
     const env = new NodeExecutionEnv({ cwd: process.cwd() });
@@ -129,7 +129,7 @@ describe("invoke fan-in", () => {
     expect(aborted).toBe(true);
   });
 
-  it("cleanup 绝不抛:finally 里 abort() reject 不得污染已闭合的终局流(MUST 2)", async () => {
+  it("cleanup never throws: abort() rejection in finally must not poison an already-terminal stream (MUST 2)", async () => {
     const repo = new InMemorySessionRepo();
     const env = new NodeExecutionEnv({ cwd: process.cwd() });
     const agent = createPiAgentFromHarness({
@@ -151,8 +151,8 @@ describe("invoke fan-in", () => {
   });
 });
 
-describe("prompt.images 透传(SPEC §4)", () => {
-  it("images 随 prompt 到达模型上下文", async () => {
+describe("prompt.images passthrough (SPEC §4)", () => {
+  it("images reach the model context with the prompt", async () => {
     let seen: unknown;
     const faux = registerFauxProvider({ models: [{ id: "faux-vision", input: ["text", "image"] }] });
     faux.setResponses([
@@ -181,8 +181,8 @@ describe("prompt.images 透传(SPEC §4)", () => {
   });
 });
 
-describe("session 连续性(open 替 create)", () => {
-  it("同 session 多 turn:第二轮看得到第一轮历史", async () => {
+describe("session continuity (open instead of create)", () => {
+  it("multiple turns in the same session: turn 2 sees turn 1 history", async () => {
     let turn2: unknown;
     const { agent } = makeAgent([
       fauxAssistantMessage("issue #42 is the login bug"),
@@ -201,7 +201,7 @@ describe("session 连续性(open 替 create)", () => {
     expect(dump).toContain("now fix it"); // turn-2 user
   });
 
-  it("不同 session 互不串味", async () => {
+  it("different sessions do not leak into each other", async () => {
     let other: unknown;
     const { agent } = makeAgent([
       fauxAssistantMessage("the secret is hunter2"),
@@ -221,8 +221,8 @@ describe("session 连续性(open 替 create)", () => {
   });
 });
 
-describe("lease + setup 健壮性", () => {
-  it("harnessFactory 抛 → failed 事件(不 throw,MUST 2)", async () => {
+describe("lease + setup robustness", () => {
+  it("harnessFactory throw becomes a failed event instead of throwing (MUST 2)", async () => {
     const agent = createPiAgentFromHarness({
       harnessFactory: async () => {
         throw new Error("cannot open session");
@@ -234,7 +234,7 @@ describe("lease + setup 健壮性", () => {
     expect((events[0] as any).details).toContain("cannot open session");
   });
 
-  it("createPiAgentFromHarness 用注入的 lease 包住 invoke（acquire…release）", async () => {
+  it("createPiAgentFromHarness wraps invoke with the injected lease (acquire…release)", async () => {
     const calls: string[] = [];
     const faux = registerFauxProvider();
     faux.setResponses([fauxAssistantMessage("ok")]);
@@ -256,7 +256,7 @@ describe("lease + setup 健壮性", () => {
     expect(calls).toEqual(["acq:z", "rel:z"]);
   });
 
-  it("同 session 并发:一个跑完,另一个 fail-fast 'session busy'(不排队、不重入)", async () => {
+  it("same-session concurrency: one completes, the other fail-fasts with 'session busy' (no queue, no reentry)", async () => {
     const { agent } = makeAgent([
       fauxAssistantMessage("first"),
       fauxAssistantMessage("should-not-run"),
@@ -276,7 +276,7 @@ describe("lease + setup 健壮性", () => {
     expect((busy[0]![0] as any).retryable).toBe(true);
   });
 
-  it("busy 是瞬时的:前一个 turn 完成后同 session 可再用", async () => {
+  it("busy is transient: same session can be used again after the previous turn completes", async () => {
     const { agent } = makeAgent([
       fauxAssistantMessage("first"),
       fauxAssistantMessage("later"),
@@ -287,8 +287,8 @@ describe("lease + setup 健壮性", () => {
   });
 });
 
-describe("systemPrompt 工厂(per-invoke 重新求值)", () => {
-  it("每次 harnessFactory 都重新调用工厂 → 时间敏感段(日期)不固化在创建时刻", async () => {
+describe("systemPrompt factory (re-evaluated per invoke)", () => {
+  it("harnessFactory calls the factory each time so time-sensitive segments are not frozen at creation time", async () => {
     let calls = 0;
     const faux = registerFauxProvider();
     faux.setResponses([fauxAssistantMessage("a"), fauxAssistantMessage("b")]);
@@ -307,10 +307,10 @@ describe("systemPrompt 工厂(per-invoke 重新求值)", () => {
   });
 });
 
-describe("retryClassifier 注入(failed.retryable 策略可换)", () => {
-  it("注入的策略覆盖默认字符串启发式", async () => {
+describe("retryClassifier injection (failed.retryable policy is replaceable)", () => {
+  it("injected policy overrides the default string heuristic", async () => {
     const faux = registerFauxProvider();
-    // "weird custom failure" 不命中默认正则 → 默认会是 retryable:false
+    // "weird custom failure" does not match the default regex, so the default would be retryable:false
     faux.setResponses([
       fauxAssistantMessage("x", { stopReason: "error", errorMessage: "weird custom failure" }),
     ]);
@@ -330,8 +330,8 @@ describe("retryClassifier 注入(failed.retryable 策略可换)", () => {
 });
 
 
-describe("inProcessLease (fail-fast 单写者)", () => {
-  it("同 session 已占用 → 第二次 tryAcquire 返回 null(不排队)", () => {
+describe("inProcessLease (fail-fast single writer)", () => {
+  it("occupied session makes the second tryAcquire return null (no queue)", () => {
     const lease = inProcessLease();
     const r1 = lease.tryAcquire("s");
     expect(r1).not.toBeNull();
@@ -340,13 +340,13 @@ describe("inProcessLease (fail-fast 单写者)", () => {
     expect(lease.tryAcquire("s")).not.toBeNull(); // acquirable again after release
   });
 
-  it("不同 session 互不影响", () => {
+  it("different sessions do not affect each other", () => {
     const lease = inProcessLease();
     expect(lease.tryAcquire("a")).not.toBeNull();
     expect(lease.tryAcquire("b")).not.toBeNull(); // b unaffected by a's occupancy
   });
 
-  it("release 幂等,且不误放他人", () => {
+  it("release is idempotent and does not release another holder", () => {
     const lease = inProcessLease();
     const r = lease.tryAcquire("s")!;
     r();

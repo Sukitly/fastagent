@@ -30,7 +30,7 @@ function piAgent(responses: FauxResponseStep[], sessions: SessionStore = inMemor
   });
 }
 
-describeSpecConformance("pi 参考实现(faux model,L0 全组合)", {
+describeSpecConformance("pi reference implementation (faux model, full L0 composition)", {
   completing: () => piAgent([fauxAssistantMessage("hello world")]),
 
   failing: () => piAgent([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "boom 500" })]),

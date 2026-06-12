@@ -23,7 +23,7 @@ const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "ag
 const extraSkillsDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "extra-skills");
 
 describe("definition: loadAgentDefinition", () => {
-  it("读出 instructions(AGENTS.md)+ skills(SKILL.md frontmatter)", async () => {
+  it("loads instructions from AGENTS.md and skills from SKILL.md frontmatter", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     expect(def.instructions).toContain("Haiku Bot");
     expect(def.instructions).toContain("5-7-5");
@@ -34,13 +34,13 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.diagnostics).toHaveLength(0);
   });
 
-  it("缺 AGENTS.md / 缺 skills/ → instructions undefined、skills 空,不抛", async () => {
+  it("missing AGENTS.md / skills returns undefined instructions and empty skills without throwing", async () => {
     const def = await loadAgentDefinition("/tmp", { skillPaths: [] }); // a directory with no definition
     expect(def.instructions).toBeUndefined();
     expect(def.skills).toEqual([]);
   });
 
-  it("AGENTS.md 读取遇非 not_found 错误 → 抛出,不静默变成「无 instructions」", async () => {
+  it("AGENTS.md read errors other than not_found throw instead of silently becoming missing instructions", async () => {
     class DeniedEnv extends NodeExecutionEnv {
       override async readTextFile(path: string) {
         if (path.endsWith("AGENTS.md")) {
@@ -55,14 +55,14 @@ describe("definition: loadAgentDefinition", () => {
     );
   });
 
-  it("缺省 skillPaths = 全局目录(pi parity):~/.pi/agent/skills + ~/.agents/skills", () => {
+  it("default skillPaths are global directories (pi parity): ~/.pi/agent/skills + ~/.agents/skills", () => {
     const paths = defaultGlobalSkillPaths();
     expect(paths).toHaveLength(2);
     expect(paths[0]).toMatch(/\.pi\/agent\/skills$/);
     expect(paths[1]).toMatch(/\.agents\/skills$/);
   });
 
-  it("skillPaths 额外挂载:新 skill 进来;同名碰撞定义内赢且 surface collision", async () => {
+  it("extra skillPaths mount new skills; definition-local skill wins name collisions and surfaces collision info", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [extraSkillsDir] });
     const names = def.skills.map((s) => s.name).sort();
     expect(names).toEqual(["cutting-words", "season-words"]); // the extra one is in, no duplicates
@@ -74,14 +74,14 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.collisions[0]!.loserPath).toContain("extra-skills");
   });
 
-  it("skillPaths: [] → 只扫定义内(确定性部署姿态)", async () => {
+  it("skillPaths: [] scans only definition-local skills (deterministic deployment posture)", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     expect(def.skills.map((s) => s.name)).toEqual(["season-words"]);
     expect(def.collisions).toEqual([]);
   });
 });
 
-describe("create: assembleSystemPrompt(四段式)", () => {
+describe("create: assembleSystemPrompt (four segments)", () => {
   it("base + <project_instructions> + skills listing + env context", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     const prompt = assembleSystemPrompt({
@@ -106,7 +106,7 @@ describe("create: assembleSystemPrompt(四段式)", () => {
     expect(prompt.indexOf("</project_context>")).toBeLessThan(prompt.indexOf("<available_skills>"));
   });
 
-  it("base 可覆盖;无 instructions/skills 时不输出空块", () => {
+  it("base can be overridden; empty instructions/skills blocks are omitted", () => {
     const prompt = assembleSystemPrompt({ base: "CUSTOM BASE" });
     expect(prompt).toContain("CUSTOM BASE");
     expect(prompt).not.toContain("operating inside pi"); // after override the engine base is gone
@@ -114,7 +114,7 @@ describe("create: assembleSystemPrompt(四段式)", () => {
     expect(prompt).not.toContain("<available_skills>");
   });
 
-  it("piBasePrompt 按实际 tools 生成工具列表(base 与工具集一致)", () => {
+  it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
     const withTools = piBasePrompt({ tools: piDefaultTools(fixtureDir) });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
@@ -122,8 +122,8 @@ describe("create: assembleSystemPrompt(四段式)", () => {
   });
 });
 
-describe("create L2: 类型只承诺实现尊重的东西", () => {
-  it("L2 options 不接受 skills/systemPrompt(它们来自定义文件夹)", () => {
+describe("create L2: types only promise options the implementation honors", () => {
+  it("L2 options do not accept skills/systemPrompt because they come from the definition directory", () => {
     const base: CreatePiAgentFromDefinitionOptions = { model: {} as never };
     expect(base.model).toBeDefined();
     // @ts-expect-error -- skills must come from the definition folder, not the caller
@@ -135,8 +135,8 @@ describe("create L2: 类型只承诺实现尊重的东西", () => {
   });
 });
 
-describe("create: createPiAgentFromDefinition(指向文件夹 → agent)", () => {
-  it("组装的 systemPrompt 真到达模型;skills 注入 resources;read 工具默认在", async () => {
+describe("create: createPiAgentFromDefinition (directory → agent)", () => {
+  it("assembled systemPrompt reaches the model; skills are injected as resources; read tool is present by default", async () => {
     let seenSystemPrompt: string | undefined;
     let seenTools: string[] = [];
     const faux = registerFauxProvider();
@@ -167,8 +167,8 @@ describe("create: createPiAgentFromDefinition(指向文件夹 → agent)", () =>
   });
 });
 
-describe("create: 工具集(pi 真工具,忠实性)", () => {
-  it("piDefaultTools = pi 核心 4 件套(同 pi 默认);piReadOnlyTools = 只读子集", () => {
+describe("create: toolset (real pi tools, fidelity)", () => {
+  it("piDefaultTools are pi core four tools (same as pi default); piReadOnlyTools is the read-only subset", () => {
     expect(piDefaultTools(fixtureDir).map((t) => t.name).sort()).toEqual([
       "bash", "edit", "read", "write",
     ]);
@@ -178,7 +178,7 @@ describe("create: 工具集(pi 真工具,忠实性)", () => {
     expect(ro).toContain("read");
   });
 
-  it("pi 的 read 工具真能读 fixture(与 pi 本地同行为)", async () => {
+  it("pi's read tool can read the fixture (same behavior as local pi)", async () => {
     const read = piDefaultTools(fixtureDir).find((t) => t.name === "read")!;
     const r = await read.execute("t1", { path: "AGENTS.md" });
     const text = (r.content[0] as any).text as string;
@@ -186,8 +186,8 @@ describe("create: 工具集(pi 真工具,忠实性)", () => {
   });
 });
 
-describe("definition: bundleAgentDefinition(构建时把额外挂载物化进可部署包)", () => {
-  it("产物自包含:AGENTS.md + 胜出的 skills 整夹;败者不进包", async () => {
+describe("definition: bundleAgentDefinition (materializes extra mounts into a deployable bundle at build time)", () => {
+  it("bundle is self-contained: AGENTS.md plus winning skill directories; losers are excluded", async () => {
     const outDir = await mkdtemp(join(tmpdir(), "fa-bundle-"));
     const def = await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
     expect(def.collisions).toHaveLength(1);
@@ -206,12 +206,12 @@ describe("definition: bundleAgentDefinition(构建时把额外挂载物化进可
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
   });
 
-  it("重建确定性：同 outDir 再 build，被移除的 skill 不得作为陈旧产物存活（产物是真相）", async () => {
+  it("rebuild determinism: rebuilding the same outDir removes dropped skills so the artifact is the truth", async () => {
     const outDir = await mkdtemp(join(tmpdir(), "fa-bundle-"));
-    // build #1：含额外挂载的 cutting-words
+    // build #1 includes extra-mounted cutting-words
     await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
     expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["cutting-words", "season-words"]);
-    // build #2：不再挂载 → cutting-words 必须消失
+    // build #2 no longer mounts it, so cutting-words must disappear
     await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [] });
     expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["season-words"]);
   });

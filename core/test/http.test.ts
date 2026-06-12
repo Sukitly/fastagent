@@ -44,7 +44,7 @@ async function invoke(url: string, session: string, text: string): Promise<Agent
 }
 
 describe("http channel (SSE)", () => {
-  it("POST /invoke → SSE 流出 text + completed", async () => {
+  it("POST /invoke streams text + completed over SSE", async () => {
     const srv = await startServer([fauxAssistantMessage("hello over http")]);
     try {
       const events = await invoke(srv.url, "s1", "hi");
@@ -56,7 +56,7 @@ describe("http channel (SSE)", () => {
     }
   });
 
-  it("同 session 并发:一个流式跑完,另一个 SSE 收到 failed 'session busy'", async () => {
+  it("same-session concurrency: one stream completes, the other receives failed 'session busy' over SSE", async () => {
     let started!: () => void;
     const ready = new Promise<void>((r) => (started = r));
     let release!: () => void;
@@ -88,7 +88,7 @@ describe("http channel (SSE)", () => {
     }
   });
 
-  it("不同 session 并发:两个都跑完", async () => {
+  it("different-session concurrency: both complete", async () => {
     const srv = await startServer([fauxAssistantMessage("A"), fauxAssistantMessage("B")]);
     try {
       const [ea, eb] = await Promise.all([invoke(srv.url, "a", "x"), invoke(srv.url, "b", "y")]);
@@ -99,7 +99,7 @@ describe("http channel (SSE)", () => {
     }
   });
 
-  it("坏请求 → 400 / 错路径 → 404", async () => {
+  it("bad request returns 400; wrong path returns 404", async () => {
     const srv = await startServer([fauxAssistantMessage("x")]);
     try {
       const bad = await fetch(`${srv.url}/invoke`, { method: "POST", body: "{not json" });
@@ -113,11 +113,11 @@ describe("http channel (SSE)", () => {
     }
   });
 
-  it("客户端断连 → invoke 被取消（generator cleanup 跑到,SPEC MUST 3）", async () => {
+  it("client disconnect cancels invoke (generator cleanup runs, SPEC MUST 3)", async () => {
     let cancelled = false;
     let resolveCancelled!: () => void;
     const cancelledSeen = new Promise<void>((r) => (resolveCancelled = r));
-    // 假 Agent：慢速流式吐 text；被 cancel（未自然跑完）时在 finally 里留证据
+    // Fake agent: slowly streams text; if cancelled before natural completion, finally records evidence
     const fake: Agent = {
       invoke: async function* () {
         let finished = false;
@@ -147,9 +147,9 @@ describe("http channel (SSE)", () => {
         signal: controller.signal,
       });
       const reader = res.body!.getReader();
-      await reader.read(); // 确认流已开始
-      controller.abort(); // 模拟客户端断连
-      // cleanup 必须在有限时间内发生，否则超时判失败
+      await reader.read(); // confirm the stream has started
+      controller.abort(); // simulate client disconnect
+      // cleanup must happen within a bounded time; timeout means failure
       await Promise.race([
         cancelledSeen,
         new Promise((_, reject) => setTimeout(() => reject(new Error("invoke was never cancelled after client disconnect")), 3000)),
@@ -161,7 +161,7 @@ describe("http channel (SSE)", () => {
     }
   });
 
-  it("超大 body → 413（不进 invoke;按真实字节数,多字节字符不逗字符数的假）", async () => {
+  it("oversized body returns 413 before invoke and counts real bytes, not JS characters", async () => {
     const srv = await startServer([fauxAssistantMessage("x")]);
     try {
       const big = await fetch(`${srv.url}/invoke`, {
@@ -169,10 +169,10 @@ describe("http channel (SSE)", () => {
         body: JSON.stringify({ session: "s", text: "x".repeat(2 * 1024 * 1024) }),
       });
       expect(big.status).toBe(413);
-      // 多字节：40 万个“好”是 40 万字符但 1.2 MiB 字节 —— 必须被拦
+      // Multibyte input: 400k emoji is 400k characters but over 1 MiB in bytes, so it must be rejected
       const multibyte = await fetch(`${srv.url}/invoke`, {
         method: "POST",
-        body: JSON.stringify({ session: "s", text: "好".repeat(400_000) }),
+        body: JSON.stringify({ session: "s", text: "🙂".repeat(400_000) }),
       });
       expect(multibyte.status).toBe(413);
     } finally {
