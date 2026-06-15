@@ -24,9 +24,10 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { cp, copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -134,41 +135,211 @@ export async function loadAgentDefinition(
 }
 
 /**
- * Bundle (**the "compile" stage of one-click deploy, not an optional dev tool**):
- * materialize the resolved full skill set into a self-contained deployable folder —
- * the server reproduces the local experience exactly.
+ * Names never meaningful to ship, excluded unconditionally at any depth: VCS metadata,
+ * dependencies (reinstalled at deploy via `npm ci`), and fastagent machine state (runtime
+ * sessions + the build output). This is NOT a security list — secrets like `.env` are not
+ * special-cased; the user manages those via .gitignore (git mode) or `.fastagentignore`
+ * (security is the user's responsibility, by design).
+ */
+function isHardExcluded(name: string): boolean {
+  return name === ".git" || name === "node_modules" || name === ".fastagent";
+}
+
+/**
+ * Load the build root's exclude rules into ONE flat matcher: `.gitignore` then
+ * `.fastagentignore` (fa last → authoritative on conflicts), applied artifact-relative to
+ * the whole tree. Deliberately FLAT — we read only the ROOT files, not nested .gitignore
+ * down the tree and not ancestor .gitignore up a monorepo. Reproducing git's full nested +
+ * ancestor + repo-boundary ignore engine by hand is an open-ended edge factory (it was);
+ * the contract is simply "hard excludes + your root .gitignore/.fastagentignore". For
+ * finer or monorepo-package control, put rules in the root `.fastagentignore`. The single
+ * `ignore` library matcher handles git's PER-FILE pattern syntax (negation, anchoring,
+ * `**`, dir-slash) faithfully — that part is not hand-rolled.
  *
- * Materialized: AGENTS.md + winning skill folders (including globals; scripts/
- * references/assets come along). Collision rules match loadAgentDefinition
- * (definition wins); losers are not bundled.
- * Note: **custom code tools are out of bundling scope** — they are code (with npm
- * dependencies); their deployment unit is "project + deps" via the project's normal
- * build/deploy (explicit `tools:` injection). Declarative MCP tool mounting via
- * `.mcp.json` is future support, not implemented today.
+ * An existing-but-unreadable file fails visibly — silently building with no rules could
+ * ship files the author meant to exclude.
+ */
+async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
+  let rules = "";
+  for (const name of [".gitignore", ".fastagentignore"]) {
+    try {
+      rules += `\n${await readFile(join(dir, name), "utf8")}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
+      }
+    }
+  }
+  // ignorecase:false — the `ignore` library defaults to case-INSENSITIVE, which would make a
+  // rule `README.md` also drop an authored `readme.md`. Match git on a case-sensitive
+  // filesystem (our main deploy target) and stay reproducible (a fixed mode, not FS-derived).
+  return rules.trim() === "" ? undefined : ignore({ ignorecase: false }).add(rules);
+}
+
+/** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
+function toPosix(rel: string): string {
+  return sep === "/" ? rel : rel.split(sep).join("/");
+}
+
+/** The exact artifact contents of a source tree: regular files (artifact-relative POSIX
+ * paths) to copy, plus the dirs to create (so empty allowed dirs survive). */
+interface ShipPlan {
+  files: { abs: string; rel: string }[];
+  dirs: string[];
+}
+
+/**
+ * Compute exactly what a source tree contributes to the artifact: one filesystem walk
+ * returning the regular files (+ dirs to create) to copy.
+ *
+ * Exclusions, deliberately SIMPLE and bounded (not a re-implementation of git's ignore
+ * engine — that hand-roll was an open-ended edge factory):
+ *   - the hard set (node_modules/.git/.fastagent, by name at any depth) always;
+ *   - the build ROOT's flat `.gitignore` + `.fastagentignore` (one matcher, fa
+ *     authoritative), applied artifact-relative to every entry. NESTED .gitignore (down
+ *     the tree) and ANCESTOR .gitignore (up a monorepo) are NOT honored — put such rules
+ *     in the root `.fastagentignore`.
+ *
+ * Symlinks are NOT followed: a symlink entry is skipped entirely (the artifact is
+ * self-contained with no links to dereference, and no "link aliases an excluded tree" or
+ * cycle edges). `skip` (realpaths) excludes the build's own dirs (staging / target). The
+ * ROOT is realpath'd, so building through a symlinked path still resolves the real tree;
+ * only symlinks INSIDE the tree are skipped.
+ */
+async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Promise<ShipPlan> {
+  const skip = opts.skip ?? [];
+  const topBase = await realpath(srcDir).catch(() => resolve(srcDir));
+  const files: { abs: string; rel: string }[] = [];
+  const dirs: string[] = [];
+  const ig = await loadRootIgnore(topBase); // the root's flat ignore matcher, artifact-relative
+
+  async function walk(absDir: string): Promise<void> {
+    const realDir = await realpath(absDir).catch(() => resolve(absDir));
+    // Skip the build's own dirs (staging + the final publish target) by realpath.
+    if (skip.some((s) => realDir === s || realDir.startsWith(s + sep))) return;
+    const relDir = toPosix(relative(topBase, absDir));
+    if (relDir !== "") dirs.push(relDir); // record dirs so empty (but included) ones survive
+    for (const entry of await readdir(absDir, { withFileTypes: true })) {
+      if (isHardExcluded(entry.name)) continue;
+      if (entry.isSymbolicLink()) continue; // not followed, not shipped
+      const isDir = entry.isDirectory();
+      if (!isDir && !entry.isFile()) continue; // skip sockets/FIFOs/devices
+      const abs = join(absDir, entry.name);
+      const rel = toPosix(relative(topBase, abs));
+      if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match with a trailing slash
+      if (isDir) await walk(abs);
+      else files.push({ abs, rel });
+    }
+  }
+  await walk(topBase);
+  return { files, dirs };
+}
+
+/** Materialize a {@link ShipPlan} into outDir: create allowed dirs, then copy each file. */
+async function executeShipPlan(plan: ShipPlan, outDir: string): Promise<void> {
+  await mkdir(outDir, { recursive: true });
+  for (const rel of plan.dirs) await mkdir(join(outDir, rel), { recursive: true });
+  for (const f of plan.files) await copyFile(f.abs, join(outDir, f.rel));
+}
+
+/**
+ * Bundle (the "compile" stage): materialize a self-contained, relocatable artifact — the
+ * deployable agent (core-design §10.1/§10.3).
+ *
+ * TWO independent productions, so the artifact == the reported agent BY CONSTRUCTION (no
+ * "copy the tree then patch it to match the model"):
+ *   - the AUTHORED CONTEXT tree (AGENTS.md, docs/, fastagent.config.ts, tool source,
+ *     package.json, …) is copied via the ignore-aware walk, EXCLUDING skills/;
+ *   - outDir/skills/ is produced from the RESOLVED skill model: each WINNING skill
+ *     (definition.skills — local AND mounted, treated uniformly) is materialized to
+ *     skills/<name> via the same walk (its own + ancestor .gitignore honored). Names are
+ *     unique after dedup, so destinations never collide; collision losers and non-loaded
+ *     skills simply never appear.
+ *
+ * Hard-excluded everywhere: node_modules, .git, .fastagent (isHardExcluded). Secrets are
+ * NOT special-cased; the user excludes them via .gitignore/.fastagentignore.
+ *
+ * Fills outDir, which the caller OWNS and guarantees fresh (buildPiArtifact stages then
+ * publishes atomically); bundle is non-destructive and needs no overwrite/aliasing guard.
+ * The walk skips the build's own dirs (caller skipPaths) so output is never bundled into
+ * itself.
  */
 export async function bundleAgentDefinition(
   srcDir: string,
   outDir: string,
   options: LoadAgentDefinitionOptions = {},
+  bundleOpts: { skipPaths?: string[] } = {},
 ): Promise<LoadedDefinition> {
   const definition = await loadAgentDefinition(srcDir, options);
-  // Deterministic rebuild: remove the outputs this bundle owns (AGENTS.md + skills/)
-  // before copying, so a skill dropped from the definition cannot survive as a stale
-  // artifact file ("the artifact is the truth"). Only owned paths are touched —
-  // never the whole outDir (it may be a user directory).
-  await rm(join(outDir, "AGENTS.md"), { force: true });
-  await rm(join(outDir, "skills"), { recursive: true, force: true });
-  await mkdir(join(outDir, "skills"), { recursive: true });
-  if (definition.instructions !== undefined) {
-    await copyFile(join(definition.dir, "AGENTS.md"), join(outDir, "AGENTS.md"));
+  const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
+  // skills/ is produced from the model, NOT copied from the tree — so the authored-context
+  // walk skips it. realpath it (like the other skip entries), so a SYMLINKED skills/ matches
+  // the walk's realpath comparison and isn't copied in as a raw (loser-bearing) tree.
+  const skillsDir = await realpath(join(srcReal, "skills")).catch(() => join(srcReal, "skills"));
+
+  // Production 1 — the authored context tree, EXCLUDING skills/. Skip the build's own dirs
+  // (staging / final target) too, so output is never bundled into itself.
+  const skipHere = await realpath(outDir).catch(() => resolve(outDir));
+  const skipExtra = await Promise.all(
+    (bundleOpts.skipPaths ?? []).map((p) => realpath(p).catch(() => resolve(p))),
+  );
+  const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra, skillsDir] });
+  const shipped = new Set(plan.files.map((f) => f.rel));
+
+  // AGENTS.md ships at its tree path; if an ignore rule dropped it the artifact would not
+  // match the reported agent.
+  if (definition.instructions !== undefined && !shipped.has("AGENTS.md")) {
+    throw new Error(
+      `AGENTS.md is excluded from the artifact by an ignore rule; un-ignore it (git / .fastagentignore) — it must ship.`,
+    );
   }
+  await executeShipPlan(plan, outDir);
+
+  // Production 2 — outDir/skills/ from the resolved model. Each winning skill (local or
+  // mounted, uniformly) goes to skills/<name>; the same ignore-aware walk excludes its
+  // internal junk, and its defining SKILL.md must survive or the build fails visibly.
+  await mkdir(join(outDir, "skills"), { recursive: true });
+  const skillDests = new Set<string>(); // artifact-relative dests, to catch path collisions
   for (const skill of definition.skills) {
-    if (basename(skill.filePath) === "SKILL.md") {
-      // Standard skill folder: copy the whole directory (scripts/references/assets included).
-      await cp(dirname(skill.filePath), join(outDir, "skills", skill.name), { recursive: true });
+    // skill.name is author-supplied (frontmatter) and used here as a PATH segment. Reject a
+    // name that isn't a single safe directory component — a slash/backslash, a leading dot,
+    // or `.`/`..` could escape skills/ (path traversal) or land where the loader won't find
+    // it (artifact != reported). Pi only warns on these; the build must fail visibly.
+    if (skill.name === "" || skill.name.startsWith(".") || /[/\\]/.test(skill.name)) {
+      throw new Error(
+        `skill name "${skill.name}" (${skill.filePath}) is not a valid directory name ` +
+          `(no slashes, no leading dot); rename it.`,
+      );
+    }
+    // Dir skills go to skills/<name>, single-file skills to skills/<name>.md. Names are
+    // deduped but DESTS are not, so two skills can target the same path: a dir "X.md" vs a
+    // single-file "X", or names differing only in case (which alias on a case-insensitive
+    // FS). Check case-INSENSITIVELY — a portable artifact must build identically on any FS,
+    // so reject such a clash everywhere (else: cryptic EISDIR, or a silent overwrite on
+    // macOS/Windows that ships fewer skills than reported).
+    const isDirSkill = basename(skill.filePath) === "SKILL.md";
+    const destRel = isDirSkill ? `skills/${skill.name}` : `skills/${skill.name}.md`;
+    if (skillDests.has(destRel.toLowerCase())) {
+      throw new Error(
+        `two skills materialize to the same artifact path "${destRel}" (case-insensitively): ` +
+          `names that differ only in case, or a directory skill "X.md" vs a single-file skill "X". Rename one.`,
+      );
+    }
+    skillDests.add(destRel.toLowerCase());
+    if (isDirSkill) {
+      // A skill ships its own dir minus its OWN root .gitignore/.fastagentignore (Fork A);
+      // planShipSet roots at the skill dir, so its flat ignore governs it (not the workspace's).
+      const skillPlan = await planShipSet(dirname(skill.filePath));
+      if (!skillPlan.files.some((f) => f.rel === "SKILL.md")) {
+        throw new Error(
+          `skill "${skill.name}" (${skill.filePath}) has its SKILL.md excluded by an ignore rule; ` +
+            `un-ignore it — it must ship.`,
+        );
+      }
+      await executeShipPlan(skillPlan, join(outDir, "skills", skill.name));
     } else {
-      // Bare root-level .md skill file.
-      await copyFile(skill.filePath, join(outDir, "skills", basename(skill.filePath)));
+      // a single-file skill (the file IS the skill): copy it by name — unique, deterministic
+      await copyFile(skill.filePath, join(outDir, "skills", `${skill.name}.md`));
     }
   }
   return definition;

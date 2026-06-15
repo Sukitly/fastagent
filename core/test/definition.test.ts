@@ -3,11 +3,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { mkdtemp, readdir, readFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
-  bundleAgentDefinition,
   collect,
   createPiAgentFromDefinition,
   defaultGlobalSkillPaths,
@@ -17,6 +16,8 @@ import {
   piReadOnlyTools,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
+// bundleAgentDefinition is internal (not re-exported): import it from its module.
+import { bundleAgentDefinition } from "../src/engines/pi/definition.ts";
 import { assembleSystemPrompt } from "../src/engines/pi/create.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
@@ -214,13 +215,81 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
   });
 
-  it("rebuild determinism: rebuilding the same outDir removes dropped skills so the artifact is the truth", async () => {
-    const outDir = await mkdtemp(join(tmpdir(), "fa-bundle-"));
-    // build #1 includes extra-mounted cutting-words
-    await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
-    expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["cutting-words", "season-words"]);
-    // build #2 no longer mounts it, so cutting-words must disappear
-    await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [] });
-    expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["season-words"]);
+  it("allows an in-workspace mount whose original tree is .fastagentignore'd (it materializes)", async () => {
+    // The mount ships via materialization into outDir/skills/, NOT its original path, so a
+    // user may exclude the original tree to avoid a duplicate copy — build must not reject it.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "extras", "foo"), { recursive: true });
+    await writeFile(join(src, "extras", "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nbody\n");
+    await writeFile(join(src, ".fastagentignore"), "extras/\n"); // exclude the duplicate original
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await bundleAgentDefinition(src, out, { skillPaths: [join(src, "extras")] }); // must not throw
+    expect(await access(join(out, "skills", "foo", "SKILL.md")).then(() => true, () => false)).toBe(true);
+    expect(await access(join(out, "extras")).then(() => true, () => false)).toBe(false); // no duplicate
+  });
+
+  it("rejects skills that materialize to the same artifact path (one case-insensitive guard)", async () => {
+    const out = () => mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    // (a) names differ only in case — local "foo" + a mounted "Foo" alias on a case-insensitive FS.
+    const a = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(a, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(a, "skills", "foo"), { recursive: true });
+    await writeFile(join(a, "skills", "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nb\n");
+    const ext = await mkdtemp(join(tmpdir(), "fa-bundle-ext-"));
+    await mkdir(join(ext, "Foo"), { recursive: true });
+    await writeFile(join(ext, "Foo", "SKILL.md"), "---\nname: Foo\ndescription: d\n---\nb\n");
+    await expect(bundleAgentDefinition(a, await out(), { skillPaths: [ext] })).rejects.toThrow(/same artifact path/);
+
+    // (b) a directory skill "foo.md" and a single-file skill "foo" — both target skills/foo.md.
+    const b = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(b, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(b, "skills", "dir"), { recursive: true });
+    await writeFile(join(b, "skills", "foo.md"), "---\nname: foo\ndescription: d\n---\nb\n");
+    await writeFile(join(b, "skills", "dir", "SKILL.md"), "---\nname: foo.md\ndescription: d\n---\nb\n");
+    await expect(bundleAgentDefinition(b, await out())).rejects.toThrow(/same artifact path/);
+  });
+
+  it("rejects an unsafe skill name used as a path segment (no traversal out of skills/)", async () => {
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "skills", "evil"), { recursive: true });
+    await writeFile(join(src, "skills", "evil", "SKILL.md"), "---\nname: ../../escaped\ndescription: d\n---\nb\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await expect(bundleAgentDefinition(src, out)).rejects.toThrow(/not a valid directory name/);
+    expect(await access(join(out, "..", "escaped")).then(() => true, () => false)).toBe(false); // nothing escaped
+  });
+
+  it("materializes an in-workspace mount outside skills/ into outDir/skills/ (reported == shipped)", async () => {
+    // A skillPaths mount inside the workspace but outside skills/ is NOT placed at
+    // outDir/skills/ by the tree copy; it must still be materialized there, or a
+    // definition-only reload (scans outDir/skills/) would lose a skill the bundle reported.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "extras", "foo"), { recursive: true });
+    await writeFile(join(src, "extras", "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nbody\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    const def = await bundleAgentDefinition(src, out, { skillPaths: [join(src, "extras")] });
+    expect(def.skills.map((s) => s.name)).toContain("foo");
+    const reloaded = await loadAgentDefinition(out, { skillPaths: [] }); // artifact reloads itself
+    expect(reloaded.skills.map((s) => s.name)).toContain("foo");
+  });
+
+  it("materializes every skill by NAME, so a local dir name can't collide with a global skill", async () => {
+    // Local skill dir "foo" but frontmatter name "bar"; a global skill named "foo". Both are
+    // materialized BY NAME (skills/bar, skills/foo) — distinct, no collision, both shipped.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "skills", "foo"), { recursive: true });
+    await writeFile(join(src, "skills", "foo", "SKILL.md"), "---\nname: bar\ndescription: d\n---\nbody\n");
+    const ext = await mkdtemp(join(tmpdir(), "fa-bundle-ext-"));
+    await mkdir(join(ext, "foo"), { recursive: true });
+    await writeFile(join(ext, "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nbody\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await bundleAgentDefinition(src, out, { skillPaths: [ext] });
+    const dirs = (await readdir(join(out, "skills"))).sort();
+    expect(dirs).toEqual(["bar", "foo"]); // by name, not by source dir name
+    const reloaded = await loadAgentDefinition(out, { skillPaths: [] });
+    expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["bar", "foo"]);
   });
 });

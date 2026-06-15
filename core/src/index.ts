@@ -24,15 +24,23 @@ export {
   type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/create.ts";
 
-// pi reference implementation — definition domain (load / bundle)
+// pi reference implementation — definition domain (load).
+// bundleAgentDefinition is intentionally NOT exported: it does a destructive `rm -rf
+// outDir` and the overwrite guard lives in buildPiArtifact, the public build entry point.
 export {
   loadAgentDefinition,
-  bundleAgentDefinition,
   defaultGlobalSkillPaths,
   type LoadedDefinition,
   type LoadAgentDefinitionOptions,
   type SkillCollision,
 } from "./engines/pi/definition.ts";
+
+// pi reference implementation — build (compile a workspace into a self-contained artifact)
+export {
+  buildPiArtifact,
+  type ArtifactManifest,
+  type BuildPiArtifactOptions,
+} from "./engines/pi/build.ts";
 
 // pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
 // Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:

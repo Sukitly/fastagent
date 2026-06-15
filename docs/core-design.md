@@ -191,16 +191,21 @@ Two distinct things are both called "context"; they live on opposite sides:
 - **authored context** (static files the author wrote) is part of M and ships. It is consumed by the agent's `read`/`grep` tools on demand — it is file access rooted at the run directory (cwd), **not** prompt-loading, so it needs no new mechanism beyond "the file is present in the run dir."
 - **conversational context** (cross-turn history/memory) is K, lives in an external session store, and is reconstructed per invoke (§7).
 
-So `definition` is **not** just `AGENTS.md` — it is the authored source tree. Its default boundary is the source tree **minus**:
+So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The artifact is produced as **two independent things**, so it equals the reported agent by construction: (1) the **authored context tree** (AGENTS.md, docs/, config, tool source, …) **minus** the build root's **flat** `.gitignore` + `.fastagentignore` (one combined matcher, `.fastagentignore` last/authoritative, applied artifact-relative via the `ignore` library), EXCLUDING `skills/`; and (2) `skills/` produced from the **resolved skill model** — each winning skill (local or mounted) materialized to `skills/<name>`.
+
+**Ignore is deliberately simple, not git-faithful.** We honor only the **root** `.gitignore`/`.fastagentignore` (the `ignore` library handles git's per-file pattern syntax — negation, anchoring, `**`, dir-slash — faithfully). We do **not** reproduce git's full engine: nested `.gitignore` down the tree and ancestor `.gitignore` up a monorepo are **not** read, and we do **not** call git (so the result is reproducible regardless of the build machine's git). For finer or monorepo-package control, put rules in the root `.fastagentignore`. Reimplementing git's nested/ancestor/symlink ignore semantics by hand was an open-ended edge factory; a flat, specifiable contract is the deliberate trade. **Symlinks are not followed** — a symlink entry is skipped (the artifact is self-contained, with no links to dereference and no "link aliases an excluded tree" edges); only the build ROOT is realpath'd, so building through a symlinked path still resolves the real tree.
+
+**Skills are self-contained units ("Fork A").** A skill ships its own directory minus its OWN root `.gitignore`/`.fastagentignore`; the consuming workspace's ignores govern *authored context*, not the skill set (a skill is like an npm package: its own ignore governs it, not the consumer's). To drop a skill, remove it — workspace ignores don't. This makes "artifact == reported agent" hold by construction (collision losers and non-loaded skills never appear; names are unique so destinations never collide).
+
+On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
 
 | Never bundled | Why |
 |---|---|
-| secrets (`.env`, `.env.*`) | red line — secrets are injected at runtime, out-of-band (packaging-standard consensus) |
-| dependencies (`node_modules`) | provided by the runtime (container `npm ci` / deploy-time install) |
-| machine state / generated (`.fastagent/`, build output) | rebuildable, not authored |
+| dependencies (`node_modules`) | reinstalled by the runtime (`npm ci` at deploy) |
+| machine state (`.fastagent/`) | runtime sessions + the build output; rebuildable, not authored |
 | VCS (`.git`) | irrelevant to the running agent |
 
-The boundary is gitignore-style ignore rules **plus** an unconditional secret/dep exclusion (same model as Docker build context, `npm publish`, Vercel).
+**Security is the user's responsibility, by design.** Secrets like `.env` are **not** special-cased: the user excludes them via `.gitignore` (the convention, honored without invoking git) or `.fastagentignore`. fastagent provides the ignore mechanisms (like Docker `.dockerignore` / `npm publish`); it does not scan for or guarantee secret exclusion. A symlink pointing at a secret, if not ignored, ships — their call.
 
 **Path red line (a sibling of the config secret red line):** every path inside M is resolved **relative to the agent root**. Authored context and skills MUST be referenced by root-relative paths — never absolute paths or `~`, which are machine-specific and break on deploy. Machine-specific paths belong to K and are injected by the host.
 
@@ -222,23 +227,27 @@ Consequence: skills need progressive disclosure (a prompt listing); authored con
 
 The real axis is **bundled vs runtime-provided**, not "data vs code." Code (skill `scripts/`, code tools) is part of the agent and ships; the open question is only whether its *npm dependencies* travel with it.
 
-| Tier | Carries | npm-dependent code tools | Status |
-|---|---|---|---|
-| **Container (project + `node_modules`)** | the whole project, baked into an image | works (deps in the image) | **v1 target** |
-| **Portable data bundle** (source tree, no `node_modules`) | md + skills (+scripts) + authored context + MCP declarations + manifest | needs deps bundled/self-contained | deferred (AgentCore) |
+`build` produces **one** artifact: a self-contained, relocatable directory that does not depend on the source location. The "tiers" are then just deploy targets of that same artifact, not different artifact shapes:
 
-In the container tier, authored context and code tools ship automatically because the whole source tree is in the image — so v1 does **not** need to solve the portable-bundle scoping problem. The portable tier must solve source-tree bundling under the §10.1 boundary (secret exclusion is the hardest part); that lands with AgentCore.
+| Deploy target | How the artifact runs | npm-dependent code tools |
+|---|---|---|
+| **local / container** | `start <artifact>` (cwd = artifact) | `npm ci` at deploy installs deps; the artifact carries `package.json` + tool source, not `node_modules` |
+| **AgentCore (later)** | OCI-wrap the same artifact | same |
+
+The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context, `fastagent.config.ts`, tool source, `package.json`, …) with opted-in globals materialized into `skills/`, **minus** the §10.1 hard excludes (`node_modules`, `.git`, `.fastagent`) and anything `.gitignore`/`.fastagentignore` excludes (honored via the `ignore` library, not git). Secrets are **not** auto-excluded — they are the user's responsibility (§10.1); inject them at runtime and keep them out via .gitignore/.fastagentignore. Pure markdown/skills agents need only `@fastagent/core` to run; code-tool agents add `npm ci`.
 
 ### 10.3 `fastagent build`
 
-Compile a workspace into a self-contained, inspectable deployable. It is build-time (`node:fs` is fine here):
+`buildPiArtifact(srcDir, outDir, { model?, globalSkills? })` compiles a workspace into the self-contained artifact (§10.2). Build-time (`node:fs` is fine here):
 
-1. Load + validate config and definition; resolve the model (fail visibly on a broken workspace).
-2. Materialize skills via `bundleAgentDefinition` (definition-local + opted-in globals with `--global-skills`; §6 skills lifecycle).
-3. Freeze resolved config into a `fastagent.json` manifest (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — the `skills/` directory is the single source of truth.
-4. Deterministic rebuild: only owned outputs are cleaned (`AGENTS.md`, `skills/`, `fastagent.json`); never the whole out dir.
+1. Load + validate config; resolve the model and validate it against the registry (fail visibly on a missing/unknown model — before anything is written, never frozen into the manifest to fail later at start).
+2. Materialize the artifact (`bundleAgentDefinition`, two independent productions — see §10.1): the authored-context tree (minus `skills/`) copied via the ignore-aware walk, and `skills/` produced from the resolved skill model. Written into a fresh STAGING dir, never the target.
+3. Write `<staging>/fastagent.json` (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — `skills/` is the single source of truth.
+4. **Publish** atomically: move any existing target aside, rename staging into place, drop the old (a failure restores the old; the target is never deleted before a complete artifact exists).
 
-`--global-skills` materializes the machine's global skills into the artifact's `skills/` (the deliberate "these ship" action). Default out dir: `.fastagent/build`; `--out` overrides.
+Default out: `.fastagent/build` (self-gitignored); `--out` overrides. `--global-skills` materializes the machine's globals into the artifact (never into the source). Build is **non-destructive to the source**.
+
+Structural output guards (no content/preciousness judgment — only "don't destroy the input / don't ship a broken agent"): reject `outDir` realpath-equal to `srcDir` or containing it (you can't publish over the input you read); reject an existing **file** target (output is a directory); require `--force` for an **out-of-tree** target (a typo there deletes unrelated data, cf. Vite's `emptyOutDir`); and require an **in-tree** target to be under `.fastagent/` (the designated, hard-excluded build-state area) — any other in-tree path is authored content the publish would delete and the artifact would lack. Deterministic rebuild: a file dropped from the source does not survive (the target is replaced wholesale).
 
 ### 10.4 `fastagent start`
 
@@ -246,7 +255,7 @@ Run a built agent in **production posture**. Differences from `dev`:
 
 | Aspect | dev | start |
 |---|---|---|
-| config | executes `fastagent.config.ts` | reads `fastagent.json` (manifest) — **no `.ts` execution at runtime** |
+| config | executes `fastagent.config.ts` | reads the artifact's `fastagent.json` for the frozen model/http; runs from the artifact (cwd = artifact). config.ts ships in the artifact for code tools (needs `npm ci`); the strict no-`.ts`-at-runtime posture is a later hardening |
 | skills | definition-only (+ `--global-skills`) | artifact is the truth; **never scans globals** |
 | auth | pi OAuth → env | pluggable `AuthResolver` (§10.5) |
 | sessions | jsonl under `.fastagent/sessions` | persistent store (jsonl now; external/DDB later) |
