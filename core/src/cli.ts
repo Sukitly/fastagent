@@ -4,6 +4,7 @@
  * replacing hand-written entry scripts).
  *
  *   fastagent init  [dir] — scaffold a minimal runnable workspace
+ *   fastagent models      — list available "provider/modelId" specs
  *   fastagent dev   [dir] — assemble + serve a local HTTP channel (iteration)
  *   fastagent build [dir] — compile a self-contained artifact (core-design §10.3)
  *   fastagent start [dir] — run a built artifact in production posture (core-design §10.4)
@@ -18,6 +19,7 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
+import { listModels } from "./engines/pi/config.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
@@ -25,8 +27,9 @@ import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
-  fastagent init  [dir]
-  fastagent dev   [dir] [--port N] [--model provider/modelId] [--global-skills]
+  fastagent init   [dir]
+  fastagent models
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
 
@@ -36,6 +39,7 @@ function usage(code: number): never {
                            ~/.agents/skills); default is definition-only (dev == deployed)
   init   scaffold a minimal runnable workspace in dir (default .): AGENTS.md, an example
          skill, fastagent.config.mjs, .gitignore. Refuses to overwrite an existing workspace.
+  models list the available "provider/modelId" specs (use one with --model or in the config).
   build  compile dir into a self-contained, relocatable artifact (default out:
          .fastagent/build): the source tree + materialized skills + manifest, minus
          node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
@@ -73,10 +77,16 @@ const dir = resolve(dirArg ?? ".");
 const globalSkills = values["global-skills"] ?? false;
 
 if (command === "init") await runInit();
+else if (command === "models") runModels();
 else if (command === "dev") await runDev();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else usage(1);
+
+/** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
+function runModels(): void {
+  for (const spec of listModels()) console.log(spec);
+}
 
 async function runInit(): Promise<void> {
   const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir).catch(failStartup);
@@ -93,7 +103,7 @@ async function runInit(): Promise<void> {
   // `cd` so every step — including bare `fastagent dev` (which defaults its dir to .) — is correct.
   const rel = relative(process.cwd(), dir);
   if (rel !== "") console.error(`    cd ${rel}`);
-  console.error(`    1. credentials — run \`pi login\`, or add a key to .env (e.g. OPENAI_API_KEY=...)`);
+  console.error(`    1. credentials — authenticate with \`pi login\`, or set the provider's API key in .env`);
   console.error(`    2. optional   — edit fastagent.config.mjs to choose your model`);
   console.error(`    3. fastagent dev   # serve locally and iterate`);
 }
@@ -114,6 +124,25 @@ function parsePort(value: string | undefined, source: string): number | undefine
     process.exit(1);
   }
   return Number(trimmed);
+}
+
+/**
+ * Report which source provides the model's credentials — and, when none is found, surface a
+ * remediation hint at STARTUP (dev and start alike) rather than letting the agent fail silently
+ * at first invoke. Non-blocking: you may be iterating on prompts, or set credentials afterward.
+ */
+async function reportAuth(modelSpec: string): Promise<void> {
+  const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
+  const source = await probeAuthSource(provider);
+  console.error(`[fastagent] auth:   ${source === "none" ? "(none found)" : `${source} (${provider})`}`);
+  if (source === "none") {
+    // Lead with `pi login`: the default model (openai-codex) is OAuth-only, and we cannot name
+    // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
+    // env path generic so we never advertise a key that can't satisfy the probed provider.
+    console.error(
+      `[fastagent] warn: no credentials for "${provider}" — authenticate with \`pi login\`, or set the provider's API key in .env; invokes will fail until then`,
+    );
+  }
 }
 
 async function runDev(): Promise<void> {
@@ -138,6 +167,7 @@ async function runDev(): Promise<void> {
   console.error(`[fastagent] dir:    ${definition.dir}`);
   console.error(`[fastagent] config: ${configPath ?? "(zero-config)"}`);
   console.error(`[fastagent] model:  ${modelSpec}`);
+  await reportAuth(modelSpec);
   console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
   const loadedSkills = definition.skills.map((s) => s.name);
   console.error(
@@ -193,14 +223,11 @@ async function runStart(): Promise<void> {
     sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
   }).catch(failStartup);
 
-  const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
-  const authSource = await probeAuthSource(provider);
-
-  console.error(`[fastagent] start:    ${dir}`);
-  console.error(`[fastagent] model:    ${modelSpec}`);
-  console.error(`[fastagent] auth:     ${authSource === "none" ? "(none found)" : `${authSource} (${provider})`}`);
-  console.error(`[fastagent] agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(`[fastagent] skills:   ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+  console.error(`[fastagent] start:  ${dir}`);
+  console.error(`[fastagent] model:  ${modelSpec}`);
+  await reportAuth(modelSpec);
+  console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.error(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   console.error(`[fastagent] sessions: ${sessionsDir}`);
   // Visible footgun guard: a sessions dir inside the artifact is wiped by a redeploy that
   // replaces the artifact wholesale. Warn, don't block (running in place is legitimate).
