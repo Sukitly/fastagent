@@ -21,6 +21,8 @@ export default feishuChannel({
   appSecret: process.env.FEISHU_APP_SECRET ?? "",
   verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "", // authenticates inbound events
   encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined, // optional; when set, plaintext events are refused
+  // P2p defaults to one Agent session/thread per top-level DM. Opt out to restore one continuous chat session:
+  // directMessageSession: "continuous",
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
   // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
   // full details always go to the server log regardless.

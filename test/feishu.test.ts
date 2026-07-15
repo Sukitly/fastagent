@@ -143,6 +143,7 @@ function messageEvent(over: {
   mentions?: unknown[];
   senderType?: string;
   parentId?: string;
+  rootId?: string;
   threadId?: string;
 }) {
   return {
@@ -158,6 +159,7 @@ function messageEvent(over: {
         content: over.content ?? JSON.stringify({ text: over.text ?? "hi" }),
         ...(over.mentions ? { mentions: over.mentions } : {}),
         ...(over.parentId ? { parent_id: over.parentId } : {}),
+        ...(over.rootId ? { root_id: over.rootId } : {}),
         ...(over.threadId ? { thread_id: over.threadId } : {}),
       },
     },
@@ -170,6 +172,14 @@ describe("construction fails closed", () => {
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })).toThrow(
       /verificationToken/,
     );
+    expect(() =>
+      buildFeishuChannel({
+        appId: "a",
+        appSecret: "s",
+        verificationToken: "t",
+        directMessageSession: "invalid" as "threaded",
+      }),
+    ).toThrow(/directMessageSession/);
   });
 
   it("rejects a relative ctx.stateRoot (fail visibly, never a silent cwd re-anchor)", () => {
@@ -283,31 +293,153 @@ describe("ingress verification", () => {
 });
 
 describe("turn flow", () => {
-  it("p2p happy path: streaming card mounted, turn runs with the envelope prompt, card settles with the answer", async () => {
+  it("p2p defaults to a provider-safe threaded session and settles the reply card inside it", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel({}, "**bold** answer");
-    expect((await handler(feishuRequest(messageEvent({ text: "hello there" })))).status).toBe(200);
+    const rootId = "om_x100b6a42a87c88a4c3f418624276242";
+
+    expect((await handler(feishuRequest(messageEvent({ id: rootId, text: "hello there" })))).status).toBe(200);
     await idle();
-    // The agent saw the envelope + markdown steer, on the chat-derived session.
+
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("oc_1");
+    expect(calls[0]?.scope.session).toBe(`feishu:${rootId}`);
+    expect(encodeURIComponent(calls[0]?.scope.session ?? "").length).toBeLessThanOrEqual(64);
     expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     expect(calls[0]?.prompt.text).toContain("standard Markdown");
-    // Preview: a card entity was created (streaming mode on) and mounted as an interactive send (p2p → no reply).
     const create = fx.calls("/cardkit/v1/cards", "POST")[0];
     expect(JSON.parse(String(create?.body?.data)).config.streaming_mode).toBe(true);
-    const mount = fx.calls("receive_id_type=chat_id", "POST")[0];
-    expect(mount?.body?.msg_type).toBe("interactive");
+    const mount = fx
+      .calls(`/im/v1/messages/${rootId}/reply`, "POST")
+      .find((call) => call.body?.msg_type === "interactive");
+    expect(mount?.body?.reply_in_thread).toBe(true);
     expect(JSON.parse(String(mount?.body?.content))).toEqual({ type: "card", data: { card_id: "c1" } });
-    // Terminal: the SAME card settles with the final markdown, streaming off.
+    expect(
+      fx.calls("receive_id_type=chat_id", "POST").filter((call) => call.body?.msg_type === "interactive"),
+    ).toHaveLength(0);
     const settle = fx.calls("/cardkit/v1/cards/c1", "PUT")[0];
     const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
     expect(settled.config.streaming_mode).toBe(false);
     expect(settled.body.elements[0].content).toBe("**bold** answer");
-    // The settled card carries the answer-derived summary — the chat list / push notification shows
-    // the reply, not a generic "[Card]" placeholder (markdown stripped to plain text).
     expect(settled.config.summary).toEqual({ content: "bold answer" });
+  });
+
+  it("continuous p2p remains an explicit opt-out with one chat session and an ordinary send", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel({ directMessageSession: "continuous" }, "continuous answer");
+
+    await handler(feishuRequest(messageEvent({ id: "om_continuous", text: "same chat" })));
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("oc_1");
+    const mount = fx.calls("receive_id_type=chat_id", "POST").find((call) => call.body?.msg_type === "interactive");
+    expect(mount).toBeDefined();
+    expect(fx.calls("/im/v1/messages/om_continuous/reply", "POST")).toHaveLength(0);
+  });
+
+  it("threaded p2p: a continuation returns to the root session without reloading its parent", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel({}, "continued");
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_followup",
+          text: "continue",
+          rootId: "om_root",
+          parentId: "om_parent",
+          threadId: "omt_1",
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("feishu:om_root");
+    const mount = fx
+      .calls("/im/v1/messages/om_followup/reply", "POST")
+      .find((call) => call.body?.msg_type === "interactive");
+    expect(mount?.body?.reply_in_thread).toBe(true);
+    expect(fx.calls("/im/v1/messages/om_parent", "GET")).toHaveLength(0);
+  });
+
+  it("threaded p2p: a top-level quoted reply starts a new session but still loads its referent", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_old": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_old",
+                msg_type: "text",
+                body: { content: '{"text":"earlier context"}' },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel({}, "new branch");
+
+    await handler(feishuRequest(messageEvent({ id: "om_new_root", text: "branch from this", parentId: "om_old" })));
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("feishu:om_new_root");
+    expect(fx.calls("/im/v1/messages/om_old", "GET")).toHaveLength(1);
+    const mount = fx
+      .calls("/im/v1/messages/om_new_root/reply", "POST")
+      .find((call) => call.body?.msg_type === "interactive");
+    expect(mount?.body?.reply_in_thread).toBe(true);
+  });
+
+  it("threaded p2p: roots run concurrently while turns within one root stay FIFO", async () => {
+    feishuFetch();
+    let releaseRootOne: () => void = () => {};
+    const rootOneGate = new Promise<void>((resolve) => {
+      releaseRootOne = resolve;
+    });
+    const starts: { session: string; ask: string }[] = [];
+    injectedAgent = {
+      async *invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+        const ask = prompt.text.includes("root one")
+          ? "root-one"
+          : prompt.text.includes("thread one")
+            ? "thread-one"
+            : "root-two";
+        starts.push({ session: scope.session, ask });
+        if (ask === "root-one") await rootOneGate;
+        yield { type: "text", delta: `answer ${ask}` };
+        yield { type: "completed" };
+      },
+    };
+    const { handler, idle } = buildChannel();
+
+    await handler(feishuRequest(messageEvent({ id: "om_root_1", text: "root one" })));
+    await vi.waitFor(() => expect(starts.map((start) => start.ask)).toEqual(["root-one"]));
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_follow_1",
+          text: "thread one",
+          rootId: "om_root_1",
+          parentId: "om_root_1",
+          threadId: "omt_1",
+        }),
+      ),
+    );
+    await handler(feishuRequest(messageEvent({ id: "om_root_2", text: "root two" })));
+
+    await vi.waitFor(() => expect(starts.map((start) => start.ask)).toEqual(["root-one", "root-two"]));
+    expect(starts.map((start) => start.session)).toEqual(["feishu:om_root_1", "feishu:om_root_2"]);
+
+    releaseRootOne();
+    await idle();
+    expect(starts.map((start) => start.ask)).toEqual(["root-one", "root-two", "thread-one"]);
+    expect(starts[2]?.session).toBe("feishu:om_root_1");
   });
 
   it("a mount rejected with 'cardid is invalid' (cardkit→IM propagation) is retried, not degraded", async () => {
@@ -322,7 +454,7 @@ describe("turn flow", () => {
         return Response.json({ code: 0, msg: "ok", data: { message_id: "om_mounted" } });
       },
     });
-    const { handler, idle } = buildChannel({}, "pong");
+    const { handler, idle } = buildChannel({ directMessageSession: "continuous" }, "pong");
     await handler(feishuRequest(messageEvent({ id: "om_retry1", text: "ping" })));
     await idle();
     expect(interactiveSends).toBe(2); // rejected once, mounted on the retry
@@ -391,7 +523,7 @@ describe("turn flow", () => {
       },
     });
     const fullAnswer = "x".repeat(70 * 1024);
-    const { handler, idle } = buildChannel({}, fullAnswer);
+    const { handler, idle } = buildChannel({ directMessageSession: "continuous" }, fullAnswer);
 
     await handler(feishuRequest(messageEvent({ id: "om_continuation_failure" })));
     await idle();
@@ -477,7 +609,7 @@ describe("turn flow", () => {
         },
       });
       injectedAgent = scenario.agent;
-      const { handler, idle } = buildChannel();
+      const { handler, idle } = buildChannel({ directMessageSession: "continuous" });
       await handler(feishuRequest(messageEvent({ id: scenario.id })));
       await idle();
       expect(errors.some((line) => line.includes(scenario.delivery) && line.includes("terminal send rejected"))).toBe(
@@ -491,7 +623,7 @@ describe("turn flow", () => {
     const fx = feishuFetch({
       "/cardkit/v1/cards": () => Response.json({ code: 200860, msg: "card too big" }),
     });
-    const { handler, idle } = buildChannel({}, "plain answer");
+    const { handler, idle } = buildChannel({ directMessageSession: "continuous" }, "plain answer");
     await handler(feishuRequest(messageEvent({ id: "om_t1" })));
     await idle();
     // Fallback: a text placeholder message, then the final answer lands as an EDIT of it.
@@ -606,7 +738,7 @@ describe("turn flow", () => {
         yield { type: "completed" };
       },
     };
-    const { handler, idle } = buildChannel(); // queue feedback is immediate by default
+    const { handler, idle } = buildChannel({ directMessageSession: "continuous" }); // one p2p chat session
     await handler(feishuRequest(messageEvent({ id: "om_q1", text: "first" })));
     await flush(); // first turn parks on the gate with its preview mounted
     await handler(feishuRequest(messageEvent({ id: "om_q2", text: "second" })));
@@ -659,7 +791,10 @@ describe("turn flow", () => {
     // Immediate is the default; an author may opt into a delay to suppress Queue on very short waits.
     // If the wait ends inside that configured delay, no status card was mounted and nothing is recalled.
     const fx = feishuFetch();
-    const { handler, idle } = buildChannel({ queueNoticeDelayMs: 5_000 });
+    const { handler, idle } = buildChannel({
+      directMessageSession: "continuous",
+      queueNoticeDelayMs: 5_000,
+    });
     await handler(feishuRequest(messageEvent({ id: "om_f1", text: "first" })));
     await handler(feishuRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the mount
     await idle(); // both turns complete well inside the queue-status delay
@@ -673,17 +808,19 @@ describe("turn flow", () => {
 });
 
 describe("the Lark compatibility profile", () => {
-  it("reuses the Feishu engine with its own route, state, envelope, and log brand", async () => {
-    feishuFetch();
+  it("reuses the Feishu engine with its own route, state, envelope, p2p mode, and log brand", async () => {
+    const fx = feishuFetch();
     const info: string[] = [];
     vi.spyOn(log, "info").mockImplementation((message) => info.push(message));
     const root = mkdtempSync(join(tmpdir(), "lark-state-"));
     tempRoots.push(root);
     const { agent, calls } = replyingAgent("pong");
-    const routes = larkChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, baseUrl: BASE })({
-      agent,
-      stateRoot: root,
-    });
+    const routes = larkChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      baseUrl: BASE,
+    })({ agent, stateRoot: root });
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -693,6 +830,11 @@ describe("the Lark compatibility profile", () => {
     expect(res.status).toBe(200);
     await maybeIdle?.();
     expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p)");
+    expect(calls[0]?.scope.session).toBe("lark:om_lark1");
+    const mount = fx
+      .calls("/im/v1/messages/om_lark1/reply", "POST")
+      .find((call) => call.body?.msg_type === "interactive");
+    expect(mount?.body?.reply_in_thread).toBe(true);
     expect(info.some((line) => line.startsWith("[lark] turn start:"))).toBe(true);
     expect(existsSync(join(root, "channels", "lark"))).toBe(true);
     expect(existsSync(join(root, "channels", "feishu"))).toBe(false);

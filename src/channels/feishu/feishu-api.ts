@@ -42,7 +42,7 @@ const AUTH_ERROR_CODES = new Set([99991661, 99991663, 99991664, 99991668]);
 /** The platform's frequency-limit code (arrives with HTTP 429 or 400). */
 const RATE_LIMIT_CODE = 99991400;
 
-/** Where a reply goes: a chat, optionally quote-replying a message (in-thread in topic groups). */
+/** Where a reply goes: a chat, optionally quote-replying a message inside a platform thread. */
 export interface FeishuTarget {
   chatId: string;
   /** Message to reply to (the summoning message). Set in groups so the answer threads under the asker. */
@@ -140,15 +140,15 @@ export interface FeishuApi {
   botInfo(): Promise<{ openId?: string; appName?: string }>;
   /** Send a message to a chat; returns the new message_id (undefined if the body carried none). */
   sendMessage(chatId: string, msgType: string, content: string): Promise<string | undefined>;
-  /** Reply to a message (quote; `replyInThread` stays inside a topic group's thread). */
+  /** Reply to a message; `replyInThread` creates or continues its platform thread. */
   replyMessage(
     messageId: string,
     msgType: string,
     content: string,
     opts?: { replyInThread?: boolean },
   ): Promise<string | undefined>;
-  /** Send `text`, split at the platform's size cap: ordinary groups quote only the first chunk; topic
-   *  groups reply_in_thread on every chunk. Returns the FIRST message_id. */
+  /** Send `text`, split at the platform's size cap: ordinary groups quote only the first chunk;
+   *  threaded targets use reply_in_thread on every chunk. Returns the FIRST message_id. */
   sendText(target: FeishuTarget, text: string): Promise<string | undefined>;
   /** Edit a sent text message in place (PUT; the platform caps edits at 20 per message). */
   editTextMessage(messageId: string, text: string): Promise<void>;
@@ -353,8 +353,8 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       let first = true;
       for (const chunk of chunks) {
         const content = JSON.stringify({ text: chunk });
-        // A normal group quote-replies only the first chunk — N reply-quotes would be noise. A topic
-        // must reply_in_thread on EVERY chunk; a plain chat send would leak continuations to the main group.
+        // A normal group quote-replies only the first chunk — N reply-quotes would be noise. A thread
+        // must reply_in_thread on EVERY chunk; a plain chat send would leak continuations to main chat.
         const reply = target.replyTo !== undefined && (first || target.replyInThread === true);
         const id = reply
           ? await api.replyMessage(target.replyTo as string, "text", content, {

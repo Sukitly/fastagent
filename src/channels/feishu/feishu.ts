@@ -123,6 +123,10 @@ export interface FeishuChannelOptions {
    *  handshake from event signature verification; that narrow path is authenticated after decryption
    *  by the Verification Token. Must match the console exactly. */
   encryptKey?: string;
+  /** Direct-message context + delivery policy. `threaded` (default) gives every top-level p2p message
+   * its own session, creates a platform thread for the answer, and routes later thread messages back
+   * by root message id. `continuous` keeps one session per p2p chat and sends ordinary unquoted replies. */
+  directMessageSession?: "continuous" | "threaded";
   /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
   /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
@@ -150,6 +154,7 @@ export function buildFeishuChannel(
     appSecret,
     verificationToken,
     encryptKey,
+    directMessageSession = "threaded",
     route,
     onError,
     baseUrl = profile.apiBase,
@@ -169,6 +174,9 @@ export function buildFeishuChannel(
     throw new Error(
       `${factoryName} requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)`,
     );
+  }
+  if (directMessageSession !== "continuous" && directMessageSession !== "threaded") {
+    throw new Error(`${factoryName} directMessageSession must be "continuous" or "threaded"`);
   }
   return ({ agent, stateRoot }) => {
     const formatError = onError ?? defaultErrorMessage;
@@ -441,15 +449,29 @@ export function buildFeishuChannel(
       {
         const normalized = normalizeFeishuMessage(event, { cloud: kind, appId, header, botOpenId });
         if (!normalized) return new Response(null, { status: 200 });
-        const session = r.session ?? placeKey(m);
+        const threadedP2p = directMessageSession === "threaded" && m.chat_type === "p2p";
+        // A top-level p2p message has no thread_id yet. Its tenant-unique message_id is therefore the
+        // only identity available both before and after the first reply creates the thread. Continuations
+        // carry that same value as root_id (field-verified on Feishu). Prefix with the channel kind to
+        // isolate Feishu/Lark while keeping pi's provider-facing session/cache key under 64 characters.
+        if (threadedP2p && m.thread_id !== undefined && m.root_id === undefined) {
+          log.warn(
+            `${label} threaded p2p message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
+          );
+        }
+        const defaultSession = threadedP2p
+          ? `${kind}:${m.thread_id === undefined ? m.message_id : (m.root_id ?? `missing-root:${m.thread_id}`)}`
+          : placeKey(m);
+        const session = r.session ?? defaultSession;
         const chatId = r.chatId ?? m.chat_id;
-        // Reply to the summoning message in groups (threads the answer under the asker; stays inside a
-        // topic); a 1:1 p2p chat needs no reply-quote. Only when the RESOLVED target is the message's own
-        // chat: a route that redirects elsewhere must not quote a same-id message in the wrong place.
+        // Groups always quote the summon. Opt-in threaded p2p does too: reply_in_thread on a top-level
+        // message creates the thread, and on a continuation keeps the answer inside it. Only quote when
+        // the resolved target is the source chat — a custom redirect cannot reuse a message id there.
         const sameTarget = chatId === m.chat_id;
-        const replyTo = m.chat_type !== "p2p" && sameTarget ? m.message_id : undefined;
-        // Queue feedback always identifies the exact ask, including p2p. Ordinary p2p answers remain
-        // unquoted unless the turn actually waited long enough for its queue preview to mount.
+        const replyTo = sameTarget && (m.chat_type !== "p2p" || threadedP2p) ? m.message_id : undefined;
+        const replyInThread = replyTo !== undefined && (threadedP2p || m.thread_id !== undefined) ? true : undefined;
+        // Queue feedback always identifies the exact ask, including continuous p2p. In threaded mode it
+        // inherits replyInThread, so an ask queued inside a root cannot leak a status card to main chat.
         const queueReplyTo = sameTarget ? m.message_id : undefined;
         const resources = normalized.content.resources;
         const images = resources
@@ -469,8 +491,11 @@ export function buildFeishuChannel(
               chatId,
               replyTo,
               queueReplyTo,
-              replyInThread: replyTo !== undefined && m.thread_id !== undefined ? true : undefined,
-              parentId: m.parent_id,
+              replyInThread,
+              // Inside a threaded p2p session the root conversation history already contains the
+              // previous turns. Reloading parent_id would duplicate that input (and its attachments).
+              // A top-level quoted reply has no thread_id, starts a new root, and still hydrates parent.
+              parentId: threadedP2p && m.thread_id !== undefined ? undefined : m.parent_id,
               images,
               files,
             },

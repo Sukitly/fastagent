@@ -138,6 +138,7 @@ export default feishuChannel({
   appSecret: process.env.FEISHU_APP_SECRET ?? "",
   verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
   encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
+  // directMessageSession: "continuous", // opt out of the default one-session/thread-per-top-level-DM UX
   onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
 });
 ```
@@ -196,12 +197,44 @@ Practical consequences in groups:
 
 ## Threads and sessions
 
-Topic groups are handled automatically:
+Group threads are automatic:
 
-- if the message carries a `thread_id` (a topic group), the default session is `chat:thread` and the reply stays inside the topic (`reply_in_thread`),
-- otherwise the default session is `chat`, and group replies quote the summoning message.
+- if a group message carries `thread_id`, its default session is `chat_id:thread_id` and replies stay inside the topic with `reply_in_thread`,
+- otherwise its default session is `chat_id`, and replies quote the summoning message.
 
-A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`; different sessions run in parallel. A summon queued behind another turn immediately gets a reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional delay is desired). Each queued card quotes its own source message, including in p2p, so concurrent card mounts remain attributable. When that turn starts, its live preview takes over the same card entity and settles the final answer there: no second reply and no visible "recalled a message" tombstone.
+Direct messages default to independent threaded sessions, with an explicit compatibility opt-out:
+
+| `directMessageSession` | Default session | Delivery |
+|---|---|---|
+| `"threaded"` (default) | top level: `<kind>:message_id`; continuation: `<kind>:root_id` | Each top-level DM creates an independent platform thread; every Agent reply stays inside it |
+| `"continuous"` | `chat_id` | One long-running DM context; ordinary unquoted replies |
+
+Restore the continuous UX in `channels/feishu.ts` (or the Lark counterpart) when needed:
+
+```ts
+export default feishuChannel({
+  // credentials…
+  directMessageSession: "continuous",
+});
+```
+
+The root message id — not `thread_id` — is the session identity because the first user message exists
+before the platform creates a thread. A later thread event carries that original `message_id` as
+`root_id`. The channel-kind prefix (`feishu:` or `lark:`) isolates the two clouds while keeping pi's
+provider-facing session/cache key under 64 characters. Inside the thread, session history already
+supplies prior turns, so `parent_id` is not fetched again. An ordinary top-level quoted reply has no `thread_id`: it starts a new session rooted at its own
+`message_id`, while the quoted parent is still loaded as referenced input.
+
+This p2p create-and-continue flow is field-verified on Feishu: replying to a top-level p2p message with
+`reply_in_thread: true` returns `root_id`, `parent_id`, and a new `thread_id`; a user continuation arrives
+as `chat_type: p2p` with the same root/thread pair. Lark shares the protocol path but still needs a real
+tenant smoke test; set `directMessageSession: "continuous"` if that cloud rejects thread creation.
+
+Turns are serialized per session (FIFO) instead of failing fast as `session busy`; different sessions —
+including different p2p roots in threaded mode — run concurrently. A turn queued behind another one
+immediately gets a reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional
+delay is desired). The running turn takes over that same card and settles the final answer in place: no
+second reply and no visible "recalled a message" tombstone.
 
 ## Streaming behavior
 
@@ -266,6 +299,8 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
   Token + Subscription mode/URL only on an explicit route-level 404.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
+- The default `directMessageSession: "threaded"` creates one durable Agent session per top-level DM. Session TTL/GC is not implemented, so storage grows with the number of roots.
+- `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.
 - Rate-limit rejects are retried (bounded); message sends to one chat are capped by the platform at 5 QPS.

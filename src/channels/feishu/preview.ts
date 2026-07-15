@@ -121,7 +121,7 @@ async function finalize(
       // Settle failed (card expired / rejected) — fall through to delete + fresh send below.
     }
     if (settled) {
-      // Topic continuations must keep reply_in_thread; ordinary group continuations intentionally avoid
+      // Thread continuations must keep reply_in_thread; ordinary group continuations intentionally avoid
       // repeating the quote on every chunk. sendText owns the same distinction for its own chunking.
       // A continuation failure propagates: the card is already authoritative, so deleting it and sending
       // the full answer again would deterministically duplicate every continuation that already landed.
