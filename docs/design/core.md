@@ -223,10 +223,13 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 ### Feishu (canonical) / Lark (compatibility)
 
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
-implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure decode,
-`invoke-turn.ts` IO assembly, `preview.ts` pump, `feishu-api.ts` transport/token pipeline, `crypto.ts`
-security math, `card.ts` builders, `seen.ts` dedup, and registration automation. Shared mechanisms
-(`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one level up.
+implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
+`model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
+`invoke-turn.ts` IO assembly, `preview.ts` delivery,
+`owned-threads.ts` durable managed-root routing, `seen.ts` bounded delivery dedup,
+`feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
+automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
+level up.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
@@ -251,13 +254,34 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   verification from event signatures, so its encrypted `url_verification` challenge takes the narrow
   decrypt → exact-type → constant-time Token path. Without an Encrypt Key, events use the same
   constant-time verification-token match in plaintext.
-- **Dedup on `message_id` (`seen.ts`).** The platform documents duplicate pushes and recommends this
-  key; without the ring, a late redelivery after a completed turn would re-run it.
-- **Group visibility is scope-gated.** The default scope delivers only @mentions of the bot, so
-  Telegram's context buffer has no counterpart until the sensitive `im:message.group_msg` scope is
-  granted. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved);
-  non-`user` senders never summon. A reply summon carries only `parent_id` — the referent's content and
-  attachments are fetched as primary input.
+- **Turn identity and delivery dedup use `message_id`; recovery order is an explicit `seq`.** Feishu ids
+  carry no arrival order, unlike Telegram's numeric `update_id`, while Feishu/Lark document duplicate
+  pushes even after a successful ACK and recommend idempotency on `message_id`. A bounded persisted
+  `seen.ts` ring therefore filters message deliveries that already produced a durable turn intent or
+  buffered-context entry. It is post-persist, best-effort insurance rather than exactly-once execution:
+  a crash between the state and ring writes, a failed ring write, or an id beyond the cap retains L1's
+  at-least-once tail. The generic turn store still owns unfinished-run recovery and its poison ceiling.
+- **Session partitioning is policy, not transport inference.** P2p and groups default to threaded root
+  sessions: every top-level DM or summoned group message owns a new `<kind>:message_id` session, creates
+  its platform thread with `reply_in_thread`, and maps continuations back through `<kind>:root_id`. The
+  kind prefix isolates Feishu/Lark while keeping pi's provider-facing cache key below its 64-character
+  ceiling. One root remains FIFO while different roots run concurrently. `directMessageSession:
+  "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
+  restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
+  `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
+  but owns a new root session. Group roots are indexed pre-ACK in `owned-threads.json`: with
+  `im:message.group_msg`, bare user messages in those roots become normal required turns with the same
+  queue, streaming-card, error, and delivery behavior as an explicit @mention. An explicit mention of
+  only other people is targeted discussion instead and enters the context buffer.
+- **Group visibility is scope-gated.** The default scope delivers only @mentions. The sensitive
+  `im:message.group_msg` scope delivers all group messages. Explicit @bot turns always invoke; bare
+  human messages invoke only in `chat_id + root_id` roots from the durable ownership index. Other human
+  discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
+  place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
+  on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.
+  Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon
+  carries only `parent_id` — the referent's content and attachments are fetched as primary input;
+  buffered attachments are background input and degrade per resource.
 - **Registration and creation are automated over the platform's own APIs.** The event Request URL is
   written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
   the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
@@ -268,8 +292,8 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   the platform-generated verification token over a throwaway tunnel. A re-run with that pair resumes
   missing-Token setup instead of creating another App; `.env` completes before the remaining publish action.
   One console action remains (the CLI opens the page): the long-connection→webhook mode flip takes
-  effect on version publish, which has no open API — the subscription mode cannot travel on the
-  creation link (the platform excludes sensitive config from addons). The intl cloud cannot complete
+  effect on version publish, which has no open API — neither the subscription mode nor the sensitive
+  `im:message.group_msg` permission can travel on the creation link. The intl cloud cannot complete
   the BOUND device flow (its confirm-page ack endpoint is broken), so a new/partial `add lark` setup
   opens the unbound one-click launcher (`/page/launcher?from=backend_oneclick`); a complete existing
   ID/Secret pair skips it and resumes that App directly. Only that pair may reuse its existing Token.

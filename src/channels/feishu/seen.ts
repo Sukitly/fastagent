@@ -1,14 +1,14 @@
 /**
- * Accepted-turn dedup: a bounded, persisted ring of message_ids the channel has ACCEPTED. The platform
- * redelivers events it thinks undelivered AND documents duplicate pushes in "special scenarios", keying
- * idempotency on message_id (its own guidance: dedup on message_id, not event_id). The turn-store alone
- * cannot cover the tail: once a completed turn's intent is removed, a late redelivery would re-run it —
- * this ring is what refuses that. Only ACCEPTED (routed) messages enter: ignored events are side-effect-
- * free, so recording them would just churn the ring.
+ * Bounded delivery dedup for message_ids whose webhook handling produced a durable side effect: either
+ * an accepted turn intent or a buffered group-context entry. Feishu/Lark document duplicate pushes even
+ * after a successful 200 and recommend idempotency on message_id (not event_id). The unfinished-turn
+ * store cannot cover a duplicate after completion, and a duplicated background event would otherwise be
+ * folded twice.
  *
- * Best-effort durability (post-decision insurance, not the pre-ACK intent): a failed write logs and
- * moves on — the exposure is a re-run after BOTH a completed turn and a redelivery straddle a crash,
- * the same at-least-once tail the turn-store documents.
+ * Record only AFTER the pre-ACK side effect is durable: recording first could turn a later state-write
+ * failure into silent loss when the platform redelivers. The ring write is best-effort post-persist
+ * insurance. A crash between the two writes, a ring-write failure, or an id older than the bounded cap
+ * retains L1's at-least-once tail; this is dedup, not exactly-once execution.
  */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
@@ -22,7 +22,7 @@ export function createSeenRing(path: string, label = "[feishu]", cap = 2000): Se
   const load = (): string[] => {
     const raw = loadStateFile(path);
     if (raw === undefined) return [];
-    if (Array.isArray(raw) && raw.every((x) => typeof x === "string")) return raw.slice(-cap);
+    if (Array.isArray(raw) && raw.every((id) => typeof id === "string")) return raw.slice(-cap);
     log.warn(`${label} unexpected shape in ${path} — starting with no seen ids`);
     return [];
   };
@@ -40,8 +40,8 @@ export function createSeenRing(path: string, label = "[feishu]", cap = 2000): Se
       }
       try {
         saveStateFile(path, order);
-      } catch (e) {
-        log.warn(`${label} seen-ring write failed (dedup degrades to the turn-store window): ${String(e)}`);
+      } catch (error) {
+        log.warn(`${label} seen-ring write failed (delivery dedup is in-memory until restart): ${String(error)}`);
       }
     },
   };

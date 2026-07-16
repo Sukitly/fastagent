@@ -1,5 +1,5 @@
 /**
- * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → dedup → route → run
+ * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → dedup → route → persist → run
  * the turn → stream a live card → ACK 200. Feishu (open.feishu.cn) is the reference cloud. Lark
  * international binds this engine through an explicit compatibility profile because its control plane
  * trails Feishu; protocol reuse does not make Lark the design center.
@@ -17,9 +17,18 @@ import { ensureStateHome } from "../state.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
+import {
+  collectFeishuBufferedAttachments,
+  createFeishuContextBuffer,
+  feishuBufferPlaceKey,
+  feishuBufferText,
+} from "./context-buffer.ts";
 import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
+import type { FeishuEventHeader } from "./model.ts";
+import { normalizeFeishuMessage } from "./normalize.ts";
+import { createOwnedFeishuThreads } from "./owned-threads.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -27,8 +36,8 @@ import {
   cloudEnvelope,
   defaultFeishuRoute,
   feishuEnvelope,
-  parseContent,
   placeKey,
+  senderLabel,
 } from "./parse.ts";
 import {
   type FeishuFailure,
@@ -63,10 +72,13 @@ const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll
 /** The persisted turn intent (what the runner needs to re-execute it). `seq` is the channel-assigned
  *  arrival number — Feishu message_ids (`om_…`) carry no order, so recovery sorts on this instead. */
 interface StoredFeishuTurn {
-  id: string; // message_id (the dedup key the platform itself recommends)
+  id: string; // message_id (the platform delivery identity; seq below carries arrival order)
   seq: number;
   session: string;
   baseText: string;
+  /** Context-buffer bucket to fold at dequeue (main chat, or this message's thread root). Optional only
+   *  for recovery compatibility with turn records written before context buffering existed. */
+  bufferKey?: string;
   chatId: string;
   replyTo?: string;
   /** Source message to quote when queue feedback mounts. Unlike `replyTo`, this is also set for a p2p
@@ -92,6 +104,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.seq === "number" &&
     typeof r.session === "string" &&
     typeof r.baseText === "string" &&
+    (r.bufferKey === undefined || typeof r.bufferKey === "string") &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
@@ -105,7 +118,8 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
 
 /** One accepted turn: the persisted intent plus live-only fields. The mounted queue card/text is not
  *  persisted; a replayed turn mounts a fresh preview because an old card may have expired. */
-interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts"> {
+interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts" | "bufferKey"> {
+  bufferKey: string;
   /** The queue-status card/text, when its delayed mount fired. The turn's preview takes it over. */
   preview?: MountedFeishuPreview;
 }
@@ -123,6 +137,16 @@ export interface FeishuChannelOptions {
    *  handshake from event signature verification; that narrow path is authenticated after decryption
    *  by the Verification Token. Must match the console exactly. */
   encryptKey?: string;
+  /** Direct-message context + delivery policy. `threaded` (default) gives every top-level p2p message
+   * its own session, creates a platform thread for the answer, and routes later thread messages back
+   * by root message id. `continuous` keeps one session per p2p chat and sends ordinary unquoted replies. */
+  directMessageSession?: "continuous" | "threaded";
+  /** Group-message context + delivery policy. `threaded` (default) gives every top-level summoned
+   * message its own session and platform thread; later bare user messages in that managed thread answer
+   * in the same root session, while @other-only discussion buffers. `continuous` preserves the legacy
+   * chat/topic sessions (`chat_id` / `chat_id:thread_id`). Buffering and bare continuations require
+   * `im:message.group_msg`. */
+  groupMessageSession?: "continuous" | "threaded";
   /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
   /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
@@ -150,6 +174,8 @@ export function buildFeishuChannel(
     appSecret,
     verificationToken,
     encryptKey,
+    directMessageSession = "threaded",
+    groupMessageSession = "threaded",
     route,
     onError,
     baseUrl = profile.apiBase,
@@ -169,6 +195,12 @@ export function buildFeishuChannel(
     throw new Error(
       `${factoryName} requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)`,
     );
+  }
+  if (directMessageSession !== "continuous" && directMessageSession !== "threaded") {
+    throw new Error(`${factoryName} directMessageSession must be "continuous" or "threaded"`);
+  }
+  if (groupMessageSession !== "continuous" && groupMessageSession !== "threaded") {
+    throw new Error(`${factoryName} groupMessageSession must be "continuous" or "threaded"`);
   }
   return ({ agent, stateRoot }) => {
     const formatError = onError ?? defaultErrorMessage;
@@ -193,7 +225,9 @@ export function buildFeishuChannel(
       throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
-    ensureStateHome(stateHome); // create + self-ignore — downloaded files may carry chat content
+    ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
+    const ownedThreads = createOwnedFeishuThreads(join(stateHome, "owned-threads.json"), label);
+    const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredFeishuTurn,
@@ -285,16 +319,31 @@ export function buildFeishuChannel(
         }
         const startedAt = Date.now();
         log.info(`${label} turn start: turn=${rec.id} session=${rec.session} chat=${rec.chatId}`);
+        // Snapshot background discussion at dequeue. Commit only this snapshot on `completed`, so a
+        // message arriving while the turn runs remains buffered for the next answered turn.
+        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold
+        // this snapshot before either commits it. That fan-out loses nothing; claiming by buffer key
+        // would instead couple otherwise-independent root sessions and require failure rollback.
+        const { text: recent, consumed } = buffer.peek(rec.bufferKey);
+        const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${rec.baseText}` : rec.baseText;
+        const buffered = collectFeishuBufferedAttachments(consumed, {
+          images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
+          files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
+        });
         try {
           await streamFeishuReply(
             invokeFeishuTurn(
               agent,
               rec.session,
-              rec.baseText,
+              prompt,
               { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label },
-              { images: rec.images, files: rec.files, parentId: rec.parentId },
-              // On completed, drop the intent — the turn provably lives in the session from here on.
-              () => store.remove(rec.id),
+              { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
+              () => {
+                // Drop intent first: a crash between these writes may re-fold answered context later,
+                // but can never replay this turn after its context was removed.
+                store.remove(rec.id);
+                buffer.commit(rec.bufferKey, consumed);
+              },
             ),
             api,
             targetOf(rec),
@@ -317,13 +366,13 @@ export function buildFeishuChannel(
       },
     });
 
-    // Accept a turn: persist its intent (pre-ACK; a failed write throws → webhook 500 → redeliver),
-    // record its id in the dedup ring (post-decision insurance, best-effort), enqueue it. Recovery
-    // re-enqueues a crash-surviving turn WITHOUT re-persisting.
+    // Accept a turn: persist its intent before the ACK, then record the platform delivery id and enqueue
+    // it. The ordering is deliberate: recording first could turn a failed intent write into silent loss
+    // when the platform redelivers. Recovery re-enqueues a crash survivor without re-persisting it.
     const submit = (rec: PendingFeishuTurn, persist: boolean): void => {
       if (persist) {
-        store.add(toStored(rec));
-        seen.add(rec.id);
+        store.add(toStored(rec)); // failed write → webhook 500 → platform redelivery
+        seen.add(rec.id); // post-persist, best-effort protection from documented duplicate pushes
       }
       queue.accept(rec);
     };
@@ -343,7 +392,12 @@ export function buildFeishuChannel(
     const recovered = store.recover();
     if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
     let seqCounter = recovered.reduce((max, r) => Math.max(max, r.seq), 0);
-    for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, preview: undefined }, false);
+    for (const { attempts: _a, ...intent } of recovered) {
+      // A pre-buffer-version record has no trustworthy place identity. Give it an empty private bucket
+      // rather than risk consuming new main-chat context that arrived after this restart.
+      const bufferKey = intent.bufferKey ?? `${intent.chatId}:legacy-turn:${intent.id}`;
+      submit({ ...intent, bufferKey, preview: undefined }, false);
+    }
 
     const handler = async (req: Request): Promise<Response> => {
       if (req.method !== "POST") return text("POST only\n", 405);
@@ -428,7 +482,7 @@ export function buildFeishuChannel(
 
       // ── Events. Only im.message.receive_v1 is consumed; everything else is ACKed and dropped
       // (a non-2xx would just make the platform retry an event this channel will never act on). ──────
-      const header = envelope.header as { event_type?: string } | undefined;
+      const header = envelope.header as FeishuEventHeader | undefined;
       if (header?.event_type !== "im.message.receive_v1") {
         log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
         return new Response(null, { status: 200 });
@@ -437,42 +491,128 @@ export function buildFeishuChannel(
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return new Response(null, { status: 200 });
       if (seen.has(m.message_id)) {
-        log.debug(`${label} duplicate push for message ${m.message_id} — already accepted, skipping`);
+        log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
         return new Response(null, { status: 200 });
       }
 
-      const r = decide(event);
+      let r = decide(event);
+      const normalized = normalizeFeishuMessage(event);
+      if (!normalized) return new Response(null, { status: 200 });
+      const bufferKey = feishuBufferPlaceKey(normalized.conversation);
+      const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
+      const managedThread =
+        groupMessageSession === "threaded" &&
+        isHumanGroup &&
+        m.thread_id !== undefined &&
+        m.root_id !== undefined &&
+        ownedThreads.has(m.chat_id, m.root_id);
+
+      // In an Agent-created thread, a bare user continuation still summons. Any explicit mention changes
+      // that intent: only defaultFeishuRoute's structural @THIS-bot match summons; @other-only discussion
+      // is buffered like unsummoned group context. A custom route remains fully authoritative.
+      if (!r && route === undefined && managedThread && !normalized.content.hasMentions) r = {};
       if (!r) {
-        log.debug(`${label} not summoned — ignoring message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
+        if (route === undefined && isHumanGroup) {
+          const bodyText = feishuBufferText(normalized.content.text);
+          if (bodyText) {
+            const resources = normalized.content.resources;
+            const images = resources
+              .filter((resource) => resource.kind === "image")
+              .map((resource) => ({ messageId: resource.messageId, key: resource.key }));
+            const files = resources
+              .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
+              .map((resource) => ({
+                messageId: resource.messageId,
+                key: resource.key,
+                name: resource.name,
+              }));
+            // Pre-ACK persistence: a write failure rejects the webhook so the platform can redeliver.
+            buffer.push(bufferKey, {
+              sender: senderLabel(event.sender) ?? "someone",
+              body: bodyText,
+              messageId: m.message_id,
+              replyTo: m.parent_id,
+              files: files.length ? files : undefined,
+              images: images.length ? images : undefined,
+            });
+            seen.add(m.message_id); // post-persist: a redelivery cannot duplicate buffered context
+            log.debug(`${label} buffered unsummoned group message ${m.message_id} (place ${bufferKey})`);
+          } else {
+            log.debug(`${label} not summoned — ignoring empty message ${m.message_id} (chat ${m.chat_id})`);
+          }
+        } else {
+          log.debug(`${label} not summoned — ignoring message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
+        }
         return new Response(null, { status: 200 });
       }
       {
-        const session = r.session ?? placeKey(m);
+        const threadedP2p = directMessageSession === "threaded" && m.chat_type === "p2p";
+        const threadedGroup = groupMessageSession === "threaded" && m.chat_type === "group";
+        const threadedConversation = threadedP2p || threadedGroup;
+        // A top-level threaded message has no thread_id yet. Its tenant-unique message_id is therefore
+        // the only identity available both before and after the first reply creates the thread.
+        // Continuations carry that same value as root_id (field-verified on Feishu p2p; shared protocol
+        // shape for groups/Lark). Prefix with the channel kind to isolate Feishu/Lark while keeping pi's
+        // provider-facing session/cache key under 64 characters.
+        if (threadedConversation && m.thread_id !== undefined && m.root_id === undefined) {
+          log.warn(
+            `${label} threaded ${m.chat_type} message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
+          );
+        }
+        const defaultSession = threadedConversation
+          ? `${kind}:${m.thread_id === undefined ? m.message_id : (m.root_id ?? `missing-root:${m.thread_id}`)}`
+          : placeKey(m);
+        const session = r.session ?? defaultSession;
         const chatId = r.chatId ?? m.chat_id;
-        // Reply to the summoning message in groups (threads the answer under the asker; stays inside a
-        // topic); a 1:1 p2p chat needs no reply-quote. Only when the RESOLVED target is the message's own
-        // chat: a route that redirects elsewhere must not quote a same-id message in the wrong place.
+        // Groups always quote the summon. Threaded groups and p2p add reply_in_thread: on a top-level
+        // message that creates the thread, and on a continuation it keeps the answer inside it. Only
+        // quote when the resolved target is the source chat — a custom redirect cannot reuse a message
+        // id there. A continuous group still keeps replies inside an already-existing platform topic.
         const sameTarget = chatId === m.chat_id;
-        const replyTo = m.chat_type !== "p2p" && sameTarget ? m.message_id : undefined;
-        // Queue feedback always identifies the exact ask, including p2p. Ordinary p2p answers remain
-        // unquoted unless the turn actually waited long enough for its queue preview to mount.
+        const replyTo = sameTarget && (m.chat_type === "group" || threadedP2p) ? m.message_id : undefined;
+        const replyInThread =
+          replyTo !== undefined && (threadedConversation || m.thread_id !== undefined) ? true : undefined;
+        // Queue feedback always identifies the exact ask, including continuous modes. In threaded mode
+        // it inherits replyInThread, so an ask queued inside a root cannot leak a status card to main chat.
         const queueReplyTo = sameTarget ? m.message_id : undefined;
-        const content = parseContent(m);
+        const resources = normalized.content.resources;
+        const images = resources
+          .filter((resource) => resource.kind === "image")
+          .map((resource) => ({ msg: resource.messageId, key: resource.key }));
+        const files = resources
+          .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
+          .map((resource) => ({ msg: resource.messageId, key: resource.key, name: resource.name }));
         const baseText = r.text ?? cloudEnvelope(event, kind);
-        if (baseText.trim() !== "" || content.imageKeys.length > 0 || content.fileRefs.length > 0) {
+        if (baseText.trim() !== "" || images.length > 0 || files.length > 0) {
+          // Persist ownership before ACK. The platform thread does not exist until the first reply lands,
+          // but a failed reply has no continuation to misroute; pre-ACK ownership closes the opposite,
+          // worse window (thread created, process dies, then its unmentioned continuation is forgotten).
+          if (
+            route === undefined &&
+            threadedGroup &&
+            m.thread_id === undefined &&
+            sameTarget &&
+            replyInThread === true
+          ) {
+            ownedThreads.add(m.chat_id, m.message_id);
+          }
           submit(
             {
               id: m.message_id,
               seq: ++seqCounter,
               session,
               baseText,
+              bufferKey,
               chatId,
               replyTo,
               queueReplyTo,
-              replyInThread: replyTo !== undefined && m.thread_id !== undefined ? true : undefined,
-              parentId: m.parent_id,
-              images: content.imageKeys.map((key) => ({ msg: m.message_id, key })),
-              files: content.fileRefs.map((f) => ({ msg: m.message_id, key: f.key, name: f.name })),
+              replyInThread,
+              // Inside a threaded session the root conversation history already contains the previous
+              // turns. Reloading parent_id would duplicate that input (and its attachments). A top-level
+              // quoted reply has no thread_id, starts a new root, and still hydrates its referent.
+              parentId: threadedConversation && m.thread_id !== undefined ? undefined : m.parent_id,
+              images,
+              files,
             },
             true,
           );
