@@ -1162,6 +1162,52 @@ describe("turn flow", () => {
     ).toBe(false);
   });
 
+  it("attributes buffered vision images after primary images in prompt order", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_background_image",
+          chatType: "group",
+          msgType: "image",
+          content: JSON.stringify({ image_key: "background_image" }),
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_image_ask",
+          chatType: "group",
+          msgType: "post",
+          content: JSON.stringify({
+            content: [
+              [
+                { tag: "at", user_name: "Bot", user_id: "ou_bot" },
+                { tag: "text", text: " compare these " },
+                { tag: "img", image_key: "primary_image" },
+              ],
+            ],
+          }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.images).toHaveLength(2);
+    expect(calls[0]?.prompt.text).toContain("background vision images from earlier discussion");
+    expect(calls[0]?.prompt.text).toContain("appended after 1 primary image(s)");
+    expect(calls[0]?.prompt.text).toContain("vision image 2: from user ou_alice, msg om_background_image");
+    expect(fx.calls("/im/v1/messages/om_image_ask/resources/primary_image", "GET")).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_background_image/resources/background_image", "GET")).toHaveLength(1);
+  });
+
   it("a failed buffered attachment degrades per resource while readable siblings still load", async () => {
     const fx = feishuFetch({
       "/resources/stale": () => Response.json({ code: 234001, msg: "resource expired" }, { status: 410 }),
@@ -1356,6 +1402,17 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(0);
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
+  });
+
+  it("does not persist managed-thread ownership when a custom route owns admission", async () => {
+    feishuFetch();
+    const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });
+
+    await handler(feishuRequest(messageEvent({ id: "om_custom_group", chatType: "group", text: "custom" })));
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {

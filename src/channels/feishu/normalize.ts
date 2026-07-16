@@ -3,9 +3,7 @@
  * actual message body as a JSON string selected by `message_type`; this module is the one decoder and
  * converts resource keys into message-scoped locators before the turn engine sees them.
  */
-import type { FeishuCloudKind } from "./cloud.ts";
 import type {
-  FeishuEventHeader,
   FeishuMention,
   FeishuMessage,
   FeishuMessageEvent,
@@ -17,8 +15,6 @@ export interface DecodedFeishuResource {
   kind: FeishuResourceKind;
   key: string;
   name?: string;
-  durationMs?: number;
-  coverImageKey?: string;
 }
 
 export interface DecodedFeishuContent {
@@ -42,13 +38,6 @@ interface PostNode {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string" || value.trim() === "") return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /** Restore text-message mention placeholders to readable names. */
@@ -129,26 +118,13 @@ export function decodeFeishuContent(
     }
     case "audio": {
       const key = nonEmptyString(content.file_key);
-      if (key)
-        resources.push({
-          kind: "audio",
-          key,
-          name: "voice-message",
-          durationMs: finiteNumber(content.duration),
-        });
+      if (key) resources.push({ kind: "audio", key, name: "voice-message" });
       return { text: "[voice message]", resources };
     }
     case "media": {
       const key = nonEmptyString(content.file_key);
       const name = nonEmptyString(content.file_name);
-      if (key)
-        resources.push({
-          kind: "video",
-          key,
-          name,
-          durationMs: finiteNumber(content.duration),
-          coverImageKey: nonEmptyString(content.image_key),
-        });
+      if (key) resources.push({ kind: "video", key, name });
       return { text: `[video: ${name ?? "video"}]`, resources };
     }
     case "location": {
@@ -163,60 +139,21 @@ export function decodeFeishuContent(
   }
 }
 
-export interface NormalizeFeishuMessageOptions {
-  cloud: FeishuCloudKind;
-  appId?: string;
-  header?: FeishuEventHeader;
-  botOpenId?: string;
-}
-
 /** Normalize one verified message event. Returns null only when its required identity is absent. */
-export function normalizeFeishuMessage(
-  event: FeishuMessageEvent,
-  options: NormalizeFeishuMessageOptions,
-): NormalizedFeishuMessage | null {
+export function normalizeFeishuMessage(event: FeishuMessageEvent): NormalizedFeishuMessage | null {
   const message = event.message;
   if (!message || typeof message.message_id !== "string" || typeof message.chat_id !== "string") return null;
 
   const decoded = decodeFeishuContent(message);
-  const senderIds = event.sender?.sender_id;
   return {
-    source: {
-      cloud: options.cloud,
-      appId: options.header?.app_id ?? options.appId,
-      tenantKey: options.header?.tenant_key,
-    },
-    delivery: {
-      eventId: options.header?.event_id,
-      messageId: message.message_id,
-      eventCreatedAt: finiteNumber(options.header?.create_time),
-      messageCreatedAt: finiteNumber(message.create_time),
-    },
     conversation: {
       chatId: message.chat_id,
-      chatType: message.chat_type,
       threadId: message.thread_id,
       rootId: message.root_id,
-      parentId: message.parent_id,
-    },
-    sender: {
-      type: event.sender?.sender_type,
-      openId: senderIds?.open_id,
-      userId: senderIds?.user_id,
-      unionId: senderIds?.union_id,
-      tenantKey: event.sender?.tenant_key,
     },
     content: {
-      rawType: message.message_type,
       text: decoded.text,
-      mentions: (message.mentions ?? []).map((mention) => ({
-        key: mention.key,
-        openId: mention.id?.open_id,
-        userId: mention.id?.user_id,
-        unionId: mention.id?.union_id,
-        name: mention.name,
-        isBot: options.botOpenId !== undefined && mention.id?.open_id === options.botOpenId,
-      })),
+      hasMentions: (message.mentions?.length ?? 0) > 0,
       resources: decoded.resources.map((resource) => ({ ...resource, messageId: message.message_id })),
     },
   };

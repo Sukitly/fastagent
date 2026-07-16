@@ -224,7 +224,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
-`model.ts` / `normalize.ts` protocol normalization, `invoke-turn.ts` IO assembly, `preview.ts` delivery,
+`model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
+`invoke-turn.ts` IO assembly, `preview.ts` delivery,
 `owned-threads.ts` durable managed-root routing, `seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one

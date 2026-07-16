@@ -2,11 +2,10 @@
  * Canonical Feishu/Lark protocol and normalized-message models.
  *
  * Raw wire types stay at the webhook/policy boundary: authors' existing `route(event)` callbacks keep
- * receiving the platform event unchanged. The turn engine consumes {@link NormalizedFeishuMessage}
- * instead, so transport envelopes, JSON-string message bodies, and platform field naming do not leak
- * further into persistence, attachment resolution, or future ingress implementations.
+ * receiving the platform event unchanged. The narrow normalized shape below owns only what currently
+ * benefits from normalization: conversation-place identity, decoded content, mention presence, and
+ * message-scoped resource locators. Do not pre-model unused transport metadata for a future ingress.
  */
-import type { FeishuCloudKind } from "./cloud.ts";
 
 /** The v2 event envelope header. Feishu and Lark use the same wire shape. */
 export interface FeishuEventHeader {
@@ -68,7 +67,7 @@ export interface FeishuRoute {
   text?: string;
 }
 
-export type FeishuResourceKind = "image" | "file" | "audio" | "video" | "sticker";
+export type FeishuResourceKind = "image" | "file" | "audio" | "video";
 
 /**
  * A resource locator. User-sent resources are scoped by BOTH their carrying message id and resource
@@ -79,50 +78,18 @@ export interface FeishuResourceRef {
   messageId: string;
   key: string;
   name?: string;
-  durationMs?: number;
-  coverImageKey?: string;
 }
 
-export interface NormalizedFeishuMention {
-  key: string;
-  openId?: string;
-  userId?: string;
-  unionId?: string;
-  name?: string;
-  isBot: boolean;
-}
-
-/** Stable internal representation shared by the Feishu reference cloud and Lark compatibility cloud. */
+/** Narrow internal representation shared by the Feishu reference and Lark compatibility clouds. */
 export interface NormalizedFeishuMessage {
-  source: {
-    cloud: FeishuCloudKind;
-    appId?: string;
-    tenantKey?: string;
-  };
-  delivery: {
-    eventId?: string;
-    messageId: string;
-    eventCreatedAt?: number;
-    messageCreatedAt?: number;
-  };
   conversation: {
     chatId: string;
-    chatType: string;
     threadId?: string;
     rootId?: string;
-    parentId?: string;
-  };
-  sender: {
-    type?: string;
-    openId?: string;
-    userId?: string;
-    unionId?: string;
-    tenantKey?: string;
   };
   content: {
-    rawType: string;
     text: string;
-    mentions: NormalizedFeishuMention[];
+    hasMentions: boolean;
     resources: FeishuResourceRef[];
   };
 }

@@ -2,7 +2,22 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendChannelDotEnv } from "../src/scaffold/add-channel.ts";
+import { appendChannelDotEnv, channelSetup } from "../src/scaffold/add-channel.ts";
+
+describe("channel setup guidance", () => {
+  it("separates optional group visibility from mandatory Feishu publish", () => {
+    for (const kind of ["feishu", "lark"] as const) {
+      const steps = channelSetup(kind).steps;
+      const optionalScope = steps.find((step) => step.includes("im:message.group_msg"));
+      expect(optionalScope).toContain("optional before publishing");
+      expect(optionalScope).not.toContain("PUBLISH");
+    }
+
+    const publish = channelSetup("feishu").steps.find((step) => step.startsWith("PUBLISH"));
+    expect(publish).toContain("switch to webhook mode takes effect on publish");
+    expect(publish).not.toContain("im:message.group_msg");
+  });
+});
 
 describe("appendChannelDotEnv", () => {
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {

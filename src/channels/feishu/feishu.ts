@@ -496,7 +496,7 @@ export function buildFeishuChannel(
       }
 
       let r = decide(event);
-      const normalized = normalizeFeishuMessage(event, { cloud: kind, appId, header, botOpenId });
+      const normalized = normalizeFeishuMessage(event);
       if (!normalized) return new Response(null, { status: 200 });
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
@@ -510,7 +510,7 @@ export function buildFeishuChannel(
       // In an Agent-created thread, a bare user continuation still summons. Any explicit mention changes
       // that intent: only defaultFeishuRoute's structural @THIS-bot match summons; @other-only discussion
       // is buffered like unsummoned group context. A custom route remains fully authoritative.
-      if (!r && route === undefined && managedThread && normalized.content.mentions.length === 0) r = {};
+      if (!r && route === undefined && managedThread && !normalized.content.hasMentions) r = {};
       if (!r) {
         if (route === undefined && isHumanGroup) {
           const bodyText = feishuBufferText(normalized.content.text);
@@ -587,7 +587,13 @@ export function buildFeishuChannel(
           // Persist ownership before ACK. The platform thread does not exist until the first reply lands,
           // but a failed reply has no continuation to misroute; pre-ACK ownership closes the opposite,
           // worse window (thread created, process dies, then its unmentioned continuation is forgotten).
-          if (threadedGroup && m.thread_id === undefined && sameTarget && replyInThread === true) {
+          if (
+            route === undefined &&
+            threadedGroup &&
+            m.thread_id === undefined &&
+            sameTarget &&
+            replyInThread === true
+          ) {
             ownedThreads.add(m.chat_id, m.message_id);
           }
           submit(

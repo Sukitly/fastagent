@@ -15,54 +15,20 @@ function fixture(kind: "feishu" | "lark"): MessageFixture {
 }
 
 describe("Feishu/Lark normalized webhook model", () => {
-  it("normalizes the canonical Feishu envelope without losing identity or conversation relations", () => {
+  it("normalizes the conversation place and decoded content the turn wiring consumes", () => {
     const raw = fixture("feishu");
-    const message = normalizeFeishuMessage(raw.event, {
-      cloud: "feishu",
-      header: raw.header,
-      botOpenId: "ou_bot",
-    });
+    const message = normalizeFeishuMessage(raw.event);
 
     expect(raw.schema).toBe("2.0");
     expect(message).toEqual({
-      source: {
-        cloud: "feishu",
-        appId: "cli_feishu_fixture",
-        tenantKey: "tenant_feishu_fixture",
-      },
-      delivery: {
-        eventId: "ev_feishu_message_1",
-        messageId: "om_feishu_message_1",
-        eventCreatedAt: 1710000000123,
-        messageCreatedAt: 1710000000000,
-      },
       conversation: {
         chatId: "oc_feishu_chat",
-        chatType: "group",
         threadId: "omt_feishu_topic",
         rootId: "om_topic_root",
-        parentId: "om_parent",
-      },
-      sender: {
-        type: "user",
-        openId: "ou_alice",
-        userId: "u_alice",
-        unionId: "on_alice",
-        tenantKey: "tenant_feishu_fixture",
       },
       content: {
-        rawType: "text",
         text: "@FastAgent review this",
-        mentions: [
-          {
-            key: "@_user_1",
-            openId: "ou_bot",
-            userId: undefined,
-            unionId: undefined,
-            name: "FastAgent",
-            isBot: true,
-          },
-        ],
+        hasMentions: true,
         resources: [],
       },
     });
@@ -70,23 +36,17 @@ describe("Feishu/Lark normalized webhook model", () => {
 
   it("normalizes the same Lark wire model and scopes every resource to its carrying message", () => {
     const raw = fixture("lark");
-    const message = normalizeFeishuMessage(raw.event, { cloud: "lark", header: raw.header });
+    const message = normalizeFeishuMessage(raw.event);
 
     expect(raw.header.event_type).toBe("im.message.receive_v1");
-    expect(message?.source).toEqual({
-      cloud: "lark",
-      appId: "cli_lark_fixture",
-      tenantKey: "tenant_lark_fixture",
-    });
     expect(message?.conversation).toEqual({
       chatId: "oc_lark_chat",
-      chatType: "p2p",
       threadId: undefined,
       rootId: undefined,
-      parentId: undefined,
     });
     expect(message?.content.text).toContain("Project update");
     expect(message?.content.text).toContain("the spec (https://example.test/spec)");
+    expect(message?.content.hasMentions).toBe(false);
     expect(message?.content.resources).toEqual([
       { kind: "image", key: "img_lark_1", messageId: "om_lark_message_1" },
       { kind: "video", key: "file_lark_1", name: "demo.mp4", messageId: "om_lark_message_1" },
@@ -94,6 +54,6 @@ describe("Feishu/Lark normalized webhook model", () => {
   });
 
   it("rejects an event without a message identity at the normalization boundary", () => {
-    expect(normalizeFeishuMessage({ sender: { sender_type: "user" } }, { cloud: "feishu" })).toBeNull();
+    expect(normalizeFeishuMessage({ sender: { sender_type: "user" } })).toBeNull();
   });
 });

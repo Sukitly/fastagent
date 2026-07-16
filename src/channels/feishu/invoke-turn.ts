@@ -100,10 +100,12 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const bufferedFiles = attachments.buffered.files.filter(
     (ref) => !primaryFiles.has(`${ref.messageId}\u0000${ref.key}`),
   );
-  const backgroundImages: ImageRef[] = [];
+  const backgroundImages: { image: ImageRef; ref: FeishuBufferedRef }[] = [];
   const backgroundFiles: { file: DownloadedFile; ref: FeishuBufferedRef }[] = [];
   let lost = 0;
-  const imageResults = await Promise.allSettled(bufferedImages.map((ref) => t.api.fetchImage(ref.messageId, ref.key)));
+  const imageResults = await Promise.allSettled(
+    bufferedImages.map(async (ref) => ({ ref, image: await t.api.fetchImage(ref.messageId, ref.key) })),
+  );
   for (const result of imageResults) {
     if (result.status === "fulfilled") backgroundImages.push(result.value);
     else {
@@ -129,6 +131,13 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
     missing > 0
       ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (expired, or older than the most recent few)]`
       : "";
+  const backgroundImageManifest = backgroundImages.length
+    ? `\n\n[background vision images from earlier discussion — appended after ${imageRefs.length} primary image(s):\n${backgroundImages
+        .map(
+          ({ ref }, index) => `- vision image ${imageRefs.length + index + 1}: from ${ref.from}, msg ${ref.messageId}`,
+        )
+        .join("\n")}\n]`
+    : "";
   const allFiles = [
     ...downloaded,
     ...backgroundFiles.map(({ file, ref }) => ({
@@ -139,10 +148,10 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const manifest = allFiles.length
     ? `\n\n[attached files — read them with your tools:\n${allFiles.map((file) => `- ${file.name} (${file.size} bytes) → ${file.path}`).join("\n")}\n]`
     : "";
-  const allImages = [...imageRefs, ...backgroundImages];
+  const allImages = [...imageRefs, ...backgroundImages.map(({ image }) => image)];
   return {
     images: allImages.length ? allImages : undefined,
-    promptSuffix: `${referentBlock}${bufferedNote}${manifest}`,
+    promptSuffix: `${referentBlock}${bufferedNote}${backgroundImageManifest}${manifest}`,
   };
 }
 

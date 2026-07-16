@@ -90,7 +90,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "add the sensitive im:message.group_msg permission (tenant-admin approval) and PUBLISH the app version — this lets managed group threads receive unmentioned continuations; without it, only @mentions arrive",
+      "optional before publishing: add the sensitive im:message.group_msg permission (tenant-admin approval) to receive unmentioned managed-thread continuations and buffer other group discussion",
+      "PUBLISH the app version on the page the CLI opened — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
@@ -112,7 +113,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "finish the console setup: enable Bot and add the permissions + im.message.receive_v1 event listed in {channel}, including sensitive im:message.group_msg for unmentioned managed-thread continuations (do not publish yet)",
+      "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
+      "optional before publishing: add the sensitive im:message.group_msg permission (tenant-admin approval) to receive unmentioned managed-thread continuations and buffer other group discussion",
       "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
