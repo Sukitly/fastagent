@@ -7,7 +7,6 @@ export {
   type LarkChannelOptions,
   type LarkMessageEvent,
   type LarkMessage,
-  type LarkReplyPolicy,
   type LarkRoute,
   type LarkFailure,
 } from "./channels/lark/lark.ts";

@@ -188,14 +188,6 @@ describe("construction fails closed", () => {
         groupMessageSession: "invalid" as "threaded",
       }),
     ).toThrow(/groupMessageSession/);
-    expect(() =>
-      buildFeishuChannel({
-        appId: "a",
-        appSecret: "s",
-        verificationToken: "t",
-        groupThreadReplies: "invalid" as "agent-decides",
-      }),
-    ).toThrow(/groupThreadReplies/);
   });
 
   it("rejects a relative ctx.stateRoot (fail visibly, never a silent cwd re-anchor)", () => {
@@ -500,7 +492,7 @@ describe("turn flow", () => {
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
 
-  it("an unmentioned continuation in an Agent-created group thread lets the Agent decide and replies statically", async () => {
+  it("every user continuation in an Agent-created group thread answers through the normal streaming path", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle, home } = buildChannel();
     await flush();
@@ -522,7 +514,7 @@ describe("turn flow", () => {
     await handler(
       feishuRequest(
         messageEvent({
-          id: "om_ambient",
+          id: "om_continuation",
           chatType: "group",
           rootId: "om_managed_root",
           parentId: "om_bot_answer",
@@ -535,18 +527,17 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls.map((call) => call.scope.session)).toEqual(["feishu:om_managed_root", "feishu:om_managed_root"]);
-    expect(calls[1]?.prompt.text).toContain("ambient message in an Agent-managed group thread");
-    expect(calls[1]?.prompt.text).toContain("<FASTAGENT_NO_REPLY>");
+    expect(calls[1]?.prompt.text).toContain("what about queues?");
     expect(fx.calls("/im/v1/messages/om_bot_answer", "GET")).toHaveLength(0);
-    const reply = fx.calls("/im/v1/messages/om_ambient/reply", "POST")[0];
+    const reply = fx.calls("/im/v1/messages/om_continuation/reply", "POST")[0];
     expect(reply?.body?.msg_type).toBe("interactive");
     expect(reply?.body?.reply_in_thread).toBe(true);
-    const staticCard = fx.calls("/cardkit/v1/cards", "POST")[1];
-    expect(JSON.parse(String(staticCard?.body?.data)).config.streaming_mode).toBe(false);
-    expect(fx.calls("/cardkit/v1/cards/c2", "PUT")).toHaveLength(0);
+    const previewCard = fx.calls("/cardkit/v1/cards", "POST")[1];
+    expect(JSON.parse(String(previewCard?.body?.data)).config.streaming_mode).toBe(true);
+    expect(fx.calls("/cardkit/v1/cards/c2", "PUT")).not.toHaveLength(0);
   });
 
-  it("an ambient managed-thread turn queues silently until the Agent decides to reply", async () => {
+  it("a managed-thread continuation gets normal queue feedback while its root session is busy", async () => {
     const fx = feishuFetch();
     let releaseRoot: () => void = () => {};
     const rootGate = new Promise<void>((resolve) => {
@@ -556,7 +547,7 @@ describe("turn flow", () => {
     injectedAgent = {
       async *invoke(): AsyncIterable<AgentEvent> {
         if (++invocation === 1) await rootGate;
-        yield { type: "text", delta: invocation === 1 ? "root answer" : "ambient answer" };
+        yield { type: "text", delta: invocation === 1 ? "root answer" : "continuation answer" };
         yield { type: "completed" };
       },
     };
@@ -576,81 +567,30 @@ describe("turn flow", () => {
     await handler(
       feishuRequest(
         messageEvent({
-          id: "om_ambient_queued",
+          id: "om_continuation_queued",
           chatType: "group",
           rootId: "om_queue_root",
           threadId: "omt_queue",
-          text: "ambient while busy",
+          text: "message while busy",
         }),
       ),
     );
     await flush();
 
-    expect(fx.calls("/im/v1/messages/om_ambient_queued/reply", "POST")).toHaveLength(0);
+    const queuedReplies = fx.calls("/im/v1/messages/om_continuation_queued/reply", "POST");
+    expect(queuedReplies).toHaveLength(1);
+    expect(queuedReplies[0]?.body?.reply_in_thread).toBe(true);
+    const queuedCard = fx.calls("/cardkit/v1/cards", "POST")[1];
+    expect(String(queuedCard?.body?.data)).toContain("Queued");
+
     releaseRoot();
     await idle();
     expect(invocation).toBe(2);
-    expect(fx.calls("/im/v1/messages/om_ambient_queued/reply", "POST")).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_continuation_queued/reply", "POST")).toHaveLength(1);
+    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(2); // queue card becomes the answer preview
   });
 
-  it("an Agent-decided no-reply stays completely silent in its managed group thread", async () => {
-    const fx = feishuFetch();
-    const prompts: string[] = [];
-    const info: string[] = [];
-    vi.spyOn(log, "info").mockImplementation((message) => info.push(message));
-    injectedAgent = {
-      async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-        prompts.push(prompt.text);
-        yield {
-          type: "text",
-          delta: prompt.text.includes("ambient message in an Agent-managed group thread")
-            ? "<FASTAGENT_NO_REPLY>"
-            : "root answer",
-        };
-        yield { type: "completed" };
-      },
-    };
-    const { handler, idle } = buildChannel();
-    await flush();
-    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
-
-    await handler(
-      feishuRequest(
-        messageEvent({ id: "om_silent_root", chatType: "group", text: "@_user_1 start", mentions: mention }),
-      ),
-    );
-    await idle();
-    await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_silent_followup",
-          chatType: "group",
-          rootId: "om_silent_root",
-          threadId: "omt_silent",
-          text: "participants chatting",
-        }),
-      ),
-    );
-    await idle();
-
-    expect(prompts).toHaveLength(2); // observed and committed to the same Agent session
-    expect(fx.calls("/im/v1/messages/om_silent_followup/reply", "POST")).toHaveLength(0);
-    const chatSends = fx.calls("receive_id_type=chat_id", "POST").filter((call) => call.body?.receive_id === "oc_1");
-    expect(chatSends).toHaveLength(0);
-    expect(
-      info.some((message) => message.includes("turn=om_silent_root") && message.includes("replyPolicy=required")),
-    ).toBe(true);
-    expect(
-      info.some(
-        (message) => message.includes("turn=om_silent_followup") && message.includes("replyPolicy=agent-decides"),
-      ),
-    ).toBe(true);
-    expect(
-      info.some((message) => message.includes("turn=om_silent_followup") && message.includes("decision=no-reply")),
-    ).toBe(true);
-  });
-
-  it("an ambient turn failure is operator-visible but sends no unsolicited error card", async () => {
+  it("a managed-thread continuation failure uses the same user-facing error path as an @mention", async () => {
     const fx = feishuFetch();
     const errors: string[] = [];
     vi.spyOn(log, "error").mockImplementation((message) => errors.push(message));
@@ -662,7 +602,7 @@ describe("turn flow", () => {
           yield { type: "completed" };
           return;
         }
-        yield { type: "failed", details: "ambient model failed", retryable: true };
+        yield { type: "failed", details: "continuation model failed", retryable: true };
       },
     };
     const { handler, idle } = buildChannel({ onError: (failed) => `visible: ${failed.details}` });
@@ -678,18 +618,21 @@ describe("turn flow", () => {
     await handler(
       feishuRequest(
         messageEvent({
-          id: "om_ambient_failure",
+          id: "om_continuation_failure",
           chatType: "group",
           rootId: "om_failure_root",
           threadId: "omt_failure",
-          text: "ambient failure",
+          text: "continuation failure",
         }),
       ),
     );
     await idle();
 
-    expect(fx.calls("/im/v1/messages/om_ambient_failure/reply", "POST")).toHaveLength(0);
-    expect(errors.some((message) => message.includes("ambient model failed"))).toBe(true);
+    expect(fx.calls("/im/v1/messages/om_continuation_failure/reply", "POST")).toHaveLength(1);
+    const settle = fx.calls("/cardkit/v1/cards/c2", "PUT").find((call) => call.url.endsWith("/cardkit/v1/cards/c2"));
+    const card = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
+    expect(card.body.elements[0].content).toBe("visible: continuation model failed");
+    expect(errors.some((message) => message.includes("continuation model failed"))).toBe(true);
   });
 
   it("an unmentioned message in a thread the Agent does not own is ignored", async () => {
@@ -712,34 +655,6 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(0);
     expect(fx.calls("/im/v1/messages/om_unowned/reply", "POST")).toHaveLength(0);
-  });
-
-  it("groupThreadReplies=mentions-only keeps an owned thread explicitly summon-gated", async () => {
-    feishuFetch();
-    const { handler, calls, idle } = buildChannel({ groupThreadReplies: "mentions-only" });
-    await flush();
-    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
-
-    await handler(
-      feishuRequest(
-        messageEvent({ id: "om_gated_root", chatType: "group", text: "@_user_1 start", mentions: mention }),
-      ),
-    );
-    await idle();
-    await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_gated_followup",
-          chatType: "group",
-          rootId: "om_gated_root",
-          threadId: "omt_gated",
-          text: "no mention",
-        }),
-      ),
-    );
-    await idle();
-
-    expect(calls).toHaveLength(1);
   });
 
   it("threaded group: a continuation returns to the root session without reloading its parent", async () => {

@@ -203,8 +203,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` protocol normalization, `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`owned-threads.ts` durable managed-root routing, `reply-policy.ts` the optional-response protocol,
-`feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
+`owned-threads.ts` durable managed-root routing, `feishu-api.ts` transport/token pipeline,
+`crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
 level up.
 
@@ -244,11 +244,10 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
   `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
   but owns a new root session. Group roots are indexed pre-ACK in `owned-threads.json`: with
-  `im:message.group_msg`, unmentioned user continuations in those roots become silent Agent-decision
-  turns; explicit mentions remain required replies. Optional turns mount no Queued/Thinking card and
-  either stay completely silent or send one final static card.
+  `im:message.group_msg`, every later user message in those roots becomes a normal required turn with
+  the same queue, streaming-card, error, and delivery behavior as an explicit @mention.
 - **Group visibility is scope-gated.** The default scope delivers only @mentions. The sensitive
-  `im:message.group_msg` scope delivers all group messages, after which the channel admits ambient
+  `im:message.group_msg` scope delivers all group messages, after which the channel admits unmentioned
   turns only for `chat_id + root_id` in its durable ownership index; unrelated groups/topics and every
   non-`user` sender are dropped. Telegram's arbitrary un-summoned context buffer still has no
   counterpart. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved).

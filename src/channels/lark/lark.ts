@@ -10,7 +10,6 @@ import {
   type FeishuFailure,
   type FeishuMessage,
   type FeishuMessageEvent,
-  type FeishuReplyPolicy,
   type FeishuRoute,
   buildFeishuChannel,
   defaultFeishuRoute,
@@ -21,7 +20,6 @@ export type LarkChannelOptions = FeishuChannelOptions;
 export type LarkFailure = FeishuFailure;
 export type LarkMessage = FeishuMessage;
 export type LarkMessageEvent = FeishuMessageEvent;
-export type LarkReplyPolicy = FeishuReplyPolicy;
 export type LarkRoute = FeishuRoute;
 
 export const defaultLarkRoute: typeof defaultFeishuRoute = defaultFeishuRoute;
