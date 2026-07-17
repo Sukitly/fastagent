@@ -66,8 +66,10 @@ interface LockResult<T> {
 /**
  * Serialized cross-process read-modify-write of the credentials file: exponential-backoff retries,
  * 30s staleness, and compromise detection (the parameters pi's `FileAuthStorageBackend` used).
- * Ensures the file exists first (0700 dir, 0600 file) because `proper-lockfile` locks an existing
- * path. A compromised lock aborts before the write rather than clobbering a concurrent writer.
+ * Ensures the file exists first (0700 dir, 0600 file, EXCLUSIVE create: a concurrent first write
+ * must never be clobbered by the init) because `proper-lockfile` locks an existing path. A
+ * compromised lock aborts before the write rather than clobbering a concurrent writer, and a
+ * failed unlock after a successful operation rejects instead of leaving a stale lock silently.
  */
 async function withLockedAuthFile<T>(
   authPath: string,
@@ -76,8 +78,14 @@ async function withLockedAuthFile<T>(
   const dir = dirname(authPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (!existsSync(authPath)) {
-    writeFileSync(authPath, "{}", AUTH_FILE_WRITE_OPTIONS);
-    chmodSync(authPath, 0o600);
+    try {
+      writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
+      chmodSync(authPath, 0o600);
+    } catch (error) {
+      // EEXIST: another process created the file between the existence check and this exclusive
+      // create; its content (possibly already-written credentials) must not be clobbered.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
 
   let compromised: Error | undefined;
@@ -92,24 +100,55 @@ async function withLockedAuthFile<T>(
       compromised = error;
     },
   });
+  let result: T;
   try {
     throwIfCompromised();
     const current = existsSync(authPath) ? readFileSync(authPath, "utf8") : undefined;
-    const { result, next } = await fn(current);
+    const out = await fn(current);
     throwIfCompromised();
-    if (next !== undefined) {
-      writeFileSync(authPath, next, AUTH_FILE_WRITE_OPTIONS);
+    if (out.next !== undefined) {
+      writeFileSync(authPath, out.next, AUTH_FILE_WRITE_OPTIONS);
       chmodSync(authPath, 0o600);
     }
     throwIfCompromised();
-    return result;
-  } finally {
+    result = out.result;
+  } catch (error) {
+    // The primary failure stays the signal; unlock noise must not mask it.
     try {
       await release();
     } catch {
-      // Unlock can fail when the lock was compromised or reclaimed as stale; the write is done.
+      // Secondary: a compromised or stale-reclaimed lock often cannot release cleanly.
     }
+    throw error;
   }
+  // Success path: a failed release is a real cleanup failure (the leftover auth.json.lock stalls
+  // the next writer for the staleness window with zero diagnostics), so it surfaces instead of
+  // resolving a silently degraded operation. A compromise detected after the last in-band check
+  // surfaces here too.
+  try {
+    await release();
+  } catch (releaseError) {
+    if (compromised === undefined) throw releaseError;
+  }
+  throwIfCompromised();
+  return result;
+}
+
+/**
+ * Decode the credentials JSON, shared by the read and write paths. The root must be a plain
+ * non-null, non-array object: `[]`, `null`, and scalar roots pass JSON.parse but break the record
+ * semantics (an array root even swallows writes, since JSON.stringify drops string keys on arrays).
+ * Structurally invalid = corrupt, exactly like unparsable text.
+ */
+function decodeCreds(raw: string): Creds | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  return parsed as Creds;
 }
 
 /**
@@ -130,11 +169,10 @@ async function readCreds(authPath: string, warn: (message: string) => void): Pro
       return undefined;
     }
     if (raw !== "") {
-      try {
-        return JSON.parse(raw) as Creds;
-      } catch {
-        // A partial read mid-write parses as garbage; fall through and retry.
-      }
+      const creds = decodeCreds(raw);
+      if (creds !== undefined) return creds;
+      // A partial read mid-write parses as garbage; fall through and retry. A structurally invalid
+      // root lands here too and is reported as corrupt below.
     }
     if (attempt < 2) await sleep(2);
   }
@@ -149,11 +187,11 @@ async function readCreds(authPath: string, warn: (message: string) => void): Pro
  */
 function parseForWrite(raw: string | undefined, where: string): Creds {
   if (!raw) return {};
-  try {
-    return JSON.parse(raw) as Creds;
-  } catch {
-    throw new Error(`refusing to overwrite corrupt auth file ${where} — fix or remove it`);
+  const creds = decodeCreds(raw);
+  if (creds === undefined) {
+    throw new Error(`refusing to overwrite corrupt auth file ${where}: fix or remove it`);
   }
+  return creds;
 }
 
 /** A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH};
