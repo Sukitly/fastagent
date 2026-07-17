@@ -48,6 +48,27 @@ describe("fastagentCredentialStore (read-write ~/.fastagent/auth.json; fail-visi
     expect(await store.read("openai")).toBeUndefined(); // missing entry
   });
 
+  it("list returns metadata only, filtering foreign entries with read's validation", async () => {
+    const oauth = { type: "oauth", access: "tok", refresh: "r", expires: Date.now() + 60_000 };
+    const apiKey = { type: "api_key", key: "sk-x" };
+    const path = await authPath(JSON.stringify({ anthropic: oauth, cloudflare: apiKey, old: { type: "legacy" } }));
+    const infos = await fastagentCredentialStore(path).list();
+    expect(infos).toEqual([
+      { providerId: "anthropic", type: "oauth" },
+      { providerId: "cloudflare", type: "api_key" },
+    ]);
+    for (const info of infos) expect(Object.keys(info).sort()).toEqual(["providerId", "type"]); // no secrets
+  });
+
+  it("list on a missing file → empty, no warning; corrupt file → empty + warns", async () => {
+    const warn = vi.fn();
+    expect(await fastagentCredentialStore("/nonexistent/auth.json", { warn }).list()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    const path = await authPath("{not valid json");
+    expect(await fastagentCredentialStore(path, { warn }).list()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("corrupt auth file"));
+  });
+
   it("modify PERSISTS the refreshed credential (the rotation write a read-only store would lose)", async () => {
     const path = await authPath(
       JSON.stringify({ anthropic: { type: "oauth", access: "old", refresh: "r0", expires: 1 } }),

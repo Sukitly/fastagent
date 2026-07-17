@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AuthLoginCallbacks, Credential, Provider } from "@earendil-works/pi-ai";
+import type { AuthInteraction, Credential, Provider } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import type { IoOption, LoginIO } from "../src/engines/pi/login.ts";
@@ -22,7 +22,7 @@ const OAUTH_CRED: Credential = { type: "oauth", access: "tok", refresh: "rt", ex
 /** A fake provider: an oauth login returning a fixed credential, and/or an api-key login that prompts. */
 function fakeProvider(
   id: string,
-  opts: { oauth?: boolean; apiKeyLogin?: boolean; onOauthLogin?: (cb: AuthLoginCallbacks) => Promise<Credential> } = {},
+  opts: { oauth?: boolean; apiKeyLogin?: boolean; onOauthLogin?: (cb: AuthInteraction) => Promise<Credential> } = {},
 ): Provider {
   return {
     id,
@@ -32,7 +32,7 @@ function fakeProvider(
       apiKey: opts.apiKeyLogin
         ? {
             name: `${id} API key`,
-            login: async (cb: AuthLoginCallbacks): Promise<Credential> => ({
+            login: async (cb: AuthInteraction): Promise<Credential> => ({
               type: "api_key",
               key: await cb.prompt({ type: "secret", message: "API key" }),
             }),
