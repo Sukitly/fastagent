@@ -10,7 +10,7 @@
  */
 import type {
   AuthEvent,
-  AuthLoginCallbacks,
+  AuthInteraction,
   AuthPrompt,
   Credential,
   CredentialStore,
@@ -54,11 +54,11 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
 }
 
 /**
- * Map pi-ai's `AuthLoginCallbacks` onto the injected {@link LoginIO}. `doneSignal` fires when the flow
+ * Map pi-ai's `AuthInteraction` onto the injected {@link LoginIO}. `doneSignal` fires when the flow
  * resolves, cancelling a prompt the provider left pending (a manual-code paste racing a callback
  * server it just won) so the one-shot CLI exits instead of hanging on stdin.
  */
-function authCallbacks(io: LoginIO, userSignal: AbortSignal | undefined, doneSignal: AbortSignal): AuthLoginCallbacks {
+function authCallbacks(io: LoginIO, userSignal: AbortSignal | undefined, doneSignal: AbortSignal): AuthInteraction {
   return {
     signal: userSignal,
     prompt: async (p: AuthPrompt): Promise<string> => {

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fastagentCredentialStore } from "../src/index.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -46,6 +48,27 @@ describe("fastagentCredentialStore (read-write ~/.fastagent/auth.json; fail-visi
     expect(await store.read("cloudflare")).toEqual(apiKey);
     expect(await store.read("old")).toBeUndefined(); // foreign discriminator
     expect(await store.read("openai")).toBeUndefined(); // missing entry
+  });
+
+  it("list returns metadata only, filtering foreign entries with read's validation", async () => {
+    const oauth = { type: "oauth", access: "tok", refresh: "r", expires: Date.now() + 60_000 };
+    const apiKey = { type: "api_key", key: "sk-x" };
+    const path = await authPath(JSON.stringify({ anthropic: oauth, cloudflare: apiKey, old: { type: "legacy" } }));
+    const infos = await fastagentCredentialStore(path).list();
+    expect(infos).toEqual([
+      { providerId: "anthropic", type: "oauth" },
+      { providerId: "cloudflare", type: "api_key" },
+    ]);
+    for (const info of infos) expect(Object.keys(info).sort()).toEqual(["providerId", "type"]); // no secrets
+  });
+
+  it("list on a missing file → empty, no warning; corrupt file → empty + warns", async () => {
+    const warn = vi.fn();
+    expect(await fastagentCredentialStore("/nonexistent/auth.json", { warn }).list()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    const path = await authPath("{not valid json");
+    expect(await fastagentCredentialStore(path, { warn }).list()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("corrupt auth file"));
   });
 
   it("modify PERSISTS the refreshed credential (the rotation write a read-only store would lose)", async () => {
@@ -97,6 +120,64 @@ describe("fastagentCredentialStore (read-write ~/.fastagent/auth.json; fail-visi
       /corrupt auth file/,
     );
     expect(await readFile(path, "utf8")).toBe(corrupt); // file left intact for the user to fix
+  });
+
+  it("structurally invalid roots (array/null/scalar) read as corrupt: read/list degrade + warn", async () => {
+    for (const root of ["[]", "null", "42"]) {
+      const warn = vi.fn();
+      const path = await authPath(root);
+      const store = fastagentCredentialStore(path, { warn });
+      expect(await store.read("anthropic")).toBeUndefined();
+      expect(await store.list()).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("corrupt auth file"));
+    }
+  });
+
+  it("modify REFUSES structurally invalid roots (an array root would silently swallow the write)", async () => {
+    for (const root of ["[]", "null", "42"]) {
+      const path = await authPath(root);
+      const store = fastagentCredentialStore(path);
+      await expect(store.modify("anthropic", async () => ({ type: "api_key", key: "sk" }))).rejects.toThrow(
+        /corrupt auth file/,
+      );
+      expect(await readFile(path, "utf8")).toBe(root); // file left intact for the user to fix
+    }
+  });
+
+  it("concurrent modify on one absent file serializes under the lock; both first writes survive", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-auth-"));
+    const path = join(dir, "auth.json"); // does not exist yet: exercises init + lock together
+    await Promise.all([
+      fastagentCredentialStore(path).modify("anthropic", async () => ({ type: "api_key", key: "ka" })),
+      fastagentCredentialStore(path).modify("openai", async () => ({ type: "api_key", key: "kb" })),
+    ]);
+    const creds = JSON.parse(await readFile(path, "utf8"));
+    expect(Object.keys(creds).sort()).toEqual(["anthropic", "openai"]);
+  });
+
+  it("two PROCESSES first-writing an absent file keep both providers (cross-process init + lock)", {
+    timeout: 20_000,
+  }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-auth-mp-"));
+    const path = join(dir, "auth.json");
+    const authModule = fileURLToPath(new URL("../src/engines/pi/auth.ts", import.meta.url));
+    const script = join(dir, "write.mjs");
+    await writeFile(
+      script,
+      `import { fastagentCredentialStore } from ${JSON.stringify(authModule)};\n` +
+        `const [path, provider] = process.argv.slice(2);\n` +
+        `await fastagentCredentialStore(path).modify(provider, async () => ({ type: "api_key", key: provider }));\n`,
+    );
+    const run = (provider: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [script, path, provider], { stdio: ["ignore", "ignore", "pipe"] });
+        let stderr = "";
+        child.stderr.on("data", (d) => (stderr += d));
+        child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}: ${stderr}`))));
+      });
+    await Promise.all([run("anthropic"), run("openai")]);
+    const creds = JSON.parse(await readFile(path, "utf8"));
+    expect(Object.keys(creds).sort()).toEqual(["anthropic", "openai"]);
   });
 
   it("delete of a missing entry / file is a no-op that does not create the file", async () => {
