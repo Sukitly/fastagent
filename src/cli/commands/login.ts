@@ -8,15 +8,13 @@
  * so the secret can never land untracked — a flow that then fails (bad provider, abort) leaves that
  * empty state dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
-import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { loadDotEnv } from "../../env.ts";
 import { defaultAuthPath, resolveAuthPathOverride, resolveStateRoot } from "../../engines/pi/config.ts";
 import { ensureStateRootSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
-import { type LoginIO, loginFlow } from "../../engines/pi/login.ts";
-import { openExternalUrl } from "../../open-url.ts";
+import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup } from "../fail.ts";
-import { isInteractive } from "../shared.ts";
+import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
   authPath?: string;
@@ -47,26 +45,16 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
-  const io = terminalLoginIO();
-  const result = await loginFlow(io, { provider, authPath }).catch(failStartup);
+  // loginWithKeyCheck: an entered API key is verified with one minimal request; a rejected key (401)
+  // re-prompts in place, so a returned result is always a stored-and-not-definitively-bad credential.
+  const result = await loginWithKeyCheck(provider, authPath).catch((error: unknown) => {
+    if (error instanceof LoginCancelled) {
+      // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
+      console.error(`[fastagent] login cancelled`);
+      process.exit(1);
+    }
+    failStartup(error);
+  });
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
-}
-
-/** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
-function terminalLoginIO(): LoginIO {
-  return {
-    async select(message, options) {
-      const r = await (options.length > 7 ? autocomplete : select)({ message, options });
-      return isCancel(r) ? undefined : (r as string);
-    },
-    async prompt(message, opts) {
-      const r = opts?.hidden
-        ? await password({ message, signal: opts.signal })
-        : await clackText({ message, signal: opts?.signal });
-      return isCancel(r) ? undefined : (r as string);
-    },
-    note: (message) => clackLog.info(message),
-    openUrl: openExternalUrl,
-  };
 }

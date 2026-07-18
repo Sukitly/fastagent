@@ -245,6 +245,14 @@ export function resolveAgentDir(dir: string, config: FastagentConfig): string {
   return resolve(dir, config.agentDir ?? ".");
 }
 
+/** The provider prefix of a "provider/modelId" spec. A spec without "/" returns whole — downstream
+ *  lookups then miss visibly (an unknown-provider error / a login-required hint), never a mangled id
+ *  (`slice(0, indexOf("/"))` silently drops the last char when "/" is absent). */
+export function providerOf(spec: string): string {
+  const slash = spec.indexOf("/");
+  return slash > 0 ? spec.slice(0, slash) : spec;
+}
+
 /** Resolve "provider/modelId" → a pi Model from `models`, so the harness resolves auth from the same collection. */
 export function resolveModel(models: Models, spec: string): AnyModel {
   const slash = spec.indexOf("/");
@@ -284,6 +292,12 @@ export function rewriteConfigModel(src: string, spec: string): string | null {
   const active = /^[ \t]*model:[ \t]*["'].*$/m;
   if (commented.test(src)) return src.replace(commented, line);
   if (active.test(src)) return src.replace(active, line);
+  // No model line at all — the natural state after "picked once, then hand-deleted the line to reset".
+  // Re-INSERT at the top of the default-export object while the config still has the scaffold's block
+  // shape; anything else (a wrapper call, a one-liner, a computed export) is hand-shaped — leave it
+  // untouched (the caller prints the set-it-yourself hint).
+  const opener = /^export default[ \t]*\{[ \t]*$/m;
+  if (opener.test(src)) return src.replace(opener, (open) => `${open}\n${line}`);
   return null;
 }
 

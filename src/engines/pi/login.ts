@@ -42,6 +42,22 @@ export interface LoginIO {
 }
 
 export type LoginMethod = "oauth" | "api_key";
+
+/** The user backed out of a prompt/menu — a decision, not a failure. Callers (the first-run picker,
+ *  the login command) match on this to report neutrally instead of as a login "failure". */
+export class LoginCancelled extends Error {}
+
+/** What `loginFlow` can offer a provider interactively: an OAuth flow, an API-key ENTRY prompt, or
+ *  nothing ("none" — the key must come from the provider's env var). */
+export type InteractiveLoginKind = LoginMethod | "none";
+
+/** The provider's {@link InteractiveLoginKind}. OAuth wins when both exist (methodForProvider still
+ *  asks at login time); the first-run picker annotates with this so the hint predicts what picking
+ *  actually does — a browser login ("oauth"), a key prompt ("api_key"), or neither. */
+export function interactiveLoginKind(p: Provider): InteractiveLoginKind {
+  if (p.auth.oauth) return "oauth";
+  return p.auth.apiKey?.login ? "api_key" : "none";
+}
 export interface LoginResult {
   provider: string;
   method: LoginMethod;
@@ -67,12 +83,12 @@ function authCallbacks(io: LoginIO, userSignal: AbortSignal | undefined, doneSig
           p.message,
           p.options.map((o) => ({ value: o.id, label: o.label, hint: o.description })),
         );
-        if (v === undefined) throw new Error("cancelled");
+        if (v === undefined) throw new LoginCancelled("cancelled");
         return v;
       }
       const signal = anySignal(p.signal, userSignal, doneSignal);
       const v = await io.prompt(p.message, { hidden: p.type === "secret", signal });
-      if (v === undefined) throw new Error("cancelled");
+      if (v === undefined) throw new LoginCancelled("cancelled");
       return v;
     },
     notify: (e: AuthEvent): void => {
@@ -100,7 +116,7 @@ async function selectMethod(io: LoginIO): Promise<LoginMethod> {
     { value: "oauth", label: "Use a subscription (OAuth)" },
     { value: "api_key", label: "Use an API key" },
   ]);
-  if (v !== "oauth" && v !== "api_key") throw new Error("no authentication method selected");
+  if (v !== "oauth" && v !== "api_key") throw new LoginCancelled("no authentication method selected");
   return v;
 }
 
@@ -131,7 +147,7 @@ async function selectProvider(
     }),
   );
   const id = await io.select("Select a provider", options);
-  if (!id) throw new Error("no provider selected");
+  if (!id) throw new LoginCancelled("no provider selected");
   return id;
 }
 
