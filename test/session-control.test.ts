@@ -15,11 +15,18 @@ import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
 import {
+  BOUNDARY_COMMAND_FAILED_CODE,
+  INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
+  NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   UNSUPPORTED_CAPABILITY_CODE,
   type SessionEvent,
 } from "../src/session.ts";
+import { SESSION_BUSY_CODE } from "../src/agent.ts";
+import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
+import { inProcessLease } from "../src/engines/pi/invoke.ts";
+import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 
 const echoTool: AgentTool = {
@@ -635,5 +642,313 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(settledData.error?.message).toBeTruthy();
     // The session is reusable: back to idle, not poisoned.
     expect((await control.state("s2c")).status).toBe("idle");
+  });
+});
+
+/** Agent + control with full boundary wiring — the workspace shape, assembled by hand. */
+function makeBoundary(responses: FauxResponseStep[]) {
+  const { faux, models } = makeFaux();
+  faux.setResponses(responses);
+  const sessions = inMemorySessionStore();
+  const lease = inProcessLease();
+  const factory = piHarnessFactory({
+    sessions,
+    env: new NodeExecutionEnv({ cwd: process.cwd() }),
+    models,
+    model: faux.getModel(),
+    tools: [],
+    systemPrompt: "test",
+  });
+  const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+  const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
+  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+  const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
+  return { agent, control, sessions, spec, models };
+}
+
+describe("session control (Phase 2b): boundary mutations", () => {
+  it("capabilities reflect the boundary wiring: allowed models and thinking levels", async () => {
+    const { control, spec } = makeBoundary([]);
+    const caps = control.capabilities();
+    expect(caps.manualCompaction).toBe(true);
+    expect(caps.modelSelection ? caps.modelSelection.allowedModels : []).toContain(spec);
+    expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).toContain("high");
+  });
+
+  it("set_model / set_thinking append durable overrides and emit state_changed", async () => {
+    const { agent, control, sessions, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    await drain(agent.invoke({ session: "sB1" }, { text: "hi" })); // session exists
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB1")) {
+        seen.push(ev);
+        if (seen.filter((e) => e.type === "state_changed").length === 2) break;
+      }
+    })();
+    expect(await control.dispatch("sB1", { type: "set_model", model: spec })).toEqual({ ok: true });
+    expect(await control.dispatch("sB1", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    await watching;
+    expect(seen.map((e) => e.data)).toEqual([{ model: spec }, { thinkingLevel: "high" }]);
+    // Durable: the overrides live in the session record (open-set kinds on the entries plane).
+    const kinds = (await control.entries("sB1")).entries.map((e) => e.kind);
+    expect(kinds).toContain("model_change");
+    expect(kinds).toContain("thinking_level_change");
+    // And the fresh-harness resolve applies them: the recorded thinking level rides the next turn.
+    const opened = await sessions.openIfExists("sB1");
+    const resolved = resolveHarnessOverrides(
+      ((await opened?.getEntries()) ?? []) as Parameters<typeof resolveHarnessOverrides>[0],
+      makeFaux().models,
+      { model: makeFaux().faux.getModel(), thinkingLevel: "medium" },
+      "sB1",
+    );
+    expect(resolved.thinkingLevel).toBe("high");
+  });
+
+  it("resolveHarnessOverrides: a known recorded model override wins over the default", () => {
+    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    const fallback = {
+      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>,
+      thinkingLevel: "medium" as const,
+    };
+    const recorded = faux.getModel("faux-b") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const out = resolveHarnessOverrides(
+      [{ type: "model_change", provider: recorded.provider, modelId: recorded.id }],
+      models,
+      fallback,
+      "sRK",
+    );
+    expect(out.model).toBe(recorded); // the session override rides the fresh harness
+    expect(out.model).not.toBe(fallback.model);
+  });
+
+  it("resolveHarnessOverrides: last entry wins; unknown recorded model falls back with the default", () => {
+    const { faux, models } = makeFaux();
+    const fallback = { model: faux.getModel(), thinkingLevel: "medium" as const };
+    // Unknown model → fallback (deployment registry changed); known thinking level applies.
+    const out = resolveHarnessOverrides(
+      [
+        { type: "model_change", provider: "gone", modelId: "nope" },
+        { type: "thinking_level_change", thinkingLevel: "low" },
+      ],
+      models,
+      fallback,
+      "sR",
+    );
+    expect(out.model).toBe(fallback.model);
+    expect(out.thinkingLevel).toBe("low");
+    // Unknown thinking level → fallback.
+    const bad = resolveHarnessOverrides(
+      [{ type: "thinking_level_change", thinkingLevel: "ultra" }],
+      models,
+      fallback,
+      "sR2",
+    );
+    expect(bad.thinkingLevel).toBe("medium");
+  });
+
+  it("a malformed override record reads as ABSENT on both surfaces — never skipped over", async () => {
+    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    const fallback = {
+      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>,
+      thinkingLevel: "medium" as const,
+    };
+    const entries = [
+      { type: "model_change", provider: faux.provider.id, modelId: "faux-b" }, // an earlier, VALID override
+      { type: "model_change" }, // the LAST record is malformed
+    ];
+    // Execution surface: malformed = absent → the default, NOT the earlier valid record.
+    const resolved = resolveHarnessOverrides(entries, models, fallback, "sMal");
+    expect(resolved.model).toBe(fallback.model);
+    // Fact surface agrees: no override reported.
+    const { lastOverrideEntries } = await import("../src/engines/pi/harness.ts");
+    expect(lastOverrideEntries(entries).model).toBeUndefined();
+  });
+
+  it("set_model rejects an unknown spec before acceptance (invalid_command)", async () => {
+    const { control } = makeBoundary([]);
+    const result = await control.dispatch("sB2", { type: "set_model", model: "ghost/model" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
+    const bad = await control.dispatch("sB2", { type: "set_thinking", level: "ultra" });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error.code).toBe(INVALID_COMMAND_CODE);
+  });
+
+  it("boundary mutations are rejected session_busy while a run holds the lease", async () => {
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const gate = makeGate();
+    const factory = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: [gate.tool],
+      systemPrompt: "test",
+    });
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+    const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
+    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+    const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
+
+    const invoked = drive(agent, "sB3");
+    await waitForRunning(control, "sB3");
+    const busy = await control.dispatch("sB3", { type: "set_model", model: spec });
+    expect(busy.ok).toBe(false);
+    if (!busy.ok) {
+      expect(busy.error.code).toBe(SESSION_BUSY_CODE);
+      expect(busy.error.retryable).toBe(true); // retry AT IDLE succeeds as-is
+    }
+    gate.release();
+    await invoked;
+    expect(await control.dispatch("sB3", { type: "set_model", model: spec })).toEqual({ ok: true });
+  });
+
+  it("compact summarizes under the lease: compaction events, durable compaction entry, ok:true", async () => {
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("a long answer worth compacting"),
+      fauxAssistantMessage("summary of the conversation"), // consumed by harness.compact()
+    ]);
+    await drain(agent.invoke({ session: "sB4" }, { text: "tell me things" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB4")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+    const result = await control.dispatch("sB4", { type: "compact" });
+    expect(result).toEqual({ ok: true });
+    await watching;
+    expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
+    const finished = seen.at(-1)?.data as { summary: string };
+    expect(finished.summary).toBeTruthy();
+    const kinds = (await control.entries("sB4")).entries.map((e) => e.kind);
+    expect(kinds).toContain("compaction");
+    expect((await control.state("sB4")).status).toBe("idle"); // lease released, not stuck compacting
+  });
+
+  it("a failing compaction is closed and non-durable: boundary_command_failed, finished{error}, clean state", async () => {
+    // ONE response seeds the conversation; the compaction's summarization call then finds the faux
+    // queue empty and throws — the deterministic model-call failure.
+    const { agent, control } = makeBoundary([fauxAssistantMessage("seed")]);
+    await drain(agent.invoke({ session: "sB6" }, { text: "hi" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB6")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break; // bounds contract: failure must still close
+      }
+    })();
+    const result = await control.dispatch("sB6", { type: "compact" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
+      expect(result.error.retryable).toBe(true);
+    }
+    await watching;
+    expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
+    const closed = seen.at(-1)?.data as { error?: string };
+    expect(closed.error).toBeTruthy();
+    // Nothing durable landed, and neither the lease nor the compacting flag is stuck.
+    const kinds = (await control.entries("sB6")).entries.map((e) => e.kind);
+    expect(kinds).not.toContain("compaction");
+    expect((await control.state("sB6")).status).toBe("idle");
+    const retry = await control.dispatch("sB6", { type: "set_thinking", level: "low" });
+    expect(retry.ok).toBe(true); // the lease was released
+  });
+
+  it("state() reports the durable overrides for a reconnecting client", async () => {
+    const { agent, control, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    await drain(agent.invoke({ session: "sB7" }, { text: "hi" }));
+    expect((await control.state("sB7")).model).toBeUndefined(); // no override → assembly default
+    await control.dispatch("sB7", { type: "set_model", model: spec });
+    await control.dispatch("sB7", { type: "set_thinking", level: "xhigh" });
+    const state = await control.state("sB7");
+    expect(state.model).toBe(spec);
+    expect(state.thinkingLevel).toBe("xhigh");
+  });
+
+  it("the override rides the next turn end to end: set_model changes which model answers", async () => {
+    // Two faux models in ONE registry; the response FACTORY answers with the model that was asked —
+    // this pins the factory→resolveHarnessOverrides→AgentHarness wiring, not just the resolver.
+    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    faux.setResponses([
+      (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
+        fauxAssistantMessage(`answered by ${model.id}`),
+      (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
+        fauxAssistantMessage(`answered by ${model.id}`),
+    ] as never);
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const factory = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>, // assembly default
+      tools: [],
+      systemPrompt: "test",
+    });
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+    const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
+    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+
+    const first = await drain(agent.invoke({ session: "sE2E" }, { text: "hi" }));
+    expect(first.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-a");
+
+    expect(await control.dispatch("sE2E", { type: "set_model", model: `${faux.provider.id}/faux-b` })).toEqual({
+      ok: true,
+    });
+    const second = await drain(agent.invoke({ session: "sE2E" }, { text: "again" }));
+    expect(second.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-b");
+  });
+
+  it("a workspace caller observer receives the full vocabulary, boundary events included", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-tap-"));
+    try {
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const seen: string[] = [];
+      const opened = await createPiAgentFromWorkspace(dir, {
+        sessionControl: true,
+        observer: (_s, event) => {
+          seen.push(event.type);
+        },
+      });
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+      // Seed a session WITHOUT a model call: boundary mutations need an existing session, and the
+      // observer tap must then see the hub-generated state_changed — the audit-tap guarantee.
+      await opened.sessions.openOrCreate("sTap");
+      const result = await control.dispatch("sTap", { type: "set_thinking", level: "low" });
+      expect(result.ok).toBe(true);
+      expect(seen).toContain("state_changed");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
+    const { control, sessions, spec } = makeBoundary([]);
+    const result = await control.dispatch("ghost", { type: "set_model", model: spec });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(NO_SUCH_SESSION_CODE);
+    expect(await sessions.openIfExists("ghost")).toBeUndefined(); // no ghost record landed
+    const compact = await control.dispatch("ghost", { type: "compact" });
+    expect(compact.ok).toBe(false);
+    if (!compact.ok) expect(compact.error.code).toBe(NO_SUCH_SESSION_CODE);
+  });
+
+  it("without boundary wiring the commands stay gated off and rejected", async () => {
+    const { control } = makeObserved([]); // observation + run modulation only
+    const caps = control.capabilities();
+    expect(caps.manualCompaction).toBe(false);
+    expect(caps.modelSelection).toBe(false);
+    const result = await control.dispatch("sB5", { type: "set_model", model: "any/thing" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
 });

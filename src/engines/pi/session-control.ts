@@ -12,9 +12,13 @@
  * with `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
-import type { Json } from "../../agent.ts";
+import type { Models } from "@earendil-works/pi-ai";
+import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
+  BOUNDARY_COMMAND_FAILED_CODE,
+  INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
+  NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   type SessionCapabilities,
   type SessionCommand,
@@ -26,7 +30,10 @@ import {
   type SessionState,
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
-import type { RunControls, SessionObserver } from "./invoke.ts";
+import { listModels } from "./config.ts";
+import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
+import { type PiHarnessFactory, THINKING_LEVELS, lastOverrideEntries } from "./harness.ts";
+import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
@@ -109,9 +116,30 @@ class Subscriber {
 
 // ── The hub ──────────────────────────────────────────────────────────────────
 
+/** What boundary mutations (compact / set_model / set_thinking) need — the SAME instances the
+ *  agent assembly uses: the lease (mutations must not race a run), the model registry (validation +
+ *  allowedModels), and the harness factory (compaction is a model call). Writes go through the
+ *  session the hub's reader opened — after an existence check, so the control plane never creates
+ *  a session (that is the data plane's monopoly). */
+export interface PiBoundaryWiring {
+  lease: Lease;
+  models: Models;
+  harnessFactory: PiHarnessFactory;
+}
+
 export interface CreatePiSessionControlOptions {
   /** Read-only access to the durable session repository (the same root the agent writes). */
   sessions: PiSessionReader;
+  /** Boundary-mutation wiring, as a LAZY thunk: the hub's observer must exist before the agent
+   *  assembly that produces these parts, so the hub asks for them at dispatch time instead
+   *  (assembly completes before any dispatch can arrive). Absent / undefined → boundary commands
+   *  are gated off in `capabilities()` and rejected `unsupported_capability`. */
+  boundary?: () => PiBoundaryWiring | undefined;
+  /** Tap for the events the HUB ITSELF generates (boundary mutations: `state_changed`,
+   *  `compaction_*`) — those never pass through the data plane's observer seam, so a consumer
+   *  composing a full-vocabulary tap wires the run events via the observer AND this. Called after
+   *  the hub's own subscribers. */
+  tap?: (session: string, event: SessionEvent) => void;
 }
 
 /**
@@ -126,7 +154,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   control: SessionControl;
   observer: SessionObserver;
 } {
-  const { sessions } = options;
+  const { sessions, boundary } = options;
   /** Live run state per session — derived purely from run_started/run_settled and the controls
    *  registered with run_started. */
   const active = new Map<
@@ -134,6 +162,27 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     { runId: string; controls?: RunControls; pending: { steering: number; followUp: number } }
   >();
   const subscribers = new Map<string, Set<Subscriber>>();
+  /** Sessions with a manual compaction in flight — reported as `status: "compacting"`. */
+  const compacting = new Set<string>();
+
+  /** Fan an event out to this session's subscribers — shared by the observer (run events) and the
+   *  boundary mutations (session-level events, no runId). */
+  const fanOut = (session: string, event: SessionEvent): void => {
+    const subs = subscribers.get(session);
+    if (subs) for (const sub of [...subs]) sub.push(event);
+  };
+
+  /** Emit a HUB-generated event: subscribers first, then the external tap — the boundary-event
+   *  half of a full-vocabulary tap (run events reach it through the observer composition). */
+  const emitOwn = (session: string, event: SessionEvent): void => {
+    fanOut(session, event);
+    try {
+      options.tap?.(session, event);
+    } catch (error) {
+      // Same discipline as the data plane's observer guard: a broken tap is its own problem.
+      log.warn(`[fastagent] session-control tap threw (event ${event.type}): ${String(error)}`);
+    }
+  };
 
   const observer: SessionObserver = (session, event, run) => {
     if (event.type === "run_started" && event.runId) {
@@ -144,30 +193,44 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const entry = active.get(session);
       if (entry) entry.pending = event.data as { steering: number; followUp: number };
     }
-    const subs = subscribers.get(session);
-    if (subs) for (const sub of [...subs]) sub.push(event);
-  };
-
-  const capabilities: SessionCapabilities = {
-    steering: true,
-    followUp: true,
-    manualCompaction: false, // Phase 2b
-    modelSelection: false, // Phase 2b
-    thinkingLevel: false, // Phase 2b
-    toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
-    usage: false,
+    fanOut(session, event);
   };
 
   const control: SessionControl = {
-    capabilities: () => capabilities,
+    capabilities: (): SessionCapabilities => {
+      const b = boundary?.();
+      return {
+        steering: true,
+        followUp: true,
+        manualCompaction: !!b,
+        modelSelection: b ? { allowedModels: listModels(b.models) } : false,
+        thinkingLevel: b ? { allowedLevels: [...THINKING_LEVELS] as string[] } : false,
+        toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
+        usage: false,
+      };
+    },
 
     async state(session): Promise<SessionState> {
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
+      // The durable overrides (set_model / set_thinking), via the SAME walk the harness resolve
+      // uses (lastOverrideEntries) — one physical implementation, so the reporting surface and the
+      // execution surface can never disagree on which record is "the" override. Reported as
+      // recorded, even if the current registry lacks the model (state reports session truth; the
+      // harness resolve owns the execution fallback).
+      let model: string | undefined;
+      let thinkingLevel: string | undefined;
+      if (opened) {
+        const recorded = lastOverrideEntries((await opened.getEntries()) as Parameters<typeof lastOverrideEntries>[0]);
+        if (recorded.model) model = `${recorded.model.provider}/${recorded.model.modelId}`;
+        thinkingLevel = recorded.thinkingLevel;
+      }
       return {
-        status: run ? "running" : "idle",
+        status: run ? "running" : compacting.has(session) ? "compacting" : "idle",
         ...(run ? { activeRunId: run.runId } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
         pending: run ? { ...run.pending } : { steering: 0, followUp: 0 },
         ...(leafEntryId ? { leafEntryId } : {}),
       };
@@ -258,17 +321,154 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           // Accepted: joined (or stopped) THIS run. The outcome arrives as run_settled.
           return { ok: true, runId: run.runId };
         }
-        default:
-          // Phase 2b (compact/set_model/set_thinking): rejected before acceptance; a
-          // capability-gating client never lands here.
-          return {
-            ok: false,
-            error: {
-              code: UNSUPPORTED_CAPABILITY_CODE,
-              message: `command "${command.type}" is not supported by this runtime yet`,
-              retryable: false,
-            },
-          };
+        case "compact":
+        case "set_model":
+        case "set_thinking": {
+          const b = boundary?.();
+          if (!b) {
+            // No boundary wiring: rejected before acceptance; a capability-gating client never
+            // lands here.
+            return {
+              ok: false,
+              error: {
+                code: UNSUPPORTED_CAPABILITY_CODE,
+                message: `command "${command.type}" is not supported by this runtime (no boundary wiring)`,
+                retryable: false,
+              },
+            };
+          }
+          // Payload validation BEFORE the lease — an invalid value must not briefly block a run.
+          /** The entry-append for set_model/set_thinking — undefined for compact (harness path). */
+          let apply: ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent>) | undefined;
+          if (command.type === "set_model") {
+            const slash = command.model.indexOf("/");
+            const model =
+              slash > 0 ? b.models.getModel(command.model.slice(0, slash), command.model.slice(slash + 1)) : undefined;
+            if (!model) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: `unknown model "${command.model}" — capabilities().modelSelection lists the allowed specs`,
+                  retryable: false,
+                },
+              };
+            }
+            apply = async (s) => {
+              await s.appendModelChange(model.provider, model.id);
+              // The CANONICAL spec, same string the durable entry and state() report — the event
+              // must not echo a client alias the other two surfaces would disagree with.
+              return { type: "state_changed", timestamp: Date.now(), data: { model: `${model.provider}/${model.id}` } };
+            };
+          } else if (command.type === "set_thinking") {
+            if (!(THINKING_LEVELS as ReadonlySet<string>).has(command.level)) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: `unknown thinking level "${command.level}" — capabilities().thinkingLevel lists the allowed values`,
+                  retryable: false,
+                },
+              };
+            }
+            apply = async (s) => {
+              await s.appendThinkingLevelChange(command.level);
+              return { type: "state_changed", timestamp: Date.now(), data: { thinkingLevel: command.level } };
+            };
+          }
+          // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
+          // not minted into a ghost record. (Existence check before the lease — read-only; the
+          // WRITE handle is re-opened under the lease below, this one is discarded.)
+          if (!(await sessions.openIfExists(session))) {
+            return {
+              ok: false,
+              error: {
+                code: NO_SUCH_SESSION_CODE,
+                message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                retryable: false,
+              },
+            };
+          }
+          // Boundary mutations are the control plane's only writers: same lease as every run — a
+          // mutation must never race one (design §9).
+          const release = b.lease.tryAcquire(session);
+          if (!release) {
+            return {
+              ok: false,
+              error: {
+                code: SESSION_BUSY_CODE,
+                message: "session busy: a run (or another boundary mutation) is in flight — retry at idle",
+                retryable: true,
+              },
+            };
+          }
+          try {
+            if (command.type === "compact") {
+              compacting.add(session);
+              // Compaction is a model call: build the session's full harness (the factory applies
+              // the session's own model/thinking overrides) and tear it down after. `started` is
+              // emitted only once the harness EXISTS — a factory failure rejects with no started
+              // at all — and every started is then CLOSED: success → finished{summary}; failure →
+              // finished{error} (the bounds contract — an events-only watcher must never hang on
+              // an open compaction).
+              const harness = await b.harnessFactory(session);
+              emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+              try {
+                const result = await harness.compact(command.instructions);
+                emitOwn(session, {
+                  type: "compaction_finished",
+                  timestamp: Date.now(),
+                  data: { summary: result.summary },
+                });
+              } catch (error) {
+                emitOwn(session, {
+                  type: "compaction_finished",
+                  timestamp: Date.now(),
+                  data: { error: String(error) },
+                });
+                throw error; // → the shared catch below returns boundary_command_failed
+              } finally {
+                try {
+                  await harness.abort(); // teardown — fresh-harness discipline (never throws past here)
+                } catch (error) {
+                  log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
+                }
+              }
+            } else {
+              // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
+              // be a stale snapshot of a run that completed in the window — appending to it would
+              // hang the override off an outdated leaf.
+              const fresh = await sessions.openIfExists(session);
+              if (!fresh) {
+                // Same real condition as the pre-lease check (the session vanished in the window):
+                // same code, same disposition — not a retryable internal error.
+                return {
+                  ok: false,
+                  error: {
+                    code: NO_SUCH_SESSION_CODE,
+                    message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                    retryable: false,
+                  },
+                };
+              }
+              // Unreachable by construction: only set_model/set_thinking reach this branch, and
+              // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
+              if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
+              emitOwn(session, await apply(fresh));
+            }
+          } catch (error) {
+            // Admitted but nothing durable landed (pi appends the compaction entry only at the
+            // end): still "nothing took effect" — the same command may succeed on retry.
+            return {
+              ok: false,
+              error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+            };
+          } finally {
+            compacting.delete(session);
+            release();
+          }
+          return { ok: true };
+        }
       }
     },
   };
