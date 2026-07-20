@@ -1,3 +1,5 @@
+import type { FeishuSubscriptionMode } from "../feishu/setup-mode.ts";
+
 /**
  * Guided Lark-international onboarding. The intl cloud cannot complete the BOUND scan-to-create flow,
  * so a new/partial setup opens its unbound one-click launcher and collects one App-scoped credential
@@ -31,14 +33,15 @@ export interface LarkBootstrapResult {
 export interface LarkOnboardOptions {
   /** Existing active .env values. A complete credential pair is reused (and still validated). */
   existing?: Readonly<Record<string, string | undefined>>;
+  ingress?: FeishuSubscriptionMode;
   verifyCredentials(appId: string, appSecret: string): Promise<void>;
-  bootstrapWebhook(appId: string, appSecret: string): Promise<LarkBootstrapResult>;
+  bootstrapWebhook?(appId: string, appSecret: string): Promise<LarkBootstrapResult>;
 }
 
-export interface LarkOnboardCredentials extends Record<string, string> {
+export interface LarkOnboardCredentials {
   LARK_APP_ID: string;
   LARK_APP_SECRET: string;
-  LARK_VERIFICATION_TOKEN: string;
+  LARK_VERIFICATION_TOKEN?: string;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -75,7 +78,14 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   const eventSecurityUrl = larkEventSecurityUrl(appId);
   io.note(`App ID / Secret verified. Opening Events & Callbacks → Security: ${eventSecurityUrl}`);
   io.openUrl(eventSecurityUrl);
+  if (opts.ingress === "websocket") {
+    io.note(
+      "Choose long connection, subscribe im.message.receive_v1, then create + publish an app version. No Verification Token or Request URL is needed.",
+    );
+    return { LARK_APP_ID: appId, LARK_APP_SECRET: appSecret };
+  }
   io.note("Trying automatic webhook-mode + Verification-Token bootstrap…");
+  if (!opts.bootstrapWebhook) throw new Error("Lark webhook onboarding requires bootstrapWebhook");
   const bootstrap = await opts.bootstrapWebhook(appId, appSecret);
   if (bootstrap.token) {
     io.note("Verification Token captured; Subscription mode changed to webhook in the app draft.");

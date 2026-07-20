@@ -40,6 +40,7 @@ export interface RailwayRunPlan {
   /** Required secret names with NO local value — the run gates on these before any side effect. */
   missingSecrets: string[];
   channels: ChannelKind[];
+  longConnectionChannels?: string[];
   /** Opt-in (CLI `--into-linked`) to provision INTO the project this directory is already linked to. Off
    *  by default so `--run` only creates on an unlinked dir and never deploys into a pre-existing (possibly
    *  unrelated/production) project; the flag is the operator's explicit "yes, this project". */
@@ -254,7 +255,7 @@ export async function deployRailwayRun(
     reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
   }
   for (const kind of ["feishu", "lark"] as const) {
-    if (!plan.channels.includes(kind)) continue;
+    if (!plan.channels.includes(kind) || plan.longConnectionChannels?.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
       reg.track(kind, await registerFeishu(url, kind));

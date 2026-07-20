@@ -25,11 +25,15 @@ export function deploymentSecrets(
   modelAuth: string | undefined,
   channels: ChannelKind[],
   extraSecrets: string[] = [],
+  longConnectionChannels: string[] = [],
 ): { name: string; hint: string; required: boolean }[] {
   const secrets: { name: string; hint: string; required: boolean }[] = [];
   if (isEnvKey(modelAuth)) secrets.push({ name: modelAuth, hint: "your model provider key", required: true });
   for (const kind of channels) {
-    for (const e of channelSetup(kind).env) secrets.push({ name: e.name, hint: e.hint, required: e.required });
+    const setupMode = longConnectionChannels.includes(kind) ? "websocket" : "webhook";
+    for (const e of channelSetup(kind, setupMode).env) {
+      secrets.push({ name: e.name, hint: e.hint, required: e.required });
+    }
   }
   // Dedup: a name already covered by the model key / a channel secret must not appear twice in the runbook.
   for (const name of extraSecrets) {
@@ -58,6 +62,7 @@ export function assembleSecrets(input: {
   modelAuth: string | undefined;
   authFile: Buffer | undefined;
   channels: ChannelKind[];
+  longConnectionChannels?: string[];
   /** Extra secret env-var names from `fastagent.config` deploy.secrets — carried like channel secrets. */
   extraSecrets?: string[];
   env: NodeJS.ProcessEnv;
@@ -81,7 +86,8 @@ export function assembleSecrets(input: {
   }
 
   for (const kind of input.channels) {
-    for (const e of channelSetup(kind).env) {
+    const setupMode = input.longConnectionChannels?.includes(kind) ? "websocket" : "webhook";
+    for (const e of channelSetup(kind, setupMode).env) {
       const v = input.env[e.name];
       if (v)
         secrets[e.name] = v; // optional channel values travel when configured

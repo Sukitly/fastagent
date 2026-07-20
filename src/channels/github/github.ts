@@ -46,14 +46,7 @@ export interface GithubChannelOptions {
  * `(ctx) => ({ "POST /gh": githubChannel(opts)(ctx)["POST /webhook"]! })`.
  */
 export function githubChannel({ secret, on }: GithubChannelOptions): ChannelModule {
-  // A non-empty secret is mandatory: verify() against an empty key accepts a signature anyone can
-  // compute, so an unset secret must fail at construction, never silently run forgeable.
-  if (!secret) {
-    throw new Error(
-      "githubChannel requires a non-empty secret (the GitHub webhook secret, e.g. GITHUB_WEBHOOK_SECRET)",
-    );
-  }
-  return ({ agent }) => ({
+  const channel: ChannelModule = ({ agent }) => ({
     "POST /webhook": async (req) => {
       if (req.method !== "POST") return text("POST only\n", 405);
       // Cap before verify: a public endpoint must not buffer an unbounded body (chunked bypasses Content-Length).
@@ -112,4 +105,13 @@ export function githubChannel({ secret, on }: GithubChannelOptions): ChannelModu
       return new Response(null, { status: 202 });
     },
   });
+  return (ctx) => {
+    // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
+    if (!secret) {
+      throw new Error(
+        "githubChannel requires a non-empty secret (the GitHub webhook secret, e.g. GITHUB_WEBHOOK_SECRET)",
+      );
+    }
+    return channel(ctx);
+  };
 }

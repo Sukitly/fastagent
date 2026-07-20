@@ -39,7 +39,7 @@ channels/
 └── slack.ts      # POST /slack
 ```
 
-Each file default-exports a `ChannelModule`:
+A route channel default-exports a `ChannelModule`:
 
 ```ts
 import type { ChannelModule } from "@fastagent-sh/fastagent/core";
@@ -55,7 +55,26 @@ const channel: ChannelModule = ({ agent, stateRoot }) => ({
 export default channel;
 ```
 
-`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same mount context (the assembled agent + the resolved state root), and merge the returned route tables onto one HTTP server.
+A long-connection channel instead exports a `LongConnectionChannelModule` object:
+
+```ts
+import type { LongConnectionChannelModule } from "@fastagent-sh/fastagent/core";
+
+const channel: LongConnectionChannelModule = {
+  name: "acme websocket",
+  connect({ agent, stateRoot }, signal) {
+    // Start the connection. Translate signal abort into the transport's close operation.
+    return { ready, closed };
+  },
+};
+
+export default channel;
+```
+
+`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`. Function exports
+contribute route tables to the HTTP server; object exports open long connections. Both receive the
+assembled agent and resolved state root. Long-connection adapters own reconnects, observe shutdown
+through `AbortSignal`, and report first readiness plus terminal closure through the two promises.
 
 With no enabled channel files, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
 A channel file is enabled by its importable extension (`.ts`, `.js`, or `.mjs`); rename it to, for
@@ -138,8 +157,9 @@ export default feishuChannel({
 });
 ```
 
-An adapter call returns a `ChannelModule`: the glue holds only policy (secrets from env, `on`/`route`),
-while `agent` and the state root flow from the framework to the adapter without transiting your code.
+A route-adapter call returns a `ChannelModule`; a WebSocket adapter such as
+`feishuWebSocketChannel` returns a `LongConnectionChannelModule`. In either form the glue holds only
+policy (secrets from env, `on`/`route`), while `agent` and the state root flow from the framework to the adapter without transiting your code.
 The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /feishu`, `POST /lark`);
 wrap it in your own `ChannelModule` to remap.
 

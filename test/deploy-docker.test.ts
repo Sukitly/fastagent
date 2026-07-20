@@ -60,6 +60,20 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(plan)).toContain("Telegram/Feishu/Lark channels auto-register");
   });
 
+  it("omits webhook-only secrets and public paths for long-connection Feishu", () => {
+    const plan = planDockerDeploy({
+      ...base,
+      modelAuth: undefined,
+      channels: ["feishu"],
+      longConnectionChannels: ["feishu"],
+    });
+    const yaml = compose(plan);
+    expect(yaml).toContain("FEISHU_APP_ID");
+    expect(yaml).toContain("FEISHU_APP_SECRET");
+    expect(yaml).not.toContain("FEISHU_VERIFICATION_TOKEN");
+    expect(runbook(plan)).not.toContain("https://<your-domain>/feishu");
+  });
+
   it("commits secret NAMES/interpolation only, including the absent-only auth seed seam", () => {
     const yaml = compose(
       planDockerDeploy({

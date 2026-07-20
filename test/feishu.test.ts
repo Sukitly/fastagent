@@ -167,9 +167,10 @@ function messageEvent(over: {
 }
 
 describe("construction fails closed", () => {
-  it("requires appId/appSecret/verificationToken", () => {
-    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/appId/);
-    expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })).toThrow(
+  it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
+    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
+    expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
       /verificationToken/,
     );
     expect(() =>
@@ -1577,9 +1578,12 @@ describe("the Lark compatibility profile", () => {
     expect(existsSync(join(root, "channels", "feishu"))).toBe(false);
   });
 
-  it("construction failures name each public factory", () => {
-    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/feishuChannel/);
-    expect(() => larkChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/larkChannel/);
+  it("mount failures name each public factory", () => {
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name" };
+    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(
+      /feishuChannel/,
+    );
+    expect(() => larkChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/larkChannel/);
   });
 });
 

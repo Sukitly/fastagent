@@ -28,4 +28,27 @@ describe("host/node: serveNode", () => {
     expect(await res.text()).toBe("hi /x");
     await host.close(); // caller-owned shutdown — releases the listening socket
   });
+
+  it("can force-close an active request instead of waiting for the handler to drain", async () => {
+    let entered!: () => void;
+    const handling = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const host = serveNode(
+      async () => {
+        entered();
+        await new Promise<never>(() => {});
+        return new Response();
+      },
+      { port: 0 },
+    );
+    const port = await host.listening;
+    const request = fetch(`http://127.0.0.1:${port}/stream`).catch((error: unknown) => error);
+    await handling;
+
+    const closing = host.close();
+    host.closeAllConnections();
+    await expect(closing).resolves.toBeUndefined();
+    await expect(request).resolves.toBeInstanceOf(Error);
+  });
 });

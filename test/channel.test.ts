@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
 import { loadChannels } from "../src/index.ts";
-import { discoverChannelFiles } from "../src/engines/pi/channel.ts";
+import { discoverChannelFiles, inspectChannels } from "../src/engines/pi/channel.ts";
 
 // loadChannels only forwards the ctx to the factory; these factories ignore it.
 const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
@@ -13,7 +13,14 @@ const freshDir = () => mkdtemp(join(tmpdir(), "fa-chan-"));
 describe("loadChannels (filesystem discovery)", () => {
   it("discovers channels/* and merges their routes; missing channels/ is empty", async () => {
     const dir = await freshDir();
-    expect(await loadChannels(dir, fakeCtx)).toEqual({ routes: {}, collisions: [], failures: [] }); // no channels/ yet
+    expect(await loadChannels(dir, fakeCtx)).toEqual({
+      routes: {},
+      longConnections: [],
+      routeChannels: [],
+      longConnectionChannels: [],
+      collisions: [],
+      failures: [],
+    }); // no channels/ yet
 
     await mkdir(join(dir, "channels"));
     await writeFile(
@@ -134,6 +141,35 @@ describe("loadChannels (filesystem discovery)", () => {
     await expect(loadChannels(esc, fakeCtx)).rejects.toThrow(/outside the workspace/);
   });
 
+  it("loads an explicit long-connection module without manufacturing route/mount metadata", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "socket.mjs"),
+      `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
+    );
+    const loaded = await loadChannels(dir, fakeCtx);
+    expect(loaded.routes).toEqual({});
+    expect(loaded.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
+    expect(loaded.routeChannels).toEqual([]);
+    expect(loaded.longConnectionChannels).toEqual(["socket"]);
+    expect(loaded.failures).toEqual([]);
+
+    const inspected = await inspectChannels(dir);
+    expect(inspected.channels).toEqual(["socket"]);
+    expect(inspected.routeChannels).toEqual([]);
+    expect(inspected.longConnectionChannels).toEqual(["socket"]);
+  });
+
+  it("rejects an object export that is not an explicit long-connection module", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(join(dir, "channels", "bad.mjs"), `export default { name: "socket", start() {} };`);
+    const loaded = await loadChannels(dir, fakeCtx);
+    expect(loaded.longConnections).toEqual([]);
+    expect(loaded.failures[0]!.message).toMatch(/connect\(ctx, signal\)/);
+  });
+
   it("rejects a relative stateRoot at the mount boundary (the contract says absolute — fail visibly)", async () => {
     const dir = await freshDir();
     await expect(loadChannels(dir, { agent: {} as Agent, stateRoot: "rel/state" })).rejects.toThrow(
@@ -147,7 +183,7 @@ describe("loadChannels (filesystem discovery)", () => {
     await writeFile(join(dir, "channels", "bad.mjs"), `export const notDefault = 1;`);
     const { routes, failures } = await loadChannels(dir, fakeCtx);
     expect(routes).toEqual({}); // not mounted…
-    expect(failures[0]!.message).toMatch(/must default-export \(ctx\) => Routes/); // …but surfaced, never silent
+    expect(failures[0]!.message).toMatch(/must default-export.*Routes.*connect/); // …but surfaced, never silent
   });
 
   it("surfaces an async factory with a Promise-specific message (and no unhandled rejection)", async () => {
@@ -159,7 +195,7 @@ describe("loadChannels (filesystem discovery)", () => {
       `export default async () => { throw new Error("setup boom"); };`,
     );
     const { failures } = await loadChannels(dir, fakeCtx); // isolated; the Promise is marked handled — no unhandled rejection
-    expect(failures[0]!.message).toMatch(/not a Promise|async factory is not supported/);
+    expect(failures[0]!.message).toMatch(/must return Routes synchronously/);
   });
 
   it("rejects any non-async return that yields no routes (null, primitive, array, Map, {})", async () => {

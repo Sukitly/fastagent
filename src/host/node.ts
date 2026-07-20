@@ -27,10 +27,22 @@ export interface ChannelContext {
   stateRoot: string;
 }
 
-/** A `channels/<name>.ts` default export: receives the mount context, returns the routes it mounts.
- *  Adapters (`telegramChannel(opts)`, `githubChannel(opts)`) RETURN one of these, so user glue holds
- *  only policy — the framework pipes `agent`/`stateRoot` to the adapter without transiting user code. */
+/** A `channels/<name>.ts` route channel: receives mount context and returns its HTTP routes. */
 export type ChannelModule = (ctx: ChannelContext) => Routes;
+
+/** One logical long connection's lifecycle. `ready` settles after its first usable connection;
+ * `closed` resolves after abort-driven shutdown and rejects on a terminal connection failure. */
+export interface LongConnection {
+  ready: Promise<void>;
+  closed: Promise<void>;
+}
+
+/** A long-connection channel is an explicit module object rather than an HTTP-route factory.
+ * The adapter owns reconnects and treats `signal` as its sole shutdown command. */
+export interface LongConnectionChannelModule {
+  name: string;
+  connect(ctx: ChannelContext, signal: AbortSignal): LongConnection;
+}
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {
@@ -58,14 +70,14 @@ export function router(routes: Routes): ChannelHandler {
 }
 
 /**
- * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, let the caller close
- * it — no logging/signals/exit (the CLI owns those). `listening` resolves with the bound port (useful
- * for port 0) or rejects on a bind error.
+ * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, let the caller stop
+ * accepting or force-close active connections — no logging/signals/exit (the CLI owns those).
+ * `listening` resolves with the bound port (useful for port 0) or rejects on a bind error.
  */
 export function serveNode(
   handler: ChannelHandler,
   options: { port: number },
-): { listening: Promise<number>; close: () => Promise<void> } {
+): { listening: Promise<number>; close: () => Promise<void>; closeAllConnections: () => void } {
   const server = createServer(nodeListener(async (req) => handler(req)));
   const listening = new Promise<number>((resolve, reject) => {
     server.once("error", reject); // a bind failure surfaces here, before "listening"
@@ -75,5 +87,6 @@ export function serveNode(
     });
   });
   const close = () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
-  return { listening, close };
+  const closeAllConnections = (): void => server.closeAllConnections();
+  return { listening, close, closeAllConnections };
 }

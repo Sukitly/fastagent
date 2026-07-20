@@ -2,8 +2,8 @@
  * Durable channel state for a SINGLE-PROCESS deployment (the supported production shape — no
  * cross-instance locking; two processes must not share a state dir). Small JSON files, written
  * atomically (tmp + rename), so a crash leaves the previous version on disk, never a torn file.
- * Writes are synchronous: the files are KB-sized and a write that completes BEFORE the webhook 200
- * is what makes the state actually durable (an ACKed webhook delivery is not redelivered).
+ * Writes are synchronous: the files are KB-sized and a write that completes BEFORE the transport ACK
+ * is what makes the state actually durable (an ACKed delivery is not redelivered).
  * Channel-neutral: every stateful channel (telegram, Feishu; Lark compatibility) derives its home from the ctx state root
  * and persists through these three primitives.
  *

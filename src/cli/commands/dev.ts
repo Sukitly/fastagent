@@ -71,7 +71,9 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   const traced = logAgentLoop(a.agent);
   const routed = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
-  serve(routed, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.agentDir, p, opts.tunnel ?? false));
+  serve(routed, portFlag ?? a.config.http?.port ?? 8787, (p) =>
+    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false),
+  );
 }
 
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;

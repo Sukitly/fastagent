@@ -145,7 +145,7 @@ function channelBasenames(dir: string): string[] {
 export async function announceWebhooks(
   dir: string,
   baseUrl: string,
-  opts: { openUrl?: (url: string) => void } = {},
+  opts: { openUrl?: (url: string) => void; routeChannels?: string[] } = {},
 ): Promise<void> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
@@ -158,13 +158,15 @@ export async function announceWebhooks(
     // missing-credential guidance. loadDotEnv keeps throwing for the synchronous command callers.
     log.warn(`[fastagent] could not read ${join(dir, ".env")}: ${(error as Error).message} — continuing without it`);
   }
-  const channels = channelBasenames(dir);
-  if (channels.length === 0) return;
+  // Serving passes the validated route-channel subset. The basename fallback preserves the public
+  // helper's standalone behavior for callers that did not assemble channels first.
+  const routeChannels = opts.routeChannels ?? channelBasenames(dir);
+  if (routeChannels.length === 0) return;
   // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before
   // its origin connects, and the automatic registrars poll /health before configuring the platform (the
   // same wait the deploy runners rely on). GitHub needs no wait — the operator adds that webhook by hand.
-  if (channels.includes("telegram")) await registerTelegramWebhook(baseUrl);
-  if (channels.includes("github")) {
+  if (routeChannels.includes("telegram")) await registerTelegramWebhook(baseUrl);
+  if (routeChannels.includes("github")) {
     log.info(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
@@ -175,6 +177,6 @@ export async function announceWebhooks(
   const feishuOptions = {
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };
-  if (channels.includes("feishu")) await registerFeishuWebhook(baseUrl, "feishu", feishuOptions);
-  if (channels.includes("lark")) await registerFeishuWebhook(baseUrl, "lark", feishuOptions);
+  if (routeChannels.includes("feishu")) await registerFeishuWebhook(baseUrl, "feishu", feishuOptions);
+  if (routeChannels.includes("lark")) await registerFeishuWebhook(baseUrl, "lark", feishuOptions);
 }

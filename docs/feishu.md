@@ -5,16 +5,18 @@ status: current
 
 # Feishu channel (Lark compatibility)
 
-These channels turn a Feishu/Lark event-subscription webhook (`im.message.receive_v1`) into an agent turn and send the agent's reply back to the chat.
+These channels turn a Feishu/Lark `im.message.receive_v1` event—received by webhook or WebSocket long connection—into an agent turn and send the reply back to the chat.
 
-Feishu and Lark international are **one protocol on two clouds** — and in fastagent each cloud is its **own channel kind**, because a kind is the unit of route path, env namespace, state home, and onboarding:
+Feishu and Lark international are **one protocol on two clouds**—and each remains its own channel kind, the unit of ingress identity, env namespace, state home, and onboarding:
 
 | | `feishu` | `lark` |
 |---|---|---|
 | Cloud / console | `open.feishu.cn` (飞书) | `open.larksuite.com` (Lark international) |
-| Factory / import | `feishuChannel` from `@fastagent-sh/fastagent/feishu` | `larkChannel` from `@fastagent-sh/fastagent/lark` |
-| Webhook route | `POST /feishu` | `POST /lark` |
-| Env vars | `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY` | `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_VERIFICATION_TOKEN`, `LARK_ENCRYPT_KEY` |
+| Webhook factory | `feishuChannel` from `@fastagent-sh/fastagent/feishu` | `larkChannel` from `@fastagent-sh/fastagent/lark` |
+| WebSocket factory | `feishuWebSocketChannel` | `larkWebSocketChannel` |
+| Ingress | WebSocket long connection, or webhook at `POST /feishu` | WebSocket long connection, or webhook at `POST /lark` |
+| Always required | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | `LARK_APP_ID`, `LARK_APP_SECRET` |
+| Webhook only | `FEISHU_VERIFICATION_TOKEN`; optional `FEISHU_ENCRYPT_KEY` | `LARK_VERIFICATION_TOKEN`; optional `LARK_ENCRYPT_KEY` |
 | State home | `<state root>/channels/feishu/` | `<state root>/channels/lark/` |
 | Prompt envelope tag | `[feishu: chat …]` | `[lark: chat …]` |
 | Send tool | `tools/feishu-send.ts` | `tools/lark-send.ts` |
@@ -25,7 +27,7 @@ that lag behind the primary cloud (currently app creation and application-config
 A tenant lives on exactly one cloud — pick the matching kind. One workspace can mount **both** (two
 apps, two credential sets); they never share state.
 
-Like the Telegram channel, the engine is request/reply: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (an interactive card), which is the natural output format for an LLM — code blocks, tables, and links render properly.
+Both ingress modes feed the same request/reply engine: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (an interactive card), so code blocks, tables, and links render properly.
 
 ## Add the channel
 
@@ -33,26 +35,36 @@ From an agent workspace, first ensure `.env` is covered by `.gitignore` or `.fas
 commands refuse to write platform credentials into a committable file:
 
 ```bash
-fastagent add feishu   # 飞书: scaffolds + creates/configures the app; one version-publish action remains
-fastagent add lark     # Lark international: scaffolds, opens the console, then collects the three credentials
+fastagent add feishu   # interactive ingress choice + scan-to-create
+fastagent add lark     # interactive ingress choice + guided console setup
+
+# Non-interactive / explicit:
+fastagent add feishu --ingress websocket
+fastagent add lark --ingress webhook
 ```
 
-Onboarding diverges by cloud on purpose: the feishu cloud supports CLI app creation (scan-to-create),
-so `add feishu` creates an app only when no complete `FEISHU_APP_ID` / `FEISHU_APP_SECRET` pair exists.
-A persisted pair with a missing Verification Token resumes Token capture for that same App; a complete
-three-value set is kept. The intl cloud cannot complete that bound flow (its confirm-page ack endpoint
-is broken), so a new/partial `add lark` setup opens Lark's unbound one-click launcher
-(`/page/launcher?from=backend_oneclick`), then waits for App ID and App Secret and validates the pair.
-A complete existing ID/Secret pair skips the launcher and opens that App's Events & Callbacks → Security
-page directly (`/app/<id>/event?tab=safe`). Only that complete pair may reuse its existing Verification
-Token; an orphaned Token is never attached to newly entered App credentials. A complete three-value set
-already active in `.env` is kept as-is without reopening onboarding or revalidating it. After validation,
-the CLI starts the same temporary tunnel as Feishu and tries the webhook-mode PATCH against this actual
-app. Success switches the draft's Subscription mode and captures the Verification Token from the
-challenge; only an explicit config-route HTTP 404 falls back to a hidden Token prompt plus manual
-mode/URL setup. During `dev --tunnel`, that fallback opens the exact app's Events & Callbacks page and
-prints the new Request URL on its own line for copying. A successfully completed onboarding writes all
-three values to the gitignored `.env`.
+The choice is persisted in `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding `*WebSocketChannel` factory):
+
+| | WebSocket | Webhook |
+|---|---|---|
+| Public URL / `--tunnel` | Not needed | Required |
+| Runtime credentials | App ID + Secret | App ID + Secret + Verification Token; Encrypt Key optional |
+| Scale-to-zero / App Sleeping | Not supported; keep one process running | Supported when no other always-on producer exists |
+| Platform configuration | Long connection + publish | Webhook mode + Request URL + publish |
+
+This is an **app-level onboarding choice**, not a runtime failover switch. The platform delivers through
+one subscription mode at a time. To migrate later, change the channel factory and the console mode
+together, then publish a version; changing only one side makes the bot deaf. Use separate apps when dev
+and production intentionally use different modes.
+
+Onboarding diverges by cloud on purpose: Feishu supports CLI app creation (scan-to-create), while Lark's
+bound confirmation flow is broken and therefore uses the unbound launcher plus guided credential input.
+Within either cloud, ingress determines the remaining work. WebSocket stops after validating/persisting
+the App ID/Secret pair and opens Events & Callbacks so the user can select long connection and publish.
+Webhook continues through the existing temporary-tunnel challenge to capture the Verification Token and
+configure the Request URL; Lark's missing config API falls back to an explicit manual Token/mode/URL
+step. Re-running a partial setup reuses the complete App ID/Secret pair rather than creating or attaching
+a different app.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -68,31 +80,21 @@ It also appends the required env vars to `.env.example` when possible.
 `fastagent add feishu` runs the platform's **scan-to-create** flow (its official name; an OAuth 2.0
 device-authorization grant) as its default behavior. The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
-creates an app from its agent template — bot capability, messaging scopes, and event subscriptions
-pre-configured, plus the `application:application:patch` scope and the `im.message.receive_v1` event
-fastagent piggybacks onto the creation link — and hands the credentials back. The CLI immediately
-persists App ID/Secret to the gitignored `.env` before starting any later network work. The
-platform-generated Verification Token has no read API; its only programmatic delivery is the
-`url_verification` challenge sent during webhook registration, so the CLI captures it by running a
-throwaway registration against an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`) and
-persists it as a second stage. On a successful capture, `.env` contains:
+creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
+pre-configured—and adds `im.message.receive_v1`. Webhook onboarding additionally requests
+`application:application:patch`. The CLI immediately persists App ID/Secret to the gitignored `.env`
+before starting later network work.
 
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` — from the created app,
-- `FEISHU_VERIFICATION_TOKEN` — captured from the registration challenge.
+For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
+generated Verification Token has no read API; its only programmatic delivery is the `url_verification`
+challenge, so the CLI captures it through a throwaway tunnel and persists it as a second stage. If that
+stage is interrupted, re-running resumes Token capture for the same App rather than minting another.
 
-If the process is interrupted or the temporary tunnel/token capture fails, the already-created App ID
-and Secret remain durable. Re-running `add feishu` resumes Token capture for that App instead of minting
-a second one; the CLI also prints the exact console location for manually copying the Token into `.env`.
-
-One console action remains, and the CLI opens the page for it at the end of the scan: **create + publish
-a version** (self-approved on your own tenant). Before publishing, add the sensitive
-`im:message.group_msg` permission when group/thread discussion that does not @mention the Agent should
-be buffered (and when managed threads should accept bare continuations); it requires tenant-admin
-approval and cannot travel on the creation link. The switch from the
-template's long-connection mode to webhook only takes effect on publish; the subscription mode cannot
-be set at creation (the platform excludes sensitive config from the creation link — official SDK:
-"sensitive config … cannot travel") and version publishing has no open API (see Limits). After publish,
-`fastagent dev --tunnel` / `deploy --run` re-register only the Request URL, which applies immediately.
+One console action remains: **create + publish a version**. Before publishing, optionally add the
+sensitive `im:message.group_msg` permission for buffered group context and bare managed-thread
+continuations. WebSocket keeps the template's long-connection mode; webhook flips it and registers a
+Request URL. Mode changes take effect only after publish, while later webhook URL changes apply
+immediately. Version publishing has no open API.
 
 ## Configure the app by hand (developer console)
 
@@ -106,28 +108,25 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
-3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, copy the **Verification Token**, and (recommended) set an **Encrypt Key**.
-4. Put the credentials in the run-root `.env` (the kind's namespace):
+3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
+   - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
+   - **Webhook:** choose webhook, copy the Verification Token, and optionally set an Encrypt Key.
+4. Put the matching credentials in the run-root `.env`:
 
 ```bash
+# Both modes
 FEISHU_APP_ID=cli_...
 FEISHU_APP_SECRET=...
+
+# Webhook only
 FEISHU_VERIFICATION_TOKEN=...
 FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
 ```
 
-5. **The event Request URL registers itself** (Feishu tenants): `fastagent dev --tunnel` (and
-   `fastagent deploy … --run`) call the application-config API to point the app's event subscription at
-   `https://<host>/feishu` (or `/lark`) — webhook mode. This needs the
-   `application:application:patch` scope — `add feishu` requests it at creation; for a hand-made app
-   add it under Permissions in the console. Lark is probed rather than pre-judged: `add lark` and the
-   registrar both try the same API. If this app receives the previously observed config-route 404,
-   switch **Subscription mode to webhook** and set the URL in the console by hand — with the server
-   **running** (the platform verifies it with a `url_verification` challenge this channel answers).
-   `dev --tunnel` opens this app page automatically on that 404 fallback and prints the Request URL as
-   a standalone copy target.
-
-6. **Create a version and publish** the app (a tenant admin approves it), then add the bot to a chat.
+5. For webhook, `fastagent dev --tunnel` and `deploy … --run` register the Request URL. Feishu's API
+   path needs `application:application:patch`; Lark may require manual mode/URL setup when its config API
+   returns 404. WebSocket runs with ordinary `fastagent dev` and makes no registration call.
+6. **Create a version and publish** the app, then add the bot to a chat.
 
 ## Scaffolded channel
 
@@ -148,11 +147,34 @@ export default feishuChannel({
 });
 ```
 
-`appId`, `appSecret`, and `verificationToken` are required; construction fails when any is empty, so a public endpoint never silently accepts forged events or fails later without credentials.
+The WebSocket form uses its transport-specific factory and has no webhook-only options:
 
-## Event verification
+```ts
+import { feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
 
-Two modes, decided by the console's Encrypt Key setting and mirrored by the `encryptKey` option:
+export default feishuWebSocketChannel({
+  appId: process.env.FEISHU_APP_ID ?? "",
+  appSecret: process.env.FEISHU_APP_SECRET ?? "",
+});
+```
+
+Credentials are checked when serving starts, before the host reports ready. Deployment planning can
+therefore import the module and inspect its function/object shape before secrets have been provisioned.
+
+## WebSocket lifecycle
+
+`feishuWebSocketChannel` / `larkWebSocketChannel` wrap the official SDK lifecycle. `connect()` starts
+`WSClient`, `ready` settles on its first successful handshake, and the SDK owns ordinary reconnects.
+A transient disconnect therefore does not settle `closed` or make the already-ready health probe flap.
+Exhausted retries or a non-retryable setup error reject `closed` and fail serving visibly. Framework
+shutdown aborts the supplied signal; the adapter translates that single command into `WSClient.close()`
+and resolves `closed`. There is deliberately no second public `close()` path. See Feishu's
+[long-connection guide](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/long-connection-mode).
+
+## Webhook event verification
+
+WebSocket authentication happens once while establishing the official-SDK connection. Webhook has two
+security modes, decided by the console's Encrypt Key setting and mirrored by `encryptKey`:
 
 - **Encrypt Key set (recommended):** ordinary events arrive AES-256-CBC encrypted with `X-Lark-Signature` headers. The channel verifies the signature over the raw body, decrypts, and **refuses plaintext events entirely** — accepting both would let a forger skip the stronger check.
 - **No Encrypt Key:** events arrive in plaintext and are authenticated by the Verification Token (constant-time compare).
@@ -286,8 +308,8 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
-- `owned-threads.json` — durable `root_id → chat_id` ownership for managed group threads, written before the top-level webhook ACK so restarts preserve continuation routing,
-- `buffers.json` — unsummoned human group/thread discussion, persisted before webhook ACK and consumed only after an Agent turn completes,
+- `owned-threads.json` — durable `root_id → chat_id` ownership for managed group threads, written before the transport ACK so restarts preserve continuation routing,
+- `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
 
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
@@ -303,13 +325,15 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 
 ## Limits
 
-- Webhook (event subscription) mode only. The platform's WebSocket long-connection mode — attractive because it needs no public URL — requires the official SDK and a non-HTTP channel seam; a later tier.
-- `add feishu` creates the app from the platform's agent template, whose event subscription starts in
-  long-connection mode — the CLI flips the config to webhook during the token capture, but the flip
-  only takes effect once a **version is published** (the dispatcher serves the published snapshot; a
-  pure URL change applies immediately, a mode change does not). The subscription mode and sensitive
-  `im:message.group_msg` permission cannot travel on the creation link, and version publishing has no
-  open API — configure the permission as needed, then publish on the page the CLI opens.
+- One app uses one subscription mode. FastAgent cannot fail over from WebSocket to webhook at runtime;
+  changing mode requires coordinated channel-source + console changes and a published app version.
+- WebSocket requires one continuously running process. Fly disables scale-to-zero and Railway forbids
+  App Sleeping. Multiple clients for one app are cluster/load-balanced, not broadcast.
+- The official SDK currently carries event subscriptions over long connection; callback subscriptions
+  are not part of this FastAgent ingress. Card streaming remains outbound HTTP and is unaffected.
+- Subscription mode and `im:message.group_msg` cannot travel as arbitrary sensitive creation-link
+  config, and version publishing has no open API. Configure the chosen mode/permission, then publish on
+  the page the CLI opens.
 - Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
   ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
@@ -318,5 +342,7 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 - The default threaded direct/group modes create one durable Agent session per top-level DM or summoned group message. Session/owned-root TTL and GC are not implemented, so storage grows with the number of roots.
 - `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
-- Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.
+- Events must be ACKed within ~3 seconds in either mode. The channel persists/enqueues synchronously;
+  webhook returns HTTP 200 and the SDK returns its ACK frame without waiting for the Agent turn. A
+  persistence throw becomes HTTP/WS 500 and asks the platform to re-push.
 - Rate-limit rejects are retried (bounded); message sends to one chat are capped by the platform at 5 QPS.

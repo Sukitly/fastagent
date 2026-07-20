@@ -89,7 +89,18 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
-  const { channels, hasTimeTriggers, modelAuth, authPath, container, port, extraSecrets } = pre;
+  const {
+    channels,
+    routeChannels,
+    longConnectionChannels,
+    hasTimeTriggers,
+    modelAuth,
+    authPath,
+    container,
+    port,
+    extraSecrets,
+  } = pre;
+  const hasDeclaredChannels = routeChannels.length + longConnectionChannels.length > 0;
 
   // Docker: one app service + loopback port + state volume. `--tunnel` shapes the generated topology
   // with an optional Quick Tunnel service; `--run` alone decides whether Docker receives side effects.
@@ -102,8 +113,20 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
     const projectName = toDockerProjectName(basename(target));
     const dockerPlan = (tunnel: boolean) =>
-      planDockerDeploy({ projectName, port, modelAuth, channels, tunnel, extraSecrets, ...container });
-    const requestedTunnel = !!opts.tunnel;
+      planDockerDeploy({
+        projectName,
+        port,
+        modelAuth,
+        channels,
+        longConnectionChannels,
+        tunnel,
+        extraSecrets,
+        ...container,
+      });
+    const requestedTunnel = !!opts.tunnel && (!hasDeclaredChannels || routeChannels.length > 0);
+    if (opts.tunnel && hasDeclaredChannels && routeChannels.length === 0) {
+      console.error(`[fastagent] note: --tunnel skipped — every channel uses a long connection`);
+    }
     let plan = dockerPlan(requestedTunnel);
     // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk,
     // regardless of the current flag. `--force` is the explicit reset to the requested generated shape.
@@ -128,6 +151,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         modelAuth,
         authPath,
         channels,
+        longConnectionChannels,
         extraSecrets,
       });
     }
@@ -156,7 +180,15 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       basename(target)
         .replace(/[^a-zA-Z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
-    const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, hasTimeTriggers, ...container });
+    const plan = planRailwayDeploy({
+      serviceName,
+      modelAuth,
+      channels,
+      longConnectionChannels,
+      extraSecrets,
+      hasTimeTriggers,
+      ...container,
+    });
     await writeArtifacts(target, plan.artifacts, {
       force: !!opts.force,
       neverForce: container.kitDir ? [".dockerignore"] : [],
@@ -168,6 +200,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         modelAuth,
         authPath,
         channels,
+        longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
       });
@@ -219,15 +252,17 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // Under `--run` this is a GATE (same discipline as the model-travel gate): a full deploy whose schedules
   // silently never fire is worse than a crash-loop — nothing fails visibly when a cron instant passes on a
   // sleeping machine, and unlike github's min=0 there is no legitimate trade to accept here.
-  if (flyTomlExists && !opts.force && hasTimeTriggers) {
+  if (flyTomlExists && !opts.force && (hasTimeTriggers || longConnectionChannels.length > 0)) {
     const min = parseFlyMinMachines(await readFile(flyTomlPath, "utf8"));
     if ((min ?? 0) === 0) {
       // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a
       // hand-written fly.toml without the line scales to zero exactly like an explicit 0.
+      const reason = hasTimeTriggers
+        ? `schedules/self-scheduling need a running machine (no external wake-up)`
+        : `long-connection channel (${longConnectionChannels.join(", ")}) needs an always-on outbound connection`;
       const msg =
         `your kept fly.toml scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
-        `schedules/self-scheduling need a running machine (no external wake-up). Set min_machines_running = 1, ` +
-        `or pass --force to regenerate.`;
+        `${reason}. Set min_machines_running = 1, or pass --force to regenerate.`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }
@@ -237,6 +272,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     port,
     modelAuth,
     channels,
+    longConnectionChannels,
     extraSecrets,
     hasTimeTriggers,
     ...container,
@@ -247,7 +283,18 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     force: !!opts.force,
     neverForce: container.kitDir ? [".dockerignore"] : [],
   });
-  if (opts.run) return runDeployFly({ target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets });
+  if (opts.run) {
+    return runDeployFly({
+      target,
+      appName,
+      modelAuth,
+      authPath,
+      channels,
+      longConnectionChannels,
+      flyTomlPath,
+      extraSecrets,
+    });
+  }
   console.log(plan.runbook.join("\n"));
 }
 
@@ -309,13 +356,26 @@ async function runDeployDocker(params: {
   modelAuth: string | undefined;
   authPath: string;
   channels: ChannelKind[];
+  longConnectionChannels: string[];
   extraSecrets: string[];
 }): Promise<void> {
-  const { target, agentDir, composeFile, port, requireTunnel, modelAuth, authPath, channels, extraSecrets } = params;
+  const {
+    target,
+    agentDir,
+    composeFile,
+    port,
+    requireTunnel,
+    modelAuth,
+    authPath,
+    channels,
+    longConnectionChannels,
+    extraSecrets,
+  } = params;
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
+    longConnectionChannels,
     extraSecrets,
     env: process.env,
   });
@@ -334,14 +394,17 @@ async function runDeployDocker(params: {
     // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
     // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
     installProxyFetch();
-    await announceWebhooks(agentDir, outcome.tunnelUrl, { openUrl: openExternalUrl });
+    await announceWebhooks(agentDir, outcome.tunnelUrl, {
+      openUrl: openExternalUrl,
+      routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
+    });
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
         `restarts, re-run this deploy so webhooks receive the new URL`,
     );
     return;
   }
-  const paths = dockerWebhookPaths(channels);
+  const paths = dockerWebhookPaths(channels.filter((kind) => !longConnectionChannels.includes(kind)));
   if (paths.length > 0) {
     console.error(
       `[fastagent] note: public ingress is operator-owned — configure your tunnel/proxy, then wire the ` +
@@ -363,10 +426,11 @@ async function runDeployFly(params: {
   modelAuth: string | undefined;
   authPath: string;
   channels: ChannelKind[];
+  longConnectionChannels: string[];
   flyTomlPath: string;
   extraSecrets: string[];
 }): Promise<void> {
-  const { target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets } = params;
+  const { target, appName, modelAuth, authPath, channels, longConnectionChannels, flyTomlPath, extraSecrets } = params;
   const fly = spawnRunner("fly", target);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
@@ -378,6 +442,7 @@ async function runDeployFly(params: {
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
+    longConnectionChannels,
     extraSecrets,
     env: process.env,
   });
@@ -392,7 +457,7 @@ async function runDeployFly(params: {
   }
 
   const outcome = await deployFlyRun(
-    { appName, region, secrets, missingSecrets, channels, flyConfig: "fly.toml" },
+    { appName, region, secrets, missingSecrets, channels, longConnectionChannels, flyConfig: "fly.toml" },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
@@ -415,10 +480,11 @@ async function runDeployRailway(params: {
   modelAuth: string | undefined;
   authPath: string;
   channels: ChannelKind[];
+  longConnectionChannels: string[];
   extraSecrets: string[];
   intoLinked: boolean;
 }): Promise<void> {
-  const { target, name, modelAuth, authPath, channels, extraSecrets, intoLinked } = params;
+  const { target, name, modelAuth, authPath, channels, longConnectionChannels, extraSecrets, intoLinked } = params;
   const railway = spawnRunner("railway", target);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
@@ -429,6 +495,7 @@ async function runDeployRailway(params: {
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
+    longConnectionChannels,
     extraSecrets,
     env: process.env,
   });
@@ -442,7 +509,7 @@ async function runDeployRailway(params: {
   }
 
   const outcome = await deployRailwayRun(
-    { name, mountPath: "/data", secrets, missingSecrets, channels, intoLinked },
+    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),

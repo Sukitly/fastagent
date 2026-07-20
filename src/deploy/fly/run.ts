@@ -40,6 +40,7 @@ export interface FlyRunPlan {
   /** Required secret names with NO local value — the run gates on these before any side effect. */
   missingSecrets: string[];
   channels: ChannelKind[];
+  longConnectionChannels?: string[];
   /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace dir). */
   flyConfig: string;
 }
@@ -151,7 +152,7 @@ export async function deployFlyRun(
     reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
   }
   for (const kind of ["feishu", "lark"] as const) {
-    if (!plan.channels.includes(kind)) continue;
+    if (!plan.channels.includes(kind) || plan.longConnectionChannels?.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
       reg.track(kind, await registerFeishu(`https://${plan.appName}.fly.dev`, kind));

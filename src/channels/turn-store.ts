@@ -65,7 +65,7 @@ export interface TurnRecordBase {
 }
 
 export interface TurnStore<T extends TurnRecordBase> {
-  /** Persist an accepted turn before the ACK. A failed write throws (→ webhook 500, the platform redelivers). */
+  /** Persist an accepted turn before the ACK. A failed write throws (→ HTTP response / WS ACK 500, so the platform redelivers). */
   add(rec: T): void;
   /** Remove a finished turn. Post-ACK: a failed write is logged, never thrown (must not abort delivery). */
   remove(id: string): void;
@@ -127,7 +127,7 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
       if (turns.has(rec.id)) return;
       turns.set(rec.id, rec);
       try {
-        persist(); // pre-ACK: a throw becomes the webhook's 500 and the platform redelivers
+        persist(); // pre-ACK: the transport maps this throw to HTTP/WS 500, so the platform redelivers
       } catch (e) {
         // Roll the memory back so it matches disk (mirrors context-buffer.push): otherwise the phantom
         // entry makes the redelivery's `add` short-circuit on `turns.has` — running the turn with its

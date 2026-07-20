@@ -2,9 +2,11 @@
  *  Feishu engine. Feishu tenants use `@fastagent-sh/fastagent/feishu`. */
 export {
   larkChannel,
+  larkWebSocketChannel,
   defaultLarkRoute,
   larkEnvelope,
   type LarkChannelOptions,
+  type LarkWebSocketChannelOptions,
   type LarkMessageEvent,
   type LarkMessage,
   type LarkRoute,

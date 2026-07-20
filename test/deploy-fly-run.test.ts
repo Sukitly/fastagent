@@ -73,6 +73,22 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     ]);
   });
 
+  it("does not register a long-connection Feishu channel as a webhook", async () => {
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const registerFeishu = vi.fn(
+      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
+    );
+    const out = await deployFlyRun(
+      plan({ channels: ["feishu"], longConnectionChannels: ["feishu"] }),
+      fly,
+      () => {},
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      registerFeishu,
+    );
+    expect(out).toEqual({ ok: true });
+    expect(registerFeishu).not.toHaveBeenCalled();
+  });
+
   it("gates when a webhook registration terminally fails — after attempting the remaining channels", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const registerFeishu = vi.fn(

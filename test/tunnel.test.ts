@@ -202,6 +202,18 @@ describe("tunnel: announceWebhooks", () => {
     expect(errs.some((e) => /github:/.test(e) && /x\.trycloudflare\.com\/webhook/.test(e))).toBe(true);
   });
 
+  it("uses the validated route-channel subset and never registers an excluded WebSocket channel", async () => {
+    process.env.FEISHU_APP_ID = "cli_app";
+    process.env.FEISHU_APP_SECRET = "secret";
+    const fetchMock = vi.fn(async () => new Response("must not call", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const dir = await workspace(["feishu"]);
+
+    await announceWebhooks(dir, "https://x.trycloudflare.com", { routeChannels: [] });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("opens the exact Lark app page when the config API requires manual registration", async () => {
     captureErrors();
     process.env.LARK_APP_ID = "cli_app";

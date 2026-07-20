@@ -4,16 +4,16 @@
  * testable modules (register-app.ts, bootstrap-token.ts, lark/onboard.ts); this layer is the terminal
  * wiring: clack prompts, .env staging, browser opens, progress lines.
  *
- * Feishu (scan-to-create): the device flow creates the app; App ID/Secret are persisted at the
- * irreversible creation boundary, then the Verification Token is captured over a throwaway tunnel and
- * persisted as a second stage — a re-run RESUMES the app instead of minting another. Lark
- * (guided-console): open the unbound launcher, validate entered credentials, probe the same
- * webhook/token bootstrap, and fall back to a manual token prompt on the definitive config-route 404.
+ * Feishu (scan-to-create): the device flow creates the app and persists App ID/Secret at the
+ * irreversible boundary. WebSocket stops there; webhook additionally captures the Verification Token
+ * over a throwaway tunnel. Lark uses the unbound launcher + credential validation, then either stops
+ * for WebSocket or probes the same webhook/token bootstrap with the config-route-404 manual fallback.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
 import { bootstrapFeishuVerificationToken } from "./channels/feishu/bootstrap-token.ts";
+import type { FeishuSubscriptionMode } from "./channels/feishu/setup-mode.ts";
 import { cloudFor } from "./channels/feishu/cloud.ts";
 import {
   createFeishuApi,
@@ -38,6 +38,7 @@ export async function onboardFeishuCloudApp(
   target: string,
   kind: "feishu" | "lark",
   envIgnored: boolean,
+  ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<Record<string, string> | undefined> {
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
   // The CLI must never materialize a real credential into a committable file — refuse, don't warn.
@@ -48,28 +49,33 @@ export async function onboardFeishuCloudApp(
         : "`add lark` writes real app credentials to .env — add .env to .gitignore/.fastagentignore first, then re-run",
     );
   }
-  const existing = await activeDotEnvValues(target, [
+  const requiredNames = [
     `${envPrefix}_APP_ID`,
     `${envPrefix}_APP_SECRET`,
-    `${envPrefix}_VERIFICATION_TOKEN`,
-  ]);
-  if (Object.keys(existing).length === 3) {
-    console.error(`[fastagent] ${envPrefix}_APP_ID/SECRET/VERIFICATION_TOKEN already set in .env — keeping them`);
-    return undefined;
+    ...(ingress === "webhook" ? [`${envPrefix}_VERIFICATION_TOKEN`] : []),
+  ];
+  const existing = await activeDotEnvValues(target, requiredNames);
+  if (Object.keys(existing).length === requiredNames.length) {
+    console.error(`[fastagent] ${requiredNames.join("/")} already set in .env — keeping them`);
+    // WebSocket still needs its console mode/publish guidance. Webhook is already fully configured.
+    if (ingress === "webhook") return undefined;
   }
 
   if (capabilities.appCreation === "scan-to-create") {
-    await createFeishuAppFlow(target, existing);
+    await createFeishuAppFlow(target, existing, ingress);
     return undefined;
   }
 
   // guided-console (lark): the intl cloud cannot complete the bound device flow — collect + validate.
-  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+  if (
+    !(process.stdin.isTTY && process.stdout.isTTY) &&
+    !(existing[`${envPrefix}_APP_ID`] && existing[`${envPrefix}_APP_SECRET`])
+  ) {
     throw new Error(
       "`add lark` needs an interactive terminal to onboard the Lark app credentials — re-run it in a terminal",
     );
   }
-  return onboardLarkApp(
+  const credentials = await onboardLarkApp(
     {
       openUrl: openExternalUrl,
       note: (message) => clackLog.info(message),
@@ -80,6 +86,7 @@ export async function onboardFeishuCloudApp(
     },
     {
       existing,
+      ingress,
       verifyCredentials: async (appId, appSecret) => {
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
@@ -117,27 +124,36 @@ export async function onboardFeishuCloudApp(
       },
     },
   );
+  return Object.fromEntries(
+    Object.entries(credentials).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
 }
 
 /**
  * The scan-to-create flow `add feishu` runs by default. The device-authorization grant
  * creates a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the
- * user confirms a link in the app, and hands back the credentials; App ID/Secret are persisted at that
- * irreversible boundary before the platform-generated Verification Token is captured from the
- * registration challenge (bootstrap-token.ts). The Token is persisted as a second stage, so .env is
- * complete before the one remaining version-publish action. The event Request URL is NOT left pointing at the throwaway
- * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
+ * user confirms a link, then persists App ID/Secret at the irreversible boundary. That completes
+ * WebSocket credentials; webhook continues through challenge-captured Token persistence. The throwaway
+ * Request URL is later replaced by `dev --tunnel` / `deploy --run`.
  *
  * Feishu is the reference cloud and the only kind that runs this BOUND device flow. Lark is an explicit
  * compatibility profile: its lagging control plane uses the unbound launcher + guided credentials,
  * then probes the canonical token/mode bootstrap with a manual fallback.
  */
-async function createFeishuAppFlow(target: string, existing: Readonly<Record<string, string>>): Promise<void> {
+async function createFeishuAppFlow(
+  target: string,
+  existing: Readonly<Record<string, string>>,
+  ingress: FeishuSubscriptionMode,
+): Promise<void> {
   const { apiBase } = cloudFor("feishu");
   let appId = existing.FEISHU_APP_ID;
   let appSecret = existing.FEISHU_APP_SECRET;
   if (appId && appSecret) {
-    console.error(`[fastagent] resuming Feishu app ${appId} from .env to capture its missing Verification Token`);
+    console.error(
+      ingress === "webhook"
+        ? `[fastagent] resuming Feishu app ${appId} from .env to capture its missing Verification Token`
+        : `[fastagent] reusing Feishu app ${appId} from .env for WebSocket ingress`,
+    );
   } else {
     console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
     const app = await registerFeishuApp({
@@ -147,7 +163,7 @@ async function createFeishuAppFlow(target: string, existing: Readonly<Record<str
       // in `dev --tunnel` / `deploy --run`) demands application:application:patch, and the app must
       // subscribe the receive event. Addons merge both onto the confirm page — no manual app setup.
       addons: {
-        scopes: { tenant: ["application:application:patch"] },
+        ...(ingress === "webhook" ? { scopes: { tenant: ["application:application:patch"] } } : {}),
         events: { items: { tenant: ["im.message.receive_v1"] } },
       },
       onVerificationUrl: ({ url, expiresInS }) => {
@@ -172,19 +188,27 @@ async function createFeishuAppFlow(target: string, existing: Readonly<Record<str
     // IRREVERSIBLE BOUNDARY: the remote app now exists and its one-time Secret is in memory. Persist
     // both before any config read, temporary tunnel, or Token bootstrap can be interrupted. Partial old
     // lines are overwritten because these newly-minted credentials are authoritative as one pair.
-    await appendChannelDotEnv(
-      target,
-      "feishu",
-      {
-        FEISHU_APP_ID: appId,
-        FEISHU_APP_SECRET: appSecret,
-        // A Token from a partial OLD credential set belongs to another App. Clear it at the same
-        // boundary; successful bootstrap below replaces the empty line with this App's Token.
-        FEISHU_VERIFICATION_TOKEN: "",
-      },
-      ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
+    const staged = {
+      FEISHU_APP_ID: appId,
+      FEISHU_APP_SECRET: appSecret,
+      ...(ingress === "webhook" ? { FEISHU_VERIFICATION_TOKEN: "" } : {}),
+    };
+    await appendChannelDotEnv(target, "feishu", staged, Object.keys(staged), ingress);
+    console.error(
+      ingress === "webhook"
+        ? `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .env before Token bootstrap`
+        : `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .env`,
     );
-    console.error(`[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .env before Token bootstrap`);
+  }
+
+  if (ingress === "websocket") {
+    const versionUrl = `${apiBase}/app/${appId}/version`;
+    console.error(
+      `[fastagent] WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel. ` +
+        `Choose long connection in Events & Callbacks, then CREATE + PUBLISH a version. Opening ${versionUrl}`,
+    );
+    openExternalUrl(versionUrl);
+    return;
   }
 
   // The webhook channel authenticates plaintext events by the platform-generated Verification Token.

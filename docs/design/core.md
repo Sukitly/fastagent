@@ -185,11 +185,25 @@ core fail-fast behavior.
 
 ## 7. Channels and hosting
 
-A channel is a synchronous factory:
+A channel file has one of two explicit module forms:
 
 ```ts
+// Existing HTTP route channel
 (ctx: { agent, stateRoot }) => Routes
+
+// Long-connection channel
+{
+  name: string,
+  connect(ctx, signal): { ready: Promise<void>, closed: Promise<void> }
+}
 ```
+
+The distinction is structural: a function is a route channel; an object with `connect` is a
+`LongConnectionChannelModule`. There is no shared mount object, ingress enum, or second metadata
+declaration. Deployment imports enabled channel modules to inspect that shape without invoking route
+modules or opening connections, so top-level module construction must not require runtime secrets. The
+adapter owns reconnects; `AbortSignal` is the sole shutdown command, while `ready` and `closed` expose
+lifecycle observation without a second `close()` path.
 
 Enabled workspace channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming a
 file to `telegram.ts.disabled` disables it without adding a second config source.
@@ -199,8 +213,12 @@ route collision as fatal. A declared inbound endpoint must not silently disappea
 must never cause the default `/invoke` route to appear. The default HTTP/SSE route is mounted only when there are no
 enabled channel files.
 
-The serving CLI composition adds `GET /health`. The Node host routes exact method/path keys and bridges
-Fetch requests/responses to `node:http` with streaming backpressure and disconnect cancellation.
+The serving CLI composition adds `GET /health`. A long-connection channel counts as declared (so the
+fallback `/invoke` does not appear) and keeps that health route for deployment probes. Built-in health
+returns 503 until every long connection first becomes ready. The Node host serves route channels through
+`node:http`; the CLI opens long-connection channels, aborts them on shutdown, and fails visibly when one
+closes unexpectedly. SIGINT/SIGTERM does not drain Agent turns: it aborts long connections, stops the
+listener, force-closes active HTTP streams, and has a bounded exit fallback so shutdown cannot hang.
 
 ### GitHub
 
@@ -241,11 +259,13 @@ level up.
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
 `src/channels/lark/lark.ts` is therefore a thin branded adapter over the Feishu engine, while
 `src/channels/lark/onboard.ts` owns Lark's degraded guided/manual onboarding. The explicit profiles in
-`src/channels/feishu/cloud.ts` record those capability differences. A kind still owns route, env,
-state, logs, and onboarding: `feishuChannel` mounts `POST /feishu`, reads `FEISHU_*`, and stores under
-`channels/feishu/`; `larkChannel` mirrors those boundaries without becoming the core. One workspace
-can mount both. No SDK — wire protocols are fetch-based, with the adoption tripwire documented in
-`feishu-api.ts`. What is platform-different:
+`src/channels/feishu/cloud.ts` record those capability differences. A kind still owns its channel
+identity, env, state, logs, and onboarding: `feishuChannel` returns `POST /feishu`, while
+`feishuWebSocketChannel` returns a long-connection module; the Lark factories mirror those boundaries
+without becoming the core. Both share `channels/<kind>/` state and the same event engine. One workspace
+can run both clouds. Outbound APIs and webhook protocol handling remain fetch-based; WebSocket ingress is
+isolated behind the official `@larksuiteoapi/node-sdk` because its protobuf connection protocol is not
+a stable hand-authored surface. What is platform-different:
 
 - **The live preview is a streaming CARD, not an edited text message.** The platform caps text edits at
   20 per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
@@ -288,28 +308,19 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon
   carries only `parent_id` — the referent's content and attachments are fetched as primary input;
   buffered attachments are background input and degrade per resource.
-- **Registration and creation are automated over the platform's own APIs.** The event Request URL is
-  written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
-  the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
-  manual console instruction as the fallback. Cloud lag: the v7 route exists on `open.feishu.cn` but
-  not on `open.larksuite.com` yet; a 404 names that cause. `add feishu` runs the scan-to-create
-  device flow BY DEFAULT (RFC 8628, hand-rolled; wire format shared by the four official SDKs). It
-  persists the returned App ID/Secret at the irreversible creation boundary, then captures and persists
-  the platform-generated verification token over a throwaway tunnel. A re-run with that pair resumes
-  missing-Token setup instead of creating another App; `.env` completes before the remaining publish action.
-  One console action remains (the CLI opens the page): the long-connection→webhook mode flip takes
-  effect on version publish, which has no open API — neither the subscription mode nor the sensitive
-  `im:message.group_msg` permission can travel on the creation link. The intl cloud cannot complete
-  the BOUND device flow (its confirm-page ack endpoint is broken), so a new/partial `add lark` setup
-  opens the unbound one-click launcher (`/page/launcher?from=backend_oneclick`); a complete existing
-  ID/Secret pair skips it and resumes that App directly. Only that pair may reuse its existing Token.
-  Both paths run credential validation → open this app's `/event?tab=safe` page → the SAME temporary-
-  tunnel PATCH/challenge bootstrap. Success switches the draft to
-  webhook mode and captures the token; only a route-level 404 from this actual app falls back to a
-  hidden Token prompt + manual mode/URL setup. This is an optimistic capability probe, not a baked-in
-  cloud assumption; every other failure remains visible.
-- **Webhook ingress only.** The WS long-connection mode (no public URL) needs the official SDK and a
-  non-HTTP channel seam; deferred.
+- **Ingress is an onboarding-time app choice.** `add feishu|lark` asks for WebSocket or webhook and
+  writes the corresponding transport-specific factory into the channel module. WebSocket needs only App ID/Secret, skips token capture,
+  tunnel, Request URL registration, and platform crypto; the official SDK authenticates the outbound
+  connection, reconnects it, and converts handler throws into 500 ACK frames (preserving platform
+  re-push after a failed pre-ACK state write). Webhook retains the application-v7 PATCH/challenge flow,
+  Verification Token, optional Encrypt Key, and Lark's explicit config-route-404 manual fallback.
+  Subscription mode is app-level and mutually exclusive: changing the source factory alone does not
+  migrate the app; the console mode and published version must move with it.
+- **A WebSocket adapter is a long-connection channel and therefore always-on.** Fly generates
+  `min_machines_running=1`, Railway forbids App Sleeping, webhook registration is skipped, and only App ID/Secret travel as
+  channel secrets. Multiple connections for one app are cluster/load-balanced rather than broadcast.
+  Event callbacks must still finish within three seconds, so the shared acceptance boundary persists
+  and enqueues only; the Agent turn remains fire-and-forget.
 
 ## 8. Schedules and self-scheduling
 

@@ -3,8 +3,11 @@
  * Skills skill. feishu/lark additionally CREATE OR RESUME the platform app (cli-add-feishu.ts).
  */
 import { randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
+import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../../cli-add-feishu.ts";
+import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -24,7 +27,7 @@ import { failStartup, failUsage } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { createApp?: boolean },
+  opts: { createApp?: boolean; ingress?: string },
 ): Promise<void> {
   const target = resolve(dirArg);
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
@@ -51,17 +54,19 @@ export async function runAddChannel(
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
   // failed or cancelled scan/paste flow must be re-runnable without hand-deleting glue); never touch it.
   const file = join(channelHome, "channels", `${channelKind}.ts`);
-  if (await channelExists(channelHome, channelKind).catch(failStartup)) {
+  const existsAlready = await channelExists(channelHome, channelKind).catch(failStartup);
+  const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
+  if (existsAlready) {
     if (channelKind !== "feishu" && channelKind !== "lark") {
       failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
     }
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
     await assertChannelReady(channelHome).catch(failStartup);
-    await scaffoldChannel(channelHome, channelKind).catch(failStartup);
+    await scaffoldChannel(channelHome, channelKind, { ingress }).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
   }
-  if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
+  if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
   }
   // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
@@ -79,9 +84,9 @@ export async function runAddChannel(
   // generic .env write below.
   let created: Record<string, string> | undefined;
   if (channelKind === "feishu" || channelKind === "lark") {
-    created = await onboardFeishuCloudApp(target, channelKind, envIgnored).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress).catch(failStartup);
   }
-  const { env, steps } = channelSetup(channelKind);
+  const { env, steps } = channelSetup(channelKind, ingress);
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
@@ -89,9 +94,13 @@ export async function runAddChannel(
   // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
   // Feishu's irreversible credentials were already staged inside cli-add-feishu.ts before bootstrap.
   const dotEnv = envIgnored
-    ? await appendChannelDotEnv(target, channelKind, { ...generated, ...created }, Object.keys(created ?? {})).catch(
-        failStartup,
-      )
+    ? await appendChannelDotEnv(
+        target,
+        channelKind,
+        { ...generated, ...created },
+        Object.keys(created ?? {}),
+        ingress,
+      ).catch(failStartup)
     : undefined;
   if (dotEnv && dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
@@ -120,12 +129,77 @@ export async function runAddChannel(
   for (const s of steps) {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
-  if (channelKind !== "lark") {
+  if (ingress === "websocket") {
+    console.error(`    fastagent dev            # no public URL or tunnel required`);
+  } else if (channelKind !== "lark") {
     console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
   }
   // The app-creation flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
   // health probes) that would hold the event loop open for a while — the work is done, exit crisply.
   process.exit(0);
+}
+
+async function resolveIngress(
+  kind: ChannelKind,
+  file: string,
+  existsAlready: boolean,
+  raw: string | undefined,
+): Promise<FeishuSubscriptionMode> {
+  if (raw !== undefined && raw !== "webhook" && raw !== "websocket") {
+    failUsage(`--ingress must be "webhook" or "websocket", got "${raw}"`);
+  }
+  const requested = raw as FeishuSubscriptionMode | undefined;
+  if (kind !== "feishu" && kind !== "lark") return "webhook";
+
+  if (existsAlready) {
+    const source = await readFile(file, "utf8").catch(failStartup);
+    const factory = source.match(/\b(?:feishu|lark)(WebSocket)?Channel\s*\(/);
+    const existing: FeishuSubscriptionMode | undefined = factory
+      ? factory[1] === "WebSocket"
+        ? "websocket"
+        : "webhook"
+      : undefined;
+    if (!existing) {
+      if (!requested) {
+        failUsage(
+          `${file} uses an unrecognized channel factory — re-run with --ingress webhook|websocket to confirm its mode`,
+        );
+      }
+      return requested;
+    }
+    if (requested && requested !== existing) {
+      failStartup(
+        new Error(
+          `${file} already selects ${existing} delivery — changing mode is a migration; edit the factory and platform subscription together`,
+        ),
+      );
+    }
+    return existing;
+  }
+  if (requested) return requested;
+  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+    console.error(
+      `[fastagent] no interactive terminal — defaulting ${kind} ingress to webhook (use --ingress websocket)`,
+    );
+    return "webhook";
+  }
+  const answer = await select<FeishuSubscriptionMode>({
+    message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
+    options: [
+      {
+        value: "websocket",
+        label: "WebSocket long connection",
+        hint: "no public URL; requires an always-on process",
+      },
+      {
+        value: "webhook",
+        label: "Webhook endpoint",
+        hint: "supports scale-to-zero; requires a public HTTPS URL",
+      },
+    ],
+  });
+  if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
+  return answer;
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

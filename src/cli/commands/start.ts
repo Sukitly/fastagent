@@ -96,7 +96,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const routed = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
   await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
   serve(routed, portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, (p) =>
-    maybeTunnel(agentDir, p, opts.tunnel ?? false),
+    maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false),
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
   // in-flight turn is LOST depends on the channel: the Telegram channel persists turn intent pre-ACK

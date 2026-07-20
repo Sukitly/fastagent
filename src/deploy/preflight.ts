@@ -13,7 +13,7 @@ import { readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { resolveAuthPath } from "../engines/pi/config.ts";
-import { discoverChannelFiles } from "../engines/pi/channel.ts";
+import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
@@ -32,6 +32,10 @@ export interface DeployMessage {
 export interface DeployFacts {
   messages: DeployMessage[];
   channels: ChannelKind[];
+  /** Every structurally detected HTTP-route channel basename, including custom channels. */
+  routeChannels: string[];
+  /** Every structurally detected long-connection channel basename, including custom channels. */
+  longConnectionChannels: string[];
   /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). Cron/wake
    *  has no external wake-up, so the deployment must keep one machine running: the fly plan forces
    *  `min_machines_running=1`, the railway runbook forbids App Sleeping. */
@@ -82,12 +86,24 @@ export async function preflightDeploy(input: {
 
   // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; note and let the
   // author wire them.
-  const discovered = await discoverChannelFiles(agentDir);
+  const inspected = await inspectChannels(agentDir);
+  if (inspected.failures.length > 0) {
+    throw new Error(
+      `cannot inspect channel modules: ${inspected.failures.map((failure) => `${failure.label}: ${failure.message}`).join("; ")}`,
+    );
+  }
+  const discovered = inspected.channels;
   const channels = discovered.filter((c): c is ChannelKind => (CHANNEL_KINDS as string[]).includes(c));
+  const routeChannels = inspected.routeChannels;
+  const longConnectionChannels = inspected.longConnectionChannels;
   for (const c of discovered) {
-    if (!channels.includes(c as ChannelKind)) {
-      messages.push({ level: "note", text: `channel "${c}" is custom — set its secrets and webhook yourself` });
-    }
+    if (channels.includes(c as ChannelKind)) continue;
+    messages.push({
+      level: "note",
+      text: longConnectionChannels.includes(c)
+        ? `long-connection channel "${c}" is custom — configure its secrets yourself; generated deploy plans keep the process running and skip webhook registration`
+        : `route channel "${c}" is custom — configure its secrets and webhook yourself`,
+    });
   }
 
   // Time triggers (static schedules or self-scheduling) need a machine kept running — unlike a webhook,
@@ -95,6 +111,14 @@ export async function preflightDeploy(input: {
   // ("the generated plan…"): in KEEP mode an existing fly.toml is not rewritten — the CLI warns separately
   // when a kept fly.toml still scales to zero.
   const hasTimeTriggers = (await discoverScheduleFiles(agentDir)).length > 0 || !!config.selfSchedule;
+  if (longConnectionChannels.length > 0) {
+    messages.push({
+      level: "note",
+      text:
+        `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
+        `(an outbound connection cannot wake a scaled-to-zero service).`,
+    });
+  }
   if (hasTimeTriggers) {
     messages.push({
       level: "note",
@@ -231,7 +255,19 @@ export async function preflightDeploy(input: {
     }
   }
 
-  return { ok: true, messages, channels, hasTimeTriggers, modelAuth, authPath, container, port, extraSecrets };
+  return {
+    ok: true,
+    messages,
+    channels,
+    routeChannels,
+    longConnectionChannels,
+    hasTimeTriggers,
+    modelAuth,
+    authPath,
+    container,
+    port,
+    extraSecrets,
+  };
 }
 
 /**

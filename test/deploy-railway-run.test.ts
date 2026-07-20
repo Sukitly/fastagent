@@ -125,6 +125,26 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     ]);
   });
 
+  it("does not register a long-connection Lark channel as a webhook", async () => {
+    const { railway } = fakeRailway((args) => {
+      if (args[0] === "status") return { stdout: "" };
+      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const registerFeishu = vi.fn(
+      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
+    );
+    const out = await deployRailwayRun(
+      plan({ channels: ["lark"], longConnectionChannels: ["lark"] }),
+      railway,
+      () => {},
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      registerFeishu,
+    );
+    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    expect(registerFeishu).not.toHaveBeenCalled();
+  });
+
   it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
     const { railway } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };

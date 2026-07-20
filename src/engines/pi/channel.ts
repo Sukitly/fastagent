@@ -1,14 +1,19 @@
 /**
- * Channel discovery (the N axis, filesystem form): a workspace declares its inbound surface by
- * dropping files in `channels/`, mirroring `tools/`. Each file wires a third-party adapter to the
- * app's `on()` glue and returns the routes it mounts. There is no config-level channel list — a
- * channel always needs glue, so it is always a file.
+ * Channel discovery (the N axis, filesystem form). A channel file default-exports either the existing
+ * route factory `(ctx) => Routes`, or an explicit long-connection module `{ name, connect(ctx, signal) }`.
  */
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { type ChannelContext, type ChannelModule, parseRouteKey, type Routes } from "../../host/node.ts";
-import { assertInsideWorkspace } from "../../workspace.ts";
+import {
+  type ChannelContext,
+  type ChannelModule,
+  type LongConnection,
+  type LongConnectionChannelModule,
+  parseRouteKey,
+  type Routes,
+} from "../../host/node.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
+import { assertInsideWorkspace } from "../../workspace.ts";
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
 export interface ChannelCollision {
@@ -16,11 +21,62 @@ export interface ChannelCollision {
   source: string;
 }
 
+/** A long-connection module bound to the same context route factories receive. Internal serving shape. */
+export interface LoadedLongConnectionChannel {
+  name: string;
+  connect(signal: AbortSignal): LongConnection;
+}
+
+function longConnectionModule(value: unknown): value is LongConnectionChannelModule {
+  return value !== null && typeof value === "object" && typeof (value as { connect?: unknown }).connect === "function";
+}
+
+function validateLongConnectionModule(value: LongConnectionChannelModule, label: string): void {
+  if (typeof value.name !== "string" || value.name.trim() === "") {
+    throw new Error(`${label}: long-connection channel name must be a non-empty string`);
+  }
+}
+
+/**
+ * Import channel files without mounting route factories or opening connections. Deployment needs only
+ * the authored structural fact: function exports are route channels; `{ connect() }` exports are
+ * long-connection channels. There is no second ingress/lifecycle declaration to keep in sync.
+ */
+export async function inspectChannels(dir: string): Promise<{
+  channels: string[];
+  routeChannels: string[];
+  longConnectionChannels: string[];
+  failures: ModuleLoadFailure[];
+}> {
+  await assertInsideWorkspace(dir, "channels");
+  const { modules, failures } = await loadModuleDir(join(dir, "channels"));
+  const channels: string[] = [];
+  const routeChannels: string[] = [];
+  const longConnectionChannels: string[] = [];
+  for (const { name, label, file, mod } of modules) {
+    try {
+      if (typeof mod.default === "function") {
+        channels.push(name);
+        routeChannels.push(name);
+        continue;
+      }
+      if (longConnectionModule(mod.default)) {
+        validateLongConnectionModule(mod.default, label);
+        channels.push(name);
+        longConnectionChannels.push(name);
+        continue;
+      }
+      throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
+    } catch (error) {
+      failures.push({ label, file, message: (error as Error).message });
+    }
+  }
+  return { channels, routeChannels, longConnectionChannels, failures };
+}
+
 /**
  * Channel file basenames under `<dir>/channels/` — the authoring view (`fastagent info`), which lists
- * WITHOUT importing, unlike {@link loadChannels}. It enforces the SAME containment guard so info reports
- * exactly the surface dev/start would accept: a channels/ symlink escaping the workspace is rejected
- * here too. This path is independent of loadChannels', so it must guard the boundary on its own.
+ * WITHOUT importing. A symlinked channels directory must remain inside the workspace.
  */
 export async function discoverChannelFiles(dir: string): Promise<string[]> {
   await assertInsideWorkspace(dir, "channels");
@@ -33,84 +89,84 @@ export async function discoverChannelFiles(dir: string): Promise<string[]> {
   }
   return names
     .filter(isModuleFile)
-    .map((n) => n.replace(/\.(ts|js|mjs)$/, ""))
+    .map((name) => name.replace(/\.(ts|js|mjs)$/, ""))
     .sort();
 }
 
-/**
- * Discover channels in `<dir>/channels/`: each `*.ts|.js|.mjs` default-exports a `(ctx) => Routes`
- * factory ({@link ChannelModule}), called here with the mount context; the returned route maps are
- * merged (first file wins a route-key clash, the dropped route surfaced).
- *
- * A channel file broken for ANY reason — a failed import, a factory that throws when called (a missing
- * env var is the common deploy case), or a malformed shape (not a function, not a Routes object, a bad
- * handler/route key) — is collected in `failures` without preventing validation of sibling files. The
- * serving CLI treats any such failure as fatal: a declared channel must not silently disappear or cause
- * the default `/invoke` route to mount. Programmatic callers can inspect the returned data themselves.
- * Routes are validated fully before any merge, so a throw mounts no partial routes.
- */
+function validateRoutes(value: unknown, label: string): [string, (req: Request) => Response | Promise<Response>][] {
+  if (value === null || typeof value !== "object" || value instanceof Map) {
+    throw new Error(`${label} must return a Routes object`);
+  }
+  const routes = Object.entries(value as Routes);
+  if (routes.length === 0) {
+    throw new Error(`${label} declared no routes — return a non-empty { "METHOD /path": handler } object`);
+  }
+  for (const [route, handler] of routes) {
+    if (typeof handler !== "function") {
+      throw new Error(`${label}: route "${route}" must map to a handler function, got ${typeof handler}`);
+    }
+    if (!parseRouteKey(route).path.startsWith("/")) {
+      throw new Error(`${label}: route "${route}" is not a valid route key (expected "METHOD /path" or "/path")`);
+    }
+  }
+  return routes;
+}
+
+/** Discover, validate, and bind all channel modules. No long connection is opened here; the CLI owns it. */
 export async function loadChannels(
   dir: string,
   ctx: ChannelContext,
-): Promise<{ routes: Routes; collisions: ChannelCollision[]; failures: ModuleLoadFailure[] }> {
-  // The contract says stateRoot is absolute; enforce it at the mount boundary so a relative root fails
-  // fast HERE instead of silently re-anchoring some channel's state on the process cwd.
+): Promise<{
+  routes: Routes;
+  longConnections: LoadedLongConnectionChannel[];
+  routeChannels: string[];
+  longConnectionChannels: string[];
+  collisions: ChannelCollision[];
+  failures: ModuleLoadFailure[];
+}> {
   if (!isAbsolute(ctx.stateRoot)) {
     throw new Error(`ChannelContext.stateRoot must be absolute, got "${ctx.stateRoot}"`);
   }
-  // A symlinked channels/ is followed only if it stays inside the workspace, so a deploy that copies
-  // the dir includes it (the directory is the agent).
   await assertInsideWorkspace(dir, "channels");
   const { modules, failures } = await loadModuleDir(join(dir, "channels"));
   const routes: Routes = {};
+  const longConnections: LoadedLongConnectionChannel[] = [];
+  const routeChannels: string[] = [];
+  const longConnectionChannels: string[] = [];
   const collisions: ChannelCollision[] = [];
-  for (const { label, file, mod } of modules) {
-    // Collect every per-file failure so the caller can report all broken channels in one pass. The CLI
-    // then fails startup rather than silently dropping a declared route; direct callers own their policy.
-    // Routes are VALIDATED fully before any are merged, so a throw mid-validation mounts NO partial routes.
+
+  for (const { name, label, file, mod } of modules) {
     try {
-      const factory = mod.default;
-      if (typeof factory !== "function") {
-        throw new Error(`${label} must default-export (ctx) => Routes`);
+      if (longConnectionModule(mod.default)) {
+        validateLongConnectionModule(mod.default, label);
+        const channel = mod.default;
+        longConnections.push({
+          name: channel.name,
+          connect: (signal) => channel.connect(ctx, signal),
+        });
+        longConnectionChannels.push(name);
+        continue;
       }
-      const declared = (factory as ChannelModule)(ctx) as unknown;
-      // A Promise needs its own branch before the object check: mark it handled (a rejected async setup
-      // must not go unhandled) and reject it with a precise message rather than the zero-routes one.
+      if (typeof mod.default !== "function") {
+        throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
+      }
+      const declared = (mod.default as ChannelModule)(ctx) as unknown;
       if (
         declared !== null &&
         typeof declared === "object" &&
         typeof (declared as { then?: unknown }).then === "function"
       ) {
         (declared as Promise<unknown>).catch(() => {});
-        throw new Error(`${label} must return Routes synchronously, not a Promise (an async factory is not supported)`);
+        throw new Error(`${label} must return Routes synchronously, not a Promise`);
       }
-      if (declared === null || typeof declared !== "object") {
-        throw new Error(`${label} must return a Routes object, got ${declared === null ? "null" : typeof declared}`);
-      }
-      const declaredRoutes = Object.entries(declared as Routes);
-      if (declaredRoutes.length === 0) {
-        throw new Error(
-          `${label} declared no routes — return a non-empty { "METHOD /path": handler } object (a Promise, Map, array, or {} yields none)`,
-        );
-      }
-      // Validate every route BEFORE merging any (no partial mount on a later throw).
-      for (const [route, handler] of declaredRoutes) {
-        if (typeof handler !== "function") {
-          throw new Error(`${label}: route "${route}" must map to a handler function, got ${typeof handler}`);
-        }
-        if (!parseRouteKey(route).path.startsWith("/")) {
-          throw new Error(`${label}: route "${route}" is not a valid route key (expected "METHOD /path" or "/path")`);
-        }
-      }
+      const declaredRoutes = validateRoutes(declared, label);
       for (const [route, handler] of declaredRoutes) {
         const parsed = parseRouteKey(route);
-        // Overlap, not literal-key, equality: the router treats a bare `/path` as any-method, so
-        // `/webhook` and `POST /webhook` clash. `GET /x` vs `POST /x` is fine.
-        const clash = Object.keys(routes).some((k) => {
-          const e = parseRouteKey(k);
+        const clash = Object.keys(routes).some((key) => {
+          const existing = parseRouteKey(key);
           return (
-            e.path === parsed.path &&
-            (e.method === undefined || parsed.method === undefined || e.method === parsed.method)
+            existing.path === parsed.path &&
+            (existing.method === undefined || parsed.method === undefined || existing.method === parsed.method)
           );
         });
         if (clash) {
@@ -119,9 +175,10 @@ export async function loadChannels(
         }
         routes[route] = handler;
       }
+      routeChannels.push(name);
     } catch (error) {
       failures.push({ label, file, message: (error as Error).message });
     }
   }
-  return { routes, collisions, failures };
+  return { routes, longConnections, routeChannels, longConnectionChannels, collisions, failures };
 }
