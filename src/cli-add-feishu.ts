@@ -13,10 +13,15 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
 import { bootstrapFeishuVerificationToken } from "./channels/feishu/bootstrap-token.ts";
-import type { FeishuSubscriptionMode } from "./channels/feishu/setup-mode.ts";
+import {
+  FEISHU_GROUP_CONTEXT_SCOPE,
+  type FeishuGroupBehavior,
+  type FeishuSubscriptionMode,
+} from "./channels/feishu/setup-mode.ts";
 import { cloudFor } from "./channels/feishu/cloud.ts";
 import {
   createFeishuApi,
+  type FeishuApi,
   isFeishuConfigApiMissing,
   isTransientFeishuRegistrationError,
 } from "./channels/feishu/feishu-api.ts";
@@ -26,6 +31,91 @@ import { parseEnvContent } from "./env.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { appendChannelDotEnv } from "./scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "./tunnel.ts";
+
+export interface GroupBehaviorSetup {
+  /** Safe to proceed to version publishing now; false means Permissions still needs manual/admin work. */
+  publishReady: boolean;
+}
+
+export async function configureGroupBehavior(input: {
+  kind: "feishu" | "lark";
+  appId: string;
+  apiBase: string;
+  api: Pick<FeishuApi, "listAppScopes" | "addAppScopes">;
+  behavior: FeishuGroupBehavior;
+  note?: (message: string) => void;
+  openUrl?: (url: string) => void;
+}): Promise<GroupBehaviorSetup> {
+  const { kind, appId, apiBase, api, behavior } = input;
+  const note = input.note ?? ((message: string) => console.error(message));
+  const openUrl = input.openUrl ?? openExternalUrl;
+  let scopes: Awaited<ReturnType<FeishuApi["listAppScopes"]>>;
+  let inspected = true;
+  try {
+    scopes = await api.listAppScopes();
+  } catch (error) {
+    note(
+      `[fastagent] warn: could not inspect ${kind} group-message permission: ${String(error)} — check Permissions & Scopes manually`,
+    );
+    inspected = false;
+    scopes = [];
+  }
+  const groupScope = scopes.find(
+    (scope) => scope.name === FEISHU_GROUP_CONTEXT_SCOPE && (scope.type === undefined || scope.type === "tenant"),
+  );
+
+  if (behavior === "mentions") {
+    if (!inspected) {
+      const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
+      note(
+        `[fastagent] mention-only scope state could not be verified — check Permissions before publishing. Opening ${permissionUrl}`,
+      );
+      openUrl(permissionUrl);
+      return { publishReady: false };
+    }
+    if (groupScope?.grantStatus === 1) {
+      const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
+      note(
+        `[fastagent] warn: mention-only was selected, but ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted — remove it before publishing a new version to restore least-privilege platform delivery. Opening ${permissionUrl}`,
+      );
+      openUrl(permissionUrl);
+      return { publishReady: false };
+    }
+    note(
+      `[fastagent] group behavior: mention-only — bare managed-thread replies and group context buffering are disabled`,
+    );
+    return { publishReady: true };
+  }
+
+  note(
+    `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
+      `FastAgent invokes @Agent + bare managed-thread replies and durably buffers other discussion`,
+  );
+  if (groupScope?.grantStatus === 1) {
+    note(`[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted`);
+    return { publishReady: true };
+  }
+  const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
+  if (groupScope) {
+    note(
+      `[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is awaiting approval — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
+    );
+    openUrl(permissionUrl);
+    return { publishReady: false };
+  }
+  try {
+    await api.addAppScopes(appId, [FEISHU_GROUP_CONTEXT_SCOPE]);
+    note(
+      `[fastagent] added ${FEISHU_GROUP_CONTEXT_SCOPE} to the app draft — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
+    );
+  } catch (error) {
+    note(
+      `[fastagent] warn: could not add ${FEISHU_GROUP_CONTEXT_SCOPE} automatically: ${String(error)} — add it manually before publishing. Opening ${permissionUrl}`,
+    );
+  }
+  openUrl(permissionUrl);
+  return { publishReady: false };
+}
 
 /**
  * Create or resume the platform app behind `add feishu` / `add lark`. Returns credentials for the
@@ -39,6 +129,7 @@ export async function onboardFeishuCloudApp(
   kind: "feishu" | "lark",
   envIgnored: boolean,
   ingress: FeishuSubscriptionMode = "webhook",
+  groupBehavior: FeishuGroupBehavior = "context",
 ): Promise<Record<string, string> | undefined> {
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
   // The CLI must never materialize a real credential into a committable file — refuse, don't warn.
@@ -57,12 +148,24 @@ export async function onboardFeishuCloudApp(
   const existing = await activeDotEnvValues(target, requiredNames);
   if (Object.keys(existing).length === requiredNames.length) {
     console.error(`[fastagent] ${requiredNames.join("/")} already set in .env — keeping them`);
-    // WebSocket still needs its console mode/publish guidance. Webhook is already fully configured.
-    if (ingress === "webhook") return undefined;
+    // WebSocket still needs its console mode/publish guidance. A complete webhook can skip the rest of
+    // onboarding, but group visibility must still be inspected/configured on every explicit re-run.
+    if (ingress === "webhook") {
+      const appId = existing[`${envPrefix}_APP_ID`] as string;
+      const appSecret = existing[`${envPrefix}_APP_SECRET`] as string;
+      await configureGroupBehavior({
+        kind,
+        appId,
+        apiBase,
+        api: createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret }),
+        behavior: groupBehavior,
+      });
+      return undefined;
+    }
   }
 
   if (capabilities.appCreation === "scan-to-create") {
-    await createFeishuAppFlow(target, existing, ingress);
+    await createFeishuAppFlow(target, existing, ingress, groupBehavior);
     return undefined;
   }
 
@@ -87,6 +190,7 @@ export async function onboardFeishuCloudApp(
     {
       existing,
       ingress,
+      groupBehavior,
       verifyCredentials: async (appId, appSecret) => {
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
@@ -124,6 +228,18 @@ export async function onboardFeishuCloudApp(
       },
     },
   );
+  await configureGroupBehavior({
+    kind: "lark",
+    appId: credentials.LARK_APP_ID,
+    apiBase,
+    api: createFeishuApi({
+      kind: "lark",
+      baseUrl: apiBase,
+      appId: credentials.LARK_APP_ID,
+      appSecret: credentials.LARK_APP_SECRET,
+    }),
+    behavior: groupBehavior,
+  });
   return Object.fromEntries(
     Object.entries(credentials).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
@@ -144,6 +260,7 @@ async function createFeishuAppFlow(
   target: string,
   existing: Readonly<Record<string, string>>,
   ingress: FeishuSubscriptionMode,
+  groupBehavior: FeishuGroupBehavior,
 ): Promise<void> {
   const { apiBase } = cloudFor("feishu");
   let appId = existing.FEISHU_APP_ID;
@@ -159,11 +276,14 @@ async function createFeishuAppFlow(
     const app = await registerFeishuApp({
       name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
       desc: "Served by fastagent",
-      // The agent template alone is not enough to SERVE: the v7 config PATCH (webhook auto-registration
-      // in `dev --tunnel` / `deploy --run`) demands application:application:patch, and the app must
-      // subscribe the receive event. Addons merge both onto the confirm page — no manual app setup.
+      // The agent template alone is not enough to SERVE: v7 config PATCHes (webhook registration and
+      // context-aware group scope setup) demand application:application:patch, and the app must subscribe
+      // the receive event. Addons merge those BASE capabilities onto the confirm page; sensitive group
+      // permission approval and version publishing remain explicit console work.
       addons: {
-        ...(ingress === "webhook" ? { scopes: { tenant: ["application:application:patch"] } } : {}),
+        ...(ingress === "webhook" || groupBehavior === "context"
+          ? { scopes: { tenant: ["application:application:patch"] } }
+          : {}),
         events: { items: { tenant: ["im.message.receive_v1"] } },
       },
       onVerificationUrl: ({ url, expiresInS }) => {
@@ -201,13 +321,28 @@ async function createFeishuAppFlow(
     );
   }
 
+  const groupSetup = await configureGroupBehavior({
+    kind: "feishu",
+    appId,
+    apiBase,
+    api: createFeishuApi({ kind: "feishu", baseUrl: apiBase, appId, appSecret }),
+    behavior: groupBehavior,
+  });
+
   if (ingress === "websocket") {
     const versionUrl = `${apiBase}/app/${appId}/version`;
-    console.error(
-      `[fastagent] WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel. ` +
-        `Choose long connection in Events & Callbacks, then CREATE + PUBLISH a version. Opening ${versionUrl}`,
-    );
-    openExternalUrl(versionUrl);
+    if (groupSetup.publishReady) {
+      console.error(
+        `[fastagent] WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel. ` +
+          `Choose long connection in Events & Callbacks, then CREATE + PUBLISH a version. Opening ${versionUrl}`,
+      );
+      openExternalUrl(versionUrl);
+    } else {
+      console.error(
+        `[fastagent] WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel. ` +
+          `Choose long connection in Events & Callbacks, finish the permission work opened above, then CREATE + PUBLISH: ${versionUrl}`,
+      );
+    }
     return;
   }
 
@@ -260,10 +395,16 @@ async function createFeishuAppFlow(
     // The bootstrap's PATCH flipped event mode in the DRAFT. It takes effect only after a version
     // publish, which has no API; later dev/deploy runs change only the Request URL immediately.
     const versionUrl = `${apiBase}/app/${appId}/version`;
-    console.error(
-      `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
-    );
-    openExternalUrl(versionUrl);
+    if (groupSetup.publishReady) {
+      console.error(
+        `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
+      );
+      openExternalUrl(versionUrl);
+    } else {
+      console.error(
+        `[fastagent] after the permission work opened above, CREATE + PUBLISH a version — the switch to webhook mode takes effect on publish: ${versionUrl}`,
+      );
+    }
   }
 }
 

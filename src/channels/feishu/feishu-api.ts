@@ -128,6 +128,12 @@ interface ApiBody {
   [k: string]: unknown;
 }
 
+export interface FeishuAppScope {
+  name: string;
+  grantStatus: number;
+  type?: "user" | "tenant";
+}
+
 /**
  * The Feishu Open API client: one instance per channel, holding the token cache. Every method rides the
  * single pipeline (module header). Throws {@link FeishuApiError} on any failure.
@@ -180,6 +186,12 @@ export interface FeishuApi {
   /** Read the app's own event-security config (the platform-generated verification token / encrypt
    *  key) — the scan-to-create flow copies these into .env so the operator never opens the console. */
   getAppConfig(appId: string): Promise<{ verificationToken?: string; encryptionKey?: string }>;
+  /** List the app's scopes and grant state. Used by onboarding/runtime to make group visibility
+   * explicit instead of silently assuming unmentioned group events are delivered. */
+  listAppScopes(): Promise<FeishuAppScope[]>;
+  /** Add tenant scopes to the app draft through application-v7 config. Approval + version publishing
+   * remain console actions; this method only removes the error-prone manual draft edit. */
+  addAppScopes(appId: string, scopeNames: string[]): Promise<void>;
   /** Update the app's own event subscription (application-v7 config PATCH — tenant token can only
    *  operate on itself; the request-URL change takes effect immediately, no version publish). The
    *  platform VERIFIES `requestUrl` with a url_verification challenge during this call, so the server
@@ -441,6 +453,31 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         verificationToken: data.data?.app?.encryption?.verification_token,
         encryptionKey: data.data?.app?.encryption?.encryption_key,
       };
+    },
+    async listAppScopes() {
+      const data = await call<
+        ApiBody & {
+          data?: { scopes?: Array<{ scope_name?: unknown; grant_status?: unknown; scope_type?: unknown }> };
+        }
+      >("listAppScopes", "GET", "/open-apis/application/v6/scopes");
+      return (data.data?.scopes ?? []).flatMap((scope): FeishuAppScope[] => {
+        if (typeof scope.scope_name !== "string" || typeof scope.grant_status !== "number") return [];
+        const type = scope.scope_type === "user" || scope.scope_type === "tenant" ? scope.scope_type : undefined;
+        return [{ name: scope.scope_name, grantStatus: scope.grant_status, type }];
+      });
+    },
+    async addAppScopes(appId, scopeNames) {
+      if (scopeNames.length === 0) return;
+      await call(
+        "addAppScopes",
+        "PATCH",
+        `/open-apis/application/v7/applications/${encodeURIComponent(appId)}/config`,
+        {
+          scope: {
+            add_scopes: scopeNames.map((scopeName) => ({ scope_name: scopeName, token_type: "tenant" })),
+          },
+        },
+      );
     },
     async updateEventSubscription(appId, cfg) {
       await call(

@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../../cli-add-feishu.ts";
-import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
+import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -27,7 +27,7 @@ import { failStartup, failUsage } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { createApp?: boolean; ingress?: string },
+  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string },
 ): Promise<void> {
   const target = resolve(dirArg);
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
@@ -56,6 +56,7 @@ export async function runAddChannel(
   const file = join(channelHome, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(channelHome, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
+  const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
     if (channelKind !== "feishu" && channelKind !== "lark") {
       failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
@@ -84,9 +85,9 @@ export async function runAddChannel(
   // generic .env write below.
   let created: Record<string, string> | undefined;
   if (channelKind === "feishu" || channelKind === "lark") {
-    created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress, groupBehavior).catch(failStartup);
   }
-  const { env, steps } = channelSetup(channelKind, ingress);
+  const { env, steps } = channelSetup(channelKind, ingress, groupBehavior);
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
@@ -195,6 +196,38 @@ async function resolveIngress(
         value: "webhook",
         label: "Webhook endpoint",
         hint: "supports scale-to-zero; requires a public HTTPS URL",
+      },
+    ],
+  });
+  if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
+  return answer;
+}
+
+async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined): Promise<FeishuGroupBehavior> {
+  if (raw !== undefined && raw !== "context" && raw !== "mentions") {
+    failUsage(`--group-behavior must be "context" or "mentions", got "${raw}"`);
+  }
+  if (kind !== "feishu" && kind !== "lark") return "context";
+  if (raw !== undefined) return raw;
+  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+    console.error(
+      `[fastagent] no interactive terminal — defaulting ${kind} group behavior to context-aware (use --group-behavior mentions for least privilege)`,
+    );
+    return "context";
+  }
+  const answer = await select<FeishuGroupBehavior>({
+    message: "Choose group-chat behavior",
+    initialValue: "context",
+    options: [
+      {
+        value: "context",
+        label: "Context-aware groups (recommended)",
+        hint: "bare managed-thread replies + buffer; im:message.group_msg delivers all group messages",
+      },
+      {
+        value: "mentions",
+        label: "Mention-only (least privilege)",
+        hint: "only explicit @Agent messages; no group-wide message permission",
       },
     ],
   });

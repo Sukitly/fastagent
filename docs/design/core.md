@@ -299,8 +299,11 @@ a stable hand-authored surface. What is platform-different:
   `im:message.group_msg`, bare user messages in those roots become normal required turns with the same
   queue, streaming-card, error, and delivery behavior as an explicit @mention. An explicit mention of
   only other people is targeted discussion instead and enters the context buffer.
-- **Group visibility is scope-gated.** The default scope delivers only @mentions. The sensitive
-  `im:message.group_msg` scope delivers all group messages. Explicit @bot turns always invoke; bare
+- **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
+  (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
+  `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
+  messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
+  approval, and reports the granted capability again at serving startup. Explicit @bot turns always invoke; bare
   human messages invoke only in `chat_id + root_id` roots from the durable ownership index. Other human
   discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only

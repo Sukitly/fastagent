@@ -29,6 +29,7 @@ import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createOwnedFeishuThreads } from "./owned-threads.ts";
+import { FEISHU_GROUP_CONTEXT_SCOPE } from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -230,6 +231,26 @@ function createFeishuRuntimeFactory(
         if (!botOpenId) log.warn(`${label} bot/v3/info returned no open_id — group @mention summon stays off`);
       },
       (e) => log.warn(`${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`),
+    );
+    void api.listAppScopes().then(
+      (scopes) => {
+        const contextAware = scopes.some(
+          (scope) =>
+            scope.name === FEISHU_GROUP_CONTEXT_SCOPE &&
+            scope.grantStatus === 1 &&
+            (scope.type === undefined || scope.type === "tenant"),
+        );
+        if (contextAware) {
+          log.info(
+            `${label} group visibility: context-aware — bare managed-thread replies + buffered discussion enabled`,
+          );
+        } else {
+          log.warn(
+            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare managed-thread replies + group context buffering are unavailable`,
+          );
+        }
+      },
+      (error) => log.warn(`${label} could not inspect group visibility: ${String(error)}`),
     );
     const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId }));
 

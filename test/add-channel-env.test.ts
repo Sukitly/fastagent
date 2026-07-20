@@ -5,17 +5,23 @@ import { describe, expect, it } from "vitest";
 import { appendChannelDotEnv, channelSetup, scaffoldChannel } from "../src/scaffold/add-channel.ts";
 
 describe("channel setup guidance", () => {
-  it("separates optional group visibility from mandatory Feishu publish", () => {
+  it("puts recommended context-aware permission approval before publishing and explains mention-only degradation", () => {
     for (const kind of ["feishu", "lark"] as const) {
-      const steps = channelSetup(kind).steps;
-      const optionalScope = steps.find((step) => step.includes("im:message.group_msg"));
-      expect(optionalScope).toContain("optional before publishing");
-      expect(optionalScope).not.toContain("PUBLISH");
-    }
+      for (const ingress of ["webhook", "websocket"] as const) {
+        const contextSteps = channelSetup(kind, ingress, "context").steps;
+        const scopeIndex = contextSteps.findIndex((step) => step.includes("im:message.group_msg"));
+        const publishIndex = contextSteps.findIndex((step, index) => index > scopeIndex && /publish/i.test(step));
+        expect(scopeIndex).toBeGreaterThanOrEqual(0);
+        expect(publishIndex).toBeGreaterThan(scopeIndex);
+        expect(contextSteps[scopeIndex]).toContain("all group messages");
+        expect(contextSteps[scopeIndex]).not.toContain("optional");
 
-    const publish = channelSetup("feishu").steps.find((step) => step.startsWith("PUBLISH"));
-    expect(publish).toContain("switch to webhook mode takes effect on publish");
-    expect(publish).not.toContain("im:message.group_msg");
+        const mentionSteps = channelSetup(kind, ingress, "mentions").steps;
+        expect(mentionSteps.join("\n")).toContain("mention-only");
+        expect(mentionSteps.join("\n")).toContain("bare managed-thread replies");
+        expect(mentionSteps.join("\n")).toContain("disabled");
+      }
+    }
   });
 
   it("WebSocket setup needs only App ID/Secret and writes the WebSocket factory into the scaffold", async () => {

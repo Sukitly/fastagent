@@ -39,11 +39,19 @@ fastagent add feishu   # interactive ingress choice + scan-to-create
 fastagent add lark     # interactive ingress choice + guided console setup
 
 # Non-interactive / explicit:
-fastagent add feishu --ingress websocket
-fastagent add lark --ingress webhook
+fastagent add feishu --ingress websocket --group-behavior context
+fastagent add lark --ingress webhook --group-behavior mentions
 ```
 
-The choice is persisted in `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding `*WebSocketChannel` factory):
+Onboarding also asks for group behavior. **Context-aware groups (recommended)** is selected first: bare
+human replies in Agent-managed threads invoke the Agent, while other unsummoned group discussion is
+durably buffered for the next `@Agent` turn. It requires the tenant-admin-approved
+`im:message.group_msg` scope, which makes the platform deliver all group messages to the app.
+**Mention-only (least privilege)** skips that scope; users must @Agent on every group turn, and neither
+managed-thread bare replies nor background buffering is available. This choice configures the remote
+App's visibility; it does not add a second runtime routing mode.
+
+The ingress choice is persisted in `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding `*WebSocketChannel` factory):
 
 | | WebSocket | Webhook |
 |---|---|---|
@@ -59,12 +67,15 @@ and production intentionally use different modes.
 
 Onboarding diverges by cloud on purpose: Feishu supports CLI app creation (scan-to-create), while Lark's
 bound confirmation flow is broken and therefore uses the unbound launcher plus guided credential input.
-Within either cloud, ingress determines the remaining work. WebSocket stops after validating/persisting
-the App ID/Secret pair and opens Events & Callbacks so the user can select long connection and publish.
+Within either cloud, ingress determines the remaining work. WebSocket's runtime credential set stops at
+the validated/persisted App ID/Secret pair; onboarding continues through group-permission guidance and
+opens Events & Callbacks so the user can select long connection and publish.
 Webhook continues through the existing temporary-tunnel challenge to capture the Verification Token and
-configure the Request URL; Lark's missing config API falls back to an explicit manual Token/mode/URL
-step. Re-running a partial setup reuses the complete App ID/Secret pair rather than creating or attaching
-a different app.
+configure the Request URL. For recommended context-aware groups, onboarding inspects the App's scopes,
+adds `im:message.group_msg` to the draft through the application-config API when supported, and opens
+Permissions for approval before publish. Lark's missing config API falls back to explicit manual
+permission/Token/mode/URL steps. Re-running a partial setup reuses the complete App ID/Secret pair rather
+than creating or attaching a different app.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -81,20 +92,22 @@ It also appends the required env vars to `.env.example` when possible.
 device-authorization grant) as its default behavior. The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
-pre-configured—and adds `im.message.receive_v1`. Webhook onboarding additionally requests
-`application:application:patch`. The CLI immediately persists App ID/Secret to the gitignored `.env`
-before starting later network work.
+pre-configured—and adds `im.message.receive_v1`. Onboarding requests
+`application:application:patch` when it must configure webhook mode or the recommended group-context
+scope. The CLI immediately persists App ID/Secret to the gitignored `.env` before starting later network
+work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
 generated Verification Token has no read API; its only programmatic delivery is the `url_verification`
 challenge, so the CLI captures it through a throwaway tunnel and persists it as a second stage. If that
 stage is interrupted, re-running resumes Token capture for the same App rather than minting another.
 
-One console action remains: **create + publish a version**. Before publishing, optionally add the
-sensitive `im:message.group_msg` permission for buffered group context and bare managed-thread
-continuations. WebSocket keeps the template's long-connection mode; webhook flips it and registers a
-Request URL. Mode changes take effect only after publish, while later webhook URL changes apply
-immediately. Version publishing has no open API.
+Console completion remains: for context-aware groups, approve the sensitive `im:message.group_msg`
+request first; then **create + publish a version**. The CLI adds the scope to the draft when the control
+plane supports it and opens the Permissions page; a visible manual fallback handles unsupported Lark
+config APIs. WebSocket keeps the template's long-connection mode; webhook flips it and registers a
+Request URL. Mode and scope changes take effect only after publish, while later webhook URL changes apply
+immediately. Version publishing and tenant-admin approval have no general automatic completion path.
 
 ## Configure the app by hand (developer console)
 
@@ -332,8 +345,9 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 - The official SDK currently carries event subscriptions over long connection; callback subscriptions
   are not part of this FastAgent ingress. Card streaming remains outbound HTTP and is unaffected.
 - Subscription mode and `im:message.group_msg` cannot travel as arbitrary sensitive creation-link
-  config, and version publishing has no open API. Configure the chosen mode/permission, then publish on
-  the page the CLI opens.
+  config. Feishu onboarding therefore adds the chosen scope to the post-creation app draft through the
+  application-config API; Lark falls back to a manual console step when that API is unavailable.
+  Tenant-admin approval and version publishing remain console actions.
 - Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
   ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
