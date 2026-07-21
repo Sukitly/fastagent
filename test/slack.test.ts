@@ -269,10 +269,10 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(JSON.parse(String(post?.[1]?.body))).not.toHaveProperty("thread_ts");
   });
 
-  it("folds unsummoned group context, owns the summoned thread, and dedups logical messages", async () => {
+  it("defaults to context-aware groups, owns the summoned thread, and dedups logical messages", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve)); // auth.test resolves bot identity
 
     await handler(signedRequest(message("1.0", { text: "the deploy is broken" })));
@@ -346,10 +346,10 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(streams[0]).toMatchObject({ thread_ts: "21.0", recipient_user_id: "U1", recipient_team_id: "T1" });
   });
 
-  it("defaults to least-privilege mention-only mode without buffering group traffic", async () => {
+  it("keeps mention-only mode available explicitly without buffering group traffic", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
     await new Promise((resolve) => setImmediate(resolve));
 
     await handler(signedRequest(message("1.0", { text: "background" })));

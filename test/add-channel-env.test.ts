@@ -38,20 +38,20 @@ describe("channel setup guidance", () => {
     expect(context.steps.join("\n")).toContain("message.channels");
 
     const mentions = channelSetup("slack", "webhook", "mentions");
-    expect(channelSetup("slack").steps).toEqual(mentions.steps);
+    expect(channelSetup("slack").steps).toEqual(context.steps);
     expect(mentions.steps.join("\n")).toContain("mention-only");
     expect(mentions.steps.join("\n")).not.toContain("message.channels");
 
     const dir = await mkdtemp(join(tmpdir(), "fa-slack-scaffold-"));
-    await scaffoldChannel(dir, "slack", { groupBehavior: "mentions" });
+    await scaffoldChannel(dir, "slack");
     const source = await readFile(join(dir, "channels", "slack.ts"), "utf8");
-    expect(source).toContain('groupBehavior: "mentions"');
+    expect(source).toContain('groupBehavior: "context"');
     expect(source).toContain('rendering: "native"');
     expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("files.completeUploadExternal");
 
-    const contextDir = await mkdtemp(join(tmpdir(), "fa-slack-context-scaffold-"));
-    await scaffoldChannel(contextDir, "slack", { groupBehavior: "context" });
-    expect(await readFile(join(contextDir, "channels", "slack.ts"), "utf8")).toContain('groupBehavior: "context"');
+    const mentionsDir = await mkdtemp(join(tmpdir(), "fa-slack-mentions-scaffold-"));
+    await scaffoldChannel(mentionsDir, "slack", { groupBehavior: "mentions" });
+    expect(await readFile(join(mentionsDir, "channels", "slack.ts"), "utf8")).toContain('groupBehavior: "mentions"');
   });
 
   it("WebSocket setup needs only App ID/Secret and writes the WebSocket factory into the scaffold", async () => {

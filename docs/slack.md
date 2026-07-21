@@ -18,8 +18,8 @@ Choose one group behavior:
 
 | Mode | Group behavior | Additional access |
 |---|---|---|
-| `mentions` (default) | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
-| `context` | Explicit mentions, bare replies in Agent-owned threads, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
+| `context` (default) | Explicit mentions, bare replies in Agent-owned threads, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
+| `mentions` | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
 
 The command creates:
 
@@ -109,7 +109,7 @@ export default slackChannel({
   tokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
-  groupBehavior: "mentions", // least privilege; opt into "context" deliberately
+  groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
   // aiDisclaimer: false, // successful replies include a short AI-accuracy footer by default
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:

@@ -105,8 +105,8 @@ export interface SlackChannelOptions {
    * own session/thread; `continuous` keeps one session for channel-top-level turns while preserving
    * existing Slack threads as separate root sessions. */
   groupMessageSession?: "continuous" | "threaded";
-  /** `mentions` (default, least privilege) answers only app_mention plus DMs. `context` additionally
-   * admits bare replies in managed group threads and buffers unsummoned group discussion. */
+  /** `context` (default) admits bare replies in managed group threads and buffers unsummoned group
+   * discussion. `mentions` answers only app_mention plus DMs for an explicit least-privilege setup. */
   groupBehavior?: "context" | "mentions";
   /** `native` (default) uses Slack Agent streams/tasks for threaded replies. `classic` retains the
    * compatibility renderer based on one rate-limited edited message. A top-level target selected by an
@@ -150,7 +150,7 @@ export function slackChannel({
   tokenExpiresAt,
   directMessageSession = "threaded",
   groupMessageSession = "threaded",
-  groupBehavior = "mentions",
+  groupBehavior = "context",
   rendering = "native",
   aiDisclaimer,
   route,

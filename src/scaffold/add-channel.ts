@@ -182,7 +182,7 @@ export function channelSetup(
   ingress: FeishuSubscriptionMode = "webhook",
   groupBehavior?: FeishuGroupBehavior,
 ): { env: ChannelEnv[]; steps: string[] } {
-  const behavior = groupBehavior ?? (kind === "slack" ? "mentions" : "context");
+  const behavior = groupBehavior ?? "context";
   const setup =
     ingress === "websocket" && (kind === "feishu" || kind === "lark")
       ? WEBSOCKET_SETUPS[kind]
@@ -397,8 +397,8 @@ export async function scaffoldChannel(
           .join("\n");
         content = configured;
       }
-      if (kind === "slack" && options.groupBehavior === "context") {
-        const configured = content.replace('groupBehavior: "mentions"', 'groupBehavior: "context"');
+      if (kind === "slack" && options.groupBehavior === "mentions") {
+        const configured = content.replace('groupBehavior: "context"', 'groupBehavior: "mentions"');
         if (configured === content) throw new Error("slack channel template has no groupBehavior anchor");
         content = configured;
       }
