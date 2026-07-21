@@ -346,7 +346,11 @@ describe("Slack Request URL registration", () => {
       const body = JSON.parse(String(init?.body)) as { app_id: string; manifest: string };
       expect(body.app_id).toBe("A1");
       expect(JSON.parse(body.manifest)).toMatchObject({
-        settings: { event_subscriptions: { request_url: "https://agent.test/slack" } },
+        oauth_config: { redirect_urls: ["https://agent.test/slack/oauth/callback"] },
+        settings: {
+          event_subscriptions: { request_url: "https://agent.test/slack" },
+          token_rotation_enabled: true,
+        },
       });
       return Response.json({ ok: true });
     });

@@ -18,6 +18,7 @@ export async function registerSlackWebhook(
   options: RegisterSlackWebhookOptions,
 ): Promise<RegistrationOutcome> {
   const note = options.log ?? ((message: string) => console.error(message));
+  const publicBaseUrl = baseUrl.replace(/\/$/, "");
   let state: Awaited<ReturnType<typeof readSlackOnboardingState>>;
   try {
     state = await readSlackOnboardingState(options.stateRoot);
@@ -27,13 +28,13 @@ export async function registerSlackWebhook(
   }
   if (!state?.appId || !state.installedAt) {
     note(
-      `[fastagent] slack: no completed local onboarding state — set Event Subscriptions → Request URL = ${baseUrl}/slack manually, or re-run \`fastagent add slack\` interactively`,
+      `[fastagent] slack: no completed local onboarding state — set Event Subscriptions → Request URL = ${publicBaseUrl}/slack manually, or re-run \`fastagent add slack\` interactively`,
     );
     return "manual";
   }
-  const healthy = await waitForHealth(`${baseUrl}/health`, options.healthTimeoutMs ?? 45_000, 500);
+  const healthy = await waitForHealth(`${publicBaseUrl}/health`, options.healthTimeoutMs ?? 45_000, 500);
   if (!healthy) {
-    note(`[fastagent] slack: ${baseUrl}/health did not become reachable; Request URL was not changed`);
+    note(`[fastagent] slack: ${publicBaseUrl}/health did not become reachable; Request URL was not changed`);
     return "failed";
   }
   try {
@@ -47,16 +48,19 @@ export async function registerSlackWebhook(
       buildSlackManifest({
         name: current.state.appName,
         groupBehavior: current.state.groupBehavior,
-        requestUrl: `${baseUrl}/slack`,
+        requestUrl: `${publicBaseUrl}/slack`,
+        // Token-rotation manifests require at least one OAuth redirect URL even after installation.
+        // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
+        redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
       }),
       { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
     );
-    note(`[fastagent] slack: Event Subscriptions Request URL registered → ${baseUrl}/slack`);
+    note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
     return "registered";
   } catch (error) {
     note(
       `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
-        `re-run \`fastagent add slack\` to repair onboarding, or set ${baseUrl}/slack in the Slack console`,
+        `re-run \`fastagent add slack\` to repair onboarding, or set ${publicBaseUrl}/slack in the Slack console`,
     );
     return "failed";
   }
