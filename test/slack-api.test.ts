@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chunkSlackText, createSlackApi } from "../src/channels/slack/slack-api.ts";
+import { chunkSlackMarkdown, chunkSlackText, createSlackApi } from "../src/channels/slack/slack-api.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -44,6 +44,60 @@ describe("Slack Web API transport", () => {
     expect(init).toMatchObject({ method: "GET" });
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer xoxb-secret");
     expect(init?.body).toBeUndefined();
+  });
+
+  it("uses standard Markdown and Slack's native Agent stream protocol", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const method = String(input).split("/").pop();
+      return Response.json({
+        ok: true,
+        ...(method === "chat.startStream" || method === "chat.postMessage" ? { ts: "1.0" } : {}),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+    const target = {
+      channelId: "C1",
+      threadTs: "9.0",
+      recipientUserId: "U1",
+      recipientTeamId: "T1",
+    };
+
+    await expect(api.postMarkdown(target, "**bold**")).resolves.toBe("1.0");
+    const streamTs = await api.startStream(target, { markdownText: "# Answer" });
+    await api.appendStream("C1", streamTs, {
+      chunks: [{ type: "task_update", id: "tool-1", title: "search", status: "in_progress" }],
+    });
+    await api.stopStream("C1", streamTs);
+    await api.setThreadStatus(target, "is working…");
+    await api.setThreadTitle(target, "A useful title");
+
+    const calls = fetchMock.mock.calls.map(([input, init]) => ({
+      method: String(input).split("/").pop(),
+      body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+    }));
+    expect(calls[0]).toMatchObject({
+      method: "chat.postMessage",
+      body: { markdown_text: "**bold**", thread_ts: "9.0" },
+    });
+    expect(calls[1]).toMatchObject({
+      method: "chat.startStream",
+      body: {
+        markdown_text: "# Answer",
+        thread_ts: "9.0",
+        recipient_user_id: "U1",
+        recipient_team_id: "T1",
+        task_display_mode: "dense",
+      },
+    });
+    expect(calls.map((call) => call.method)).toEqual([
+      "chat.postMessage",
+      "chat.startStream",
+      "chat.appendStream",
+      "chat.stopStream",
+      "assistant.threads.setStatus",
+      "assistant.threads.setTitle",
+    ]);
   });
 
   it("honours Retry-After for 429 and then succeeds", async () => {
@@ -113,6 +167,16 @@ describe("Slack Web API transport", () => {
 describe("Slack text splitting", () => {
   it("preserves Unicode code points and prefers newline boundaries", () => {
     expect(chunkSlackText("😀😀😀", 2)).toEqual(["😀😀", "😀"]);
-    expect(chunkSlackText("abc\ndef", 5)).toEqual(["abc", "def"]);
+    expect(chunkSlackText("abc\ndef", 5)).toEqual(["abc\n", "def"]);
+    expect(chunkSlackText("abc\ndef", 5).join("")).toBe("abc\ndef");
+  });
+
+  it("balances fenced code blocks when standard Markdown continues in another message", () => {
+    const markdown = `Before\n\n\`\`\`ts\n${"const value = 1;\n".repeat(40)}\`\`\`\n\nAfter`;
+    const chunks = chunkSlackMarkdown(markdown, 300);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => Array.from(chunk).length <= 300)).toBe(true);
+    expect(chunks.every((chunk) => (chunk.match(/```/g)?.length ?? 0) % 2 === 0)).toBe(true);
+    expect(chunks.join("\n")).toContain("After");
   });
 });

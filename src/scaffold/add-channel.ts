@@ -64,12 +64,28 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
   slack: {
     env: [
-      { name: "SLACK_BOT_TOKEN", hint: "Slack app → OAuth & Permissions → Bot User OAuth Token", required: true },
+      { name: "SLACK_BOT_TOKEN", hint: "Slack app → rotating Bot User OAuth access token", required: true },
+      {
+        name: "SLACK_BOT_REFRESH_TOKEN",
+        hint: "Slack OAuth bot refresh token (required when token rotation is enabled)",
+        required: false,
+      },
+      {
+        name: "SLACK_BOT_TOKEN_EXPIRES_AT",
+        hint: "Slack rotating bot access-token expiry (epoch milliseconds)",
+        required: false,
+      },
+      { name: "SLACK_CLIENT_ID", hint: "Slack app OAuth client ID (for bot-token rotation)", required: false },
+      {
+        name: "SLACK_CLIENT_SECRET",
+        hint: "Slack app OAuth client secret (for bot-token rotation)",
+        required: false,
+      },
       { name: "SLACK_SIGNING_SECRET", hint: "Slack app → Basic Information → App Credentials", required: true },
     ],
     steps: [
-      "Slack Bot Token Scopes: app_mentions:read, chat:write, im:history, files:read, files:write, channels:history, groups:history, mpim:history",
-      "subscribe app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack (Slack verifies it with a challenge)",
+      "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write, channels:history, groups:history, mpim:history",
+      "enable Agents (agent_view) and token rotation; subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
       "reinstall the app after changing scopes, then invite it to each channel it should read",
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
     ],
@@ -164,13 +180,14 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
 export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
-  groupBehavior: FeishuGroupBehavior = "context",
+  groupBehavior?: FeishuGroupBehavior,
 ): { env: ChannelEnv[]; steps: string[] } {
+  const behavior = groupBehavior ?? (kind === "slack" ? "mentions" : "context");
   const setup =
     ingress === "websocket" && (kind === "feishu" || kind === "lark")
       ? WEBSOCKET_SETUPS[kind]
       : CHANNEL_SCAFFOLDS[kind];
-  if ((kind === "feishu" || kind === "lark") && groupBehavior === "mentions") {
+  if ((kind === "feishu" || kind === "lark") && behavior === "mentions") {
     return {
       env: setup.env,
       steps: setup.steps.map((step) =>
@@ -180,12 +197,12 @@ export function channelSetup(
       ),
     };
   }
-  if (kind === "slack" && groupBehavior === "mentions") {
+  if (kind === "slack" && behavior === "mentions") {
     return {
       env: setup.env,
       steps: [
-        "Slack Bot Token Scopes: app_mentions:read, chat:write, im:history, files:read, files:write (no channel/group/mpim history scopes)",
-        "subscribe only app_mention and message.im; set Request URL to <public-url>/slack",
+        "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write (no channel/group/mpim history scopes)",
+        "enable Agents (agent_view) and token rotation; subscribe app_home_opened, app_context_changed, app_mention, and message.im; set Request URL to <public-url>/slack",
         "group behavior: mention-only — bare managed-thread replies and unsummoned group context remain disabled",
         ...setup.steps.slice(2),
       ],
@@ -380,8 +397,8 @@ export async function scaffoldChannel(
           .join("\n");
         content = configured;
       }
-      if (kind === "slack" && options.groupBehavior === "mentions") {
-        const configured = content.replace('groupBehavior: "context"', 'groupBehavior: "mentions"');
+      if (kind === "slack" && options.groupBehavior === "context") {
+        const configured = content.replace('groupBehavior: "mentions"', 'groupBehavior: "context"');
         if (configured === content) throw new Error("slack channel template has no groupBehavior anchor");
         content = configured;
       }

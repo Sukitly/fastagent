@@ -28,6 +28,7 @@ export function slackTeamId(envelope: SlackEventEnvelope): string | undefined {
     envelope.team_id ??
     envelope.event?.team ??
     envelope.authorizations?.find((authorization) => authorization.team_id)?.team_id ??
+    envelope.context_team_id ??
     envelope.enterprise_id ??
     envelope.authorizations?.find((authorization) => authorization.enterprise_id)?.enterprise_id
   );
@@ -75,8 +76,18 @@ export function slackEnvelope(envelope: SlackEventEnvelope): string {
   ]
     .filter(Boolean)
     .join(", ");
+  const activeContext = (event.app_context?.entities ?? [])
+    .filter((entity) => entity.type && entity.value)
+    .slice(0, 5)
+    .map(
+      (entity) =>
+        `${codePointPrefix(String(entity.type).replace(/\s+/g, " "), 80)}=` +
+        codePointPrefix(String(entity.value).replace(/\s+/g, " "), 200),
+    )
+    .join(", ");
   const scope = direct ? "" : "\n[group chat — multiple people; recent discussion is sender-prefixed]";
-  return `[slack: ${meta}]${scope}\n${slackMessageText(event)}`;
+  const context = activeContext ? `\n[Slack context currently open for the user: ${activeContext}]` : "";
+  return `[slack: ${meta}]${scope}${context}\n${slackMessageText(event)}`;
 }
 
 /** Default explicit-summon policy: DMs and app_mention events only. */

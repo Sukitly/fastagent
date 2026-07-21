@@ -54,9 +54,14 @@ export async function onboardSlackInternalApp(input: {
         if (error.code === "ENOENT") return new Map<string, string>();
         throw error;
       });
-    const missingRuntime = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"].filter(
-      (name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""),
-    );
+    const missingRuntime = [
+      "SLACK_BOT_TOKEN",
+      "SLACK_BOT_REFRESH_TOKEN",
+      "SLACK_BOT_TOKEN_EXPIRES_AT",
+      "SLACK_CLIENT_ID",
+      "SLACK_CLIENT_SECRET",
+      "SLACK_SIGNING_SECRET",
+    ].filter((name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""));
     if (missingRuntime.length > 0) {
       throw new Error(
         `Slack app ${state.appId ?? "(unknown)"} is installed but .env is missing ${missingRuntime.join(", ")} — ` +
@@ -178,9 +183,20 @@ export async function onboardSlackInternalApp(input: {
         note: (message) => clackLog.info(message),
         openUrl: openExternalUrl,
         waitForOAuth: () => server.waitForOAuth(),
-        writeRuntimeSecrets: async ({ botToken, signingSecret }) => {
+        writeRuntimeSecrets: async ({
+          botToken,
+          botRefreshToken,
+          botTokenExpiresAt,
+          clientId,
+          clientSecret,
+          signingSecret,
+        }) => {
           const values = {
             ...(botToken ? { SLACK_BOT_TOKEN: botToken } : {}),
+            ...(botRefreshToken ? { SLACK_BOT_REFRESH_TOKEN: botRefreshToken } : {}),
+            ...(botTokenExpiresAt ? { SLACK_BOT_TOKEN_EXPIRES_AT: String(botTokenExpiresAt) } : {}),
+            ...(clientId ? { SLACK_CLIENT_ID: clientId } : {}),
+            ...(clientSecret ? { SLACK_CLIENT_SECRET: clientSecret } : {}),
             ...(signingSecret ? { SLACK_SIGNING_SECRET: signingSecret } : {}),
           };
           if (Object.keys(values).length > 0) {
@@ -189,7 +205,7 @@ export async function onboardSlackInternalApp(input: {
         },
       },
     );
-    console.error("[fastagent] Slack app installed; Bot Token and Signing Secret written to .env");
+    console.error("[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to .env");
     console.error(
       `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
         "replace the temporary Events API URL automatically",

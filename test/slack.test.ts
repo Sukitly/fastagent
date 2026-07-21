@@ -34,7 +34,9 @@ function okFetch() {
   return vi.fn(async (input: string | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
-    if (url.endsWith("/chat.postMessage")) return Response.json({ ok: true, ts: String(ts++) });
+    if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
+      return Response.json({ ok: true, ts: String(ts++) });
+    }
     return Response.json({ ok: true });
   });
 }
@@ -94,6 +96,7 @@ function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}
     teamId: "T1",
     channelId: "C1",
     threadTs: "1.0",
+    requesterUserId: "U1",
     fileIds: [],
     attempts: 0,
     ...extra,
@@ -135,7 +138,7 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("rejects an invalid group session policy at construction", () => {
+  it("rejects invalid session and rendering policies at construction", () => {
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -143,6 +146,25 @@ describe("Slack signed ingress", () => {
         groupMessageSession: "invalid" as "threaded",
       }),
     ).toThrow(/groupMessageSession/);
+    expect(() =>
+      slackChannel({
+        botToken: "xoxb-test",
+        signingSecret: SECRET,
+        rendering: "invalid" as "native",
+      }),
+    ).toThrow(/rendering/);
+  });
+
+  it("refuses to ACK work when auth.test proves the bot token is unusable", async () => {
+    vi.stubGlobal("fetch", async () => Response.json({ ok: false, error: "invalid_auth" }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent);
+
+    const response = await handler(signedRequest(message("0.5", { type: "app_mention" })));
+
+    expect(response.status).toBe(503);
+    expect(calls).toHaveLength(0);
   });
 
   it("answers Slack's signed URL verification challenge and rejects a forged request", async () => {
@@ -169,10 +191,68 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls[0]?.scope.session).toBe("slack:T1:D1:1.0");
     expect(calls[0]?.prompt.text).toContain("[slack: team T1, channel D1 (direct)");
     const methods = fetchMock.mock.calls.map(([url]) => String(url).split("/").pop());
-    expect(methods).toContain("chat.postMessage");
-    expect(methods).toContain("chat.update");
-    const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.postMessage"));
-    expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ channel: "D1", thread_ts: "1.0" });
+    expect(methods).toContain("assistant.threads.setStatus");
+    expect(methods).toContain("assistant.threads.setTitle");
+    expect(methods).toContain("chat.startStream");
+    expect(methods).toContain("chat.stopStream");
+    const start = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.startStream"));
+    expect(JSON.parse(String(start?.[1]?.body))).toMatchObject({
+      channel: "D1",
+      thread_ts: "1.0",
+      markdown_text: expect.stringContaining("hello back"),
+      task_display_mode: "dense",
+    });
+    expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).toContain("AI-generated content");
+  });
+
+  it("renders safe native task updates without exposing reasoning or tool arguments", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    let prompt: Prompt | undefined;
+    const agent: Agent = {
+      async *invoke(_scope, value): AsyncIterable<AgentEvent> {
+        prompt = value;
+        yield { type: "thinking", delta: "private chain of thought: launch-code" };
+        yield { type: "tool_started", id: "t1", name: "search", args: { token: "tool-secret" } };
+        yield { type: "tool_ended", id: "t1", isError: false, content: { result: "internal" } };
+        yield { type: "text", delta: "# Safe answer\n\n**Done.** Do not ping <!channel>." };
+        yield { type: "completed" };
+      },
+    };
+    const { handler } = mount(agent);
+    await handler(
+      signedRequest(
+        message("1.5", {
+          channel: "D1",
+          channel_type: "im",
+          text: "run safely",
+          app_context: { entities: [{ type: "slack#/types/channel_id", value: "C99", team_id: "T1" }] },
+        }),
+      ),
+    );
+    await settle();
+
+    expect(prompt?.text).toContain("slack#/types/channel_id=C99");
+    expect(prompt?.text).toContain("Format your reply as standard Markdown");
+    const outbound = fetchMock.mock.calls
+      .filter(([input]) => !String(input).endsWith("/auth.test"))
+      .map(([, init]) => String(init?.body))
+      .join("\n");
+    expect(outbound).not.toContain("launch-code");
+    expect(outbound).not.toContain("tool-secret");
+    expect(outbound).not.toContain("<!channel>");
+    expect(outbound).toContain("&lt;!channel>");
+    expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({
+      chunks: [{ type: "task_update", id: "t1", title: "search", status: "in_progress" }],
+    });
+    expect(slackBodies(fetchMock, "chat.appendStream")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          chunks: [{ type: "task_update", id: "t1", title: "search", status: "complete" }],
+        }),
+        expect.objectContaining({ markdown_text: expect.stringContaining("# Safe answer") }),
+      ]),
+    );
   });
 
   it("keeps one linear DM session when continuous mode is explicitly selected", async () => {
@@ -185,6 +265,7 @@ describe("Slack sessions, context, and managed threads", () => {
 
     expect(calls[0]?.scope.session).toBe("slack:T1:D1");
     const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.postMessage"));
+    expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ markdown_text: expect.stringContaining("done") });
     expect(JSON.parse(String(post?.[1]?.body))).not.toHaveProperty("thread_ts");
   });
 
@@ -261,13 +342,14 @@ describe("Slack sessions, context, and managed threads", () => {
       .filter(([url]) => String(url).endsWith("/chat.postMessage"))
       .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
     expect(posts[0]).not.toHaveProperty("thread_ts");
-    expect(posts[1]).toMatchObject({ thread_ts: "21.0" });
+    const streams = slackBodies(fetchMock, "chat.startStream");
+    expect(streams[0]).toMatchObject({ thread_ts: "21.0", recipient_user_id: "U1", recipient_team_id: "T1" });
   });
 
-  it("mention-only mode neither buffers group traffic nor admits bare thread replies", async () => {
+  it("defaults to least-privilege mention-only mode without buffering group traffic", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     await handler(signedRequest(message("1.0", { text: "background" })));

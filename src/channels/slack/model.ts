@@ -16,6 +16,12 @@ export interface SlackFile {
   url_private_download?: string;
 }
 
+export interface SlackAppContextEntity {
+  type?: string;
+  value?: string;
+  team_id?: string;
+}
+
 export interface SlackMessageEvent {
   type?: string;
   subtype?: string;
@@ -30,12 +36,15 @@ export interface SlackMessageEvent {
   channel_type?: string;
   team?: string;
   files?: SlackFile[];
+  /** Included on message.im when the Agent messaging experience is enabled. */
+  app_context?: { entities?: SlackAppContextEntity[] };
 }
 
 export interface SlackEventEnvelope {
   type?: string;
   challenge?: string;
   team_id?: string;
+  context_team_id?: string;
   enterprise_id?: string;
   api_app_id?: string;
   event_id?: string;

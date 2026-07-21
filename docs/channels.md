@@ -149,7 +149,15 @@ import { slackChannel } from "@fastagent-sh/fastagent/slack";
 export default slackChannel({
   botToken: process.env.SLACK_BOT_TOKEN ?? "",
   signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  groupBehavior: "context", // or "mentions" for least privilege
+  botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
+  clientId: process.env.SLACK_CLIENT_ID || undefined,
+  clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
+  tokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
+    ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
+    : undefined,
+  groupBehavior: "mentions", // least privilege; opt into "context" deliberately
+  rendering: "native", // Slack Agent streams/tasks; "classic" for compatibility
+  // aiDisclaimer: false, // successful replies include a short AI-accuracy footer by default
   // Direct/group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",

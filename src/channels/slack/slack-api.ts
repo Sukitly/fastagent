@@ -11,11 +11,30 @@ const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
 const MAX_REDIRECTS = 3;
-export const SLACK_MAX_TEXT = 39_000;
+/** Slack's standard-Markdown fields cap each call at 12,000 characters. Keep headroom for
+ * code-fence balancing and future server-side transformations. */
+export const SLACK_MAX_MARKDOWN = 10_000;
 
 export interface SlackTarget {
   channelId: string;
   threadTs?: string;
+  /** Required by Slack when a native stream replies in a channel rather than a DM. */
+  recipientUserId?: string;
+  recipientTeamId?: string;
+}
+
+export interface SlackTaskUpdateChunk {
+  type: "task_update";
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "complete" | "error";
+}
+
+export type SlackStreamChunk = SlackTaskUpdateChunk;
+
+export interface SlackStreamContent {
+  markdownText?: string;
+  chunks?: SlackStreamChunk[];
 }
 
 export interface DownloadedSlackFile {
@@ -33,7 +52,7 @@ interface SlackBody {
   [key: string]: unknown;
 }
 
-class SlackApiError extends Error {
+export class SlackApiError extends Error {
   readonly method: string;
   readonly status: number;
   readonly slackError?: string;
@@ -50,26 +69,48 @@ class SlackApiError extends Error {
   }
 }
 
+const NATIVE_UNAVAILABLE_ERRORS = new Set([
+  "channel_type_not_supported",
+  "messages_tab_disabled",
+  "method_deprecated",
+  "missing_scope",
+  "no_permission",
+  "not_allowed_token_type",
+]);
+
+/** A definitive capability rejection is safe to route through the compatibility renderer. Network,
+ * internal, and timeout failures are ambiguous: Slack may already have created the stream. */
+export function isSlackNativeUnavailable(error: unknown): boolean {
+  return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
+}
+
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface SlackApiOptions {
-  botToken: string;
+  botToken: string | (() => Promise<string>);
   baseUrl?: string;
 }
 
 export interface SlackApi {
   authTest(): Promise<{ teamId?: string; userId?: string; botId?: string }>;
   postMessage(target: SlackTarget, text: string): Promise<string>;
+  postMarkdown(target: SlackTarget, markdown: string): Promise<string>;
   updateMessage(channelId: string, ts: string, text: string): Promise<void>;
+  updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
-  sendText(target: SlackTarget, text: string): Promise<string | undefined>;
+  sendMarkdown(target: SlackTarget, markdown: string): Promise<string | undefined>;
+  startStream(target: SlackTarget, content?: SlackStreamContent): Promise<string>;
+  appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
+  stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
+  setThreadStatus(target: SlackTarget, status: string): Promise<void>;
+  setThreadTitle(target: SlackTarget, title: string): Promise<void>;
   fileInfo(fileId: string): Promise<SlackFile>;
   fetchImage(file: SlackFile): Promise<ImageRef>;
   fetchFile(file: SlackFile, channelId: string, filesDir: string): Promise<DownloadedSlackFile>;
 }
 
-/** Split at Slack's practical message cap, preserving code points and preferring a newline. */
-export function chunkSlackText(text: string, maxPoints = SLACK_MAX_TEXT): string[] {
+/** Split a Slack text/Markdown field at a code-point-safe boundary, preferring a newline. */
+export function chunkSlackText(text: string, maxPoints = SLACK_MAX_MARKDOWN): string[] {
   if (!Number.isSafeInteger(maxPoints) || maxPoints <= 0) throw new RangeError("maxPoints must be a positive integer");
   const points = Array.from(text);
   if (points.length <= maxPoints) return [text];
@@ -79,14 +120,46 @@ export function chunkSlackText(text: string, maxPoints = SLACK_MAX_TEXT): string
     let end = Math.min(points.length, offset + maxPoints);
     if (end < points.length) {
       const window = points.slice(offset, end).join("");
+      const paragraph = window.lastIndexOf("\n\n");
       const newline = window.lastIndexOf("\n");
-      if (newline > 0) end = offset + Array.from(window.slice(0, newline)).length;
+      const boundary = paragraph >= 0 ? paragraph + 2 : newline >= 0 ? newline + 1 : -1;
+      if (boundary > 0) end = offset + Array.from(window.slice(0, boundary)).length;
     }
     chunks.push(points.slice(offset, end).join(""));
     offset = end;
-    if (points[offset] === "\n") offset++;
   }
   return chunks.length ? chunks : [""];
+}
+
+/** Split standard Markdown while balancing fenced code blocks across separately posted messages. */
+export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKDOWN): string[] {
+  if (!Number.isSafeInteger(maxPoints) || maxPoints < 256) {
+    throw new RangeError("Markdown chunk size must be an integer of at least 256 code points");
+  }
+  if (Array.from(markdown).length <= maxPoints) return [markdown];
+  const rawChunks = chunkSlackText(markdown, maxPoints - 128);
+  let fence: { marker: string; opening: string } | undefined;
+  const output: string[] = [];
+  for (const raw of rawChunks) {
+    const entering = fence;
+    for (const line of raw.split("\n")) {
+      const match = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+      if (!match) continue;
+      const marker = match[1] ?? "```";
+      // Pathological fences longer than our reserved balancing headroom are left untouched rather than
+      // making a generated chunk exceed Slack's API limit.
+      if (marker.length > 64) continue;
+      if (!fence) {
+        fence = { marker, opening: `${marker}${(match[2] ?? "").slice(0, 64)}` };
+      } else if (marker[0] === fence.marker[0] && marker.length >= fence.marker.length) {
+        fence = undefined;
+      }
+    }
+    const prefix = entering ? `${entering.opening}\n` : "";
+    const suffix = fence ? `\n${fence.marker}` : "";
+    output.push(`${prefix}${raw}${suffix}`);
+  }
+  return output;
 }
 
 function safeFileName(file: SlackFile): string {
@@ -135,6 +208,7 @@ async function readBytesCapped(response: Response): Promise<Buffer> {
 export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions): SlackApi {
   const apiBase = baseUrl.replace(/\/$/, "");
   const configuredOrigin = new URL(apiBase).origin;
+  const currentToken = typeof botToken === "string" ? async () => botToken : botToken;
 
   const trustedDownloadUrl = (value: string): URL => {
     const url = new URL(value);
@@ -167,10 +241,11 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       let response: Response;
       let raw: string;
       try {
+        const token = await currentToken();
         response = await fetch(url, {
           method: httpMethod,
           headers: {
-            authorization: `Bearer ${botToken}`,
+            authorization: `Bearer ${token}`,
             ...(httpMethod === "POST" ? { "content-type": "application/json; charset=utf-8" } : {}),
           },
           ...(httpMethod === "POST" ? { body: JSON.stringify(body) } : {}),
@@ -211,8 +286,9 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     for (let redirect = 0; ; redirect++) {
       let response: Response;
       try {
+        const token = await currentToken();
         response = await fetch(url, {
-          headers: { authorization: `Bearer ${botToken}` },
+          headers: { authorization: `Bearer ${token}` },
           redirect: "manual",
           signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
         });
@@ -252,6 +328,17 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
       return data.ts;
     },
+    async postMarkdown(target, markdown) {
+      const data = await call<SlackBody & { ts?: string }>("chat.postMessage", {
+        channel: target.channelId,
+        markdown_text: markdown,
+        ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
+        unfurl_links: false,
+        unfurl_media: false,
+      });
+      if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
+      return data.ts;
+    },
     async updateMessage(channelId, ts, text) {
       try {
         await call("chat.update", { channel: channelId, ts, text });
@@ -260,16 +347,78 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         throw error;
       }
     },
+    async updateMarkdown(channelId, ts, markdown) {
+      try {
+        await call("chat.update", { channel: channelId, ts, markdown_text: markdown });
+      } catch (error) {
+        if (error instanceof SlackApiError && error.slackError === "message_not_modified") return;
+        throw error;
+      }
+    },
     async deleteMessage(channelId, ts) {
       await call("chat.delete", { channel: channelId, ts });
     },
-    async sendText(target, text) {
+    async sendMarkdown(target, markdown) {
       let first: string | undefined;
-      for (const chunk of chunkSlackText(text)) {
-        const ts = await api.postMessage(target, chunk);
+      for (const chunk of chunkSlackMarkdown(markdown)) {
+        const ts = await api.postMarkdown(target, chunk);
         first ??= ts;
       }
       return first;
+    },
+    async startStream(target, content = {}) {
+      if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
+      const channelRecipient = target.channelId.startsWith("D")
+        ? {}
+        : {
+            recipient_user_id: target.recipientUserId,
+            recipient_team_id: target.recipientTeamId,
+          };
+      if (!target.channelId.startsWith("D") && (!target.recipientUserId || !target.recipientTeamId)) {
+        throw new Error("Slack native channel streams require recipient user and team IDs");
+      }
+      const data = await call<SlackBody & { ts?: string }>("chat.startStream", {
+        channel: target.channelId,
+        thread_ts: target.threadTs,
+        task_display_mode: "dense",
+        ...channelRecipient,
+        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
+        ...(content.chunks?.length ? { chunks: content.chunks } : {}),
+      });
+      if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
+      return data.ts;
+    },
+    async appendStream(channelId, ts, content) {
+      await call("chat.appendStream", {
+        channel: channelId,
+        ts,
+        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
+        ...(content.chunks?.length ? { chunks: content.chunks } : {}),
+      });
+    },
+    async stopStream(channelId, ts, content = {}) {
+      await call("chat.stopStream", {
+        channel: channelId,
+        ts,
+        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
+        ...(content.chunks?.length ? { chunks: content.chunks } : {}),
+      });
+    },
+    async setThreadStatus(target, status) {
+      if (!target.threadTs) return;
+      await call("assistant.threads.setStatus", {
+        channel_id: target.channelId,
+        thread_ts: target.threadTs,
+        status,
+      });
+    },
+    async setThreadTitle(target, title) {
+      if (!target.threadTs) return;
+      await call("assistant.threads.setTitle", {
+        channel_id: target.channelId,
+        thread_ts: target.threadTs,
+        title,
+      });
     },
     async fileInfo(fileId) {
       const data = await call<SlackBody & { file?: SlackFile }>("files.info", { file: fileId }, "GET");

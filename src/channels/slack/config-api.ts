@@ -146,6 +146,8 @@ export async function rotateSlackConfigToken(
 
 export interface SlackOAuthResult {
   botToken: string;
+  botRefreshToken: string;
+  tokenExpiresAt: number;
   appId: string;
   teamId: string;
   teamName?: string;
@@ -200,6 +202,8 @@ export async function exchangeSlackOAuthCode(
   }
   let data: SlackErrorShape & {
     access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
     app_id?: string;
     scope?: string;
     bot_user_id?: string;
@@ -211,11 +215,19 @@ export async function exchangeSlackOAuthCode(
     throw new Error(`Slack oauth.v2.access failed: HTTP ${response.status} returned non-JSON`);
   }
   if (!response.ok || data.ok !== true) throw slackOAuthFailure(response.status, data.error);
-  if (!data.access_token || !data.app_id || !data.team?.id) {
-    throw new Error("Slack oauth.v2.access succeeded but returned no bot token/app/workspace identity");
+  if (
+    !data.access_token ||
+    !data.refresh_token ||
+    typeof data.expires_in !== "number" ||
+    !data.app_id ||
+    !data.team?.id
+  ) {
+    throw new Error("Slack oauth.v2.access succeeded but returned incomplete rotating bot credentials/app identity");
   }
   return {
     botToken: data.access_token,
+    botRefreshToken: data.refresh_token,
+    tokenExpiresAt: Date.now() + data.expires_in * 1_000,
     appId: data.app_id,
     teamId: data.team.id,
     teamName: data.team.name,

@@ -249,8 +249,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
 `Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, `state`, `seen`, and preview
 policies. Platform-specific modules own signature verification/event acceptance, message subtype policy,
-managed roots/context, private-file resolution, Slack Web API transport, and `chat.postMessage` +
-`chat.update` rendering.
+managed roots/context, private-file resolution, Slack Web API transport, and dual native-stream /
+rate-limited edited-message rendering.
 
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
 then persists a turn/context/root before returning 200. Logical dedup uses `(team, channel, ts)` because
@@ -265,15 +265,21 @@ least-privilege explicit-summon surface.
 File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated downloads
 are host-restricted, timeout/cap guarded, and translated to vision images or absolute local paths. Primary
 files fail visibly; buffered files degrade individually. Outbound file delivery uses Slack's external
-upload three-step protocol and remains at-least-once across an ambiguous completion response. HTTP Events
-API is the first-release transport; Socket Mode remains a separate future boundary rather than entering
-`ChannelModule` indirectly.
+upload three-step protocol and remains at-least-once across an ambiguous completion response.
+
+Newly onboarded apps use Slack's `agent_view`, `assistant:write`, token rotation, suggested prompts, Agent
+status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
+the stream; engine-neutral tool lifecycle events become dense `task_update` chunks. Raw model thinking and
+generic tool arguments stay private. The compatibility renderer retains one edited message with a strict
+three-second mutation interval; explicit continuous/custom top-level routes select it because native
+streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
+separate future boundary rather than entering `ChannelModule` indirectly.
 
 `add slack` owns a single-workspace internal-app control plane outside `ChannelModule`: a temporary
 unguessable challenge/OAuth responder, mode-specific App Manifest creation, OAuth-v2 code exchange, and
-irreversible-boundary recovery state. Runtime Bot Token + Signing Secret go to `.env`; the more powerful
-user/workspace App Configuration refresh token is owner-only local state and never enters deployment
-secrets. `dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
+irreversible-boundary recovery state. Runtime rotating bot credentials + Signing Secret go to `.env` and rotate into owner-only durable channel
+state; the more powerful user/workspace App Configuration refresh token remains owner-local and never
+enters deployment secrets. `dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
 `apps.manifest.update`; missing onboarding state remains a truthful manual registration outcome. This is
 not Marketplace/multi-workspace installation storage.
 

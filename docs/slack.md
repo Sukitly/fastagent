@@ -1,13 +1,12 @@
 ---
 title: Slack channel
-description: "Serve an agent as a Slack app with signed Events API ingress, durable threads/context, file IO, and edited live previews."
+description: "Serve an agent as a Slack-native Agent with signed Events API ingress, durable threads/context, native streams/tasks, and file IO."
 status: current
 ---
 
 # Slack channel
 
-The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and delivers the answer by
-updating one live-preview message.
+The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for continuous/top-level and compatibility use.
 
 ## Add the channel
 
@@ -19,8 +18,8 @@ Choose one group behavior:
 
 | Mode | Group behavior | Additional access |
 |---|---|---|
-| `context` (recommended) | Explicit mentions, bare replies in Agent-owned threads, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
-| `mentions` | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
+| `mentions` (default) | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
+| `context` | Explicit mentions, bare replies in Agent-owned threads, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
 
 The command creates:
 
@@ -29,8 +28,8 @@ channels/slack.ts       # signed Events API adapter + policy
 tools/slack-send.ts     # text and external-upload file tool
 ```
 
-It also adds `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` placeholders to `.env.example` and, by
-default, starts single-workspace internal-app onboarding.
+It also adds `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, and optional rotating-bot credential placeholders
+to `.env.example` and, by default, starts single-workspace internal-app onboarding.
 
 ## Internal-app onboarding
 
@@ -51,9 +50,10 @@ The command then:
 
 1. starts a temporary Cloudflare Quick Tunnel (`cloudflared` is required);
 2. creates the internal app from a mode-specific manifest;
-3. configures the Bot, writable App Home Messages tab, scopes, and Events API subscriptions;
+3. enables Slack's irreversible `agent_view`, native Agent streams/tasks, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
 4. opens [Slack OAuth v2](https://docs.slack.dev/authentication/installing-with-oauth/), validates its `state`, exchanges the code, and installs into one workspace;
-5. writes only `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` to the gitignored run-root `.env`.
+5. writes the Signing Secret plus the rotating bot access/refresh token, expiry, OAuth client ID, and
+   client secret to the gitignored run-root `.env`.
 
 App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
 re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:
@@ -68,6 +68,9 @@ Each later Quick Tunnel receives the same update. `deploy fly --run`, `deploy ra
 token to the host. Invite the App to each channel it should read.
 
 This is an internal, single-workspace installation—not Marketplace/multi-workspace OAuth token storage.
+Slack may require a paid plan or Developer Program sandbox for platform AI features. If native Agent
+features are unavailable, use the manual path with `rendering: "classic"`; a definitive native capability
+rejection also falls back to one compatibility Markdown reply without retrying ambiguous stream writes.
 
 ### Manual/scaffold-only setup
 
@@ -76,15 +79,19 @@ in Slack yourself and configure these base Bot Token Scopes:
 
 ```txt
 app_mentions:read
+assistant:write
 chat:write
 im:history
 files:read
 files:write
 ```
 
-Context mode additionally needs `channels:history`, `groups:history`, and `mpim:history`. Subscribe
-`app_mention` and `message.im`; context mode additionally subscribes `message.channels`, `message.groups`,
-and `message.mpim`. Set `https://<host>/slack` under Event Subscriptions while FastAgent is running,
+Context mode additionally needs `channels:history`, `groups:history`, and `mpim:history`. Native mode
+requires `assistant:write` and the **Agents** feature with the Agent messaging experience (`agent_view`);
+a manually configured classic-only app may omit those two Agent capabilities. Subscribe `app_home_opened`,
+`app_context_changed`, `app_mention`, and `message.im`; context mode additionally subscribes
+`message.channels`, `message.groups`, and `message.mpim`. Set `https://<host>/slack` under Event
+Subscriptions while FastAgent is running,
 then put the Bot Token and Signing Secret in `.env`. Without local onboarding state, tunnel/deploy commands
 print this manual Request URL instead of claiming registration succeeded.
 
@@ -96,7 +103,15 @@ import { slackChannel } from "@fastagent-sh/fastagent/slack";
 export default slackChannel({
   botToken: process.env.SLACK_BOT_TOKEN ?? "",
   signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  groupBehavior: "context", // or "mentions"
+  botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
+  clientId: process.env.SLACK_CLIENT_ID || undefined,
+  clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
+  tokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
+    ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
+    : undefined,
+  groupBehavior: "mentions", // least privilege; opt into "context" deliberately
+  rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
+  // aiDisclaimer: false, // successful replies include a short AI-accuracy footer by default
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
@@ -132,8 +147,9 @@ Default sessions:
 | Existing group thread in continuous mode | `slack:<team>:<channel>:<root_ts>` |
 
 DMs default to the same root model: a top-level message receives its answer in `thread_ts = incoming.ts`,
-and later thread replies reuse that root session. `directMessageSession: "continuous"` instead keeps
-ordinary top-level DM replies linear. Threaded groups use
+and later thread replies reuse that root session. This is also the shape required by Slack native streams.
+`directMessageSession: "continuous"` instead keeps ordinary top-level DM replies linear and therefore uses
+the classic top-level renderer for those turns. Threaded groups use
 `thread_ts = incoming.thread_ts ?? incoming.ts`; a top-level summon therefore creates a Slack thread and
 persists that root before ACK. Continuous groups keep top-level turns in one channel session and answer
 at channel top level, while explicit summons inside an existing Slack thread preserve that root session
@@ -181,11 +197,31 @@ ones.
 The selected model must support vision for image inputs. Canvas and other remote/external file modes are
 usable only when Slack exposes authenticated downloadable bytes.
 
-## Replies and `slack-send`
+## Agent rendering and `slack-send`
 
-The channel posts `💭 Thinking…`, updates the same message no faster than every three seconds, and settles
-it into the final Slack mrkdwn answer. Long answers are split under Slack's practical message cap. Preview
-updates are best-effort; the terminal write is authoritative and failures remain in operator logs.
+`rendering: "native"` is the default. For a threaded target the channel:
+
+1. sets the Slack Agent loading status (and a title for a new DM thread);
+2. starts a native stream with `chat.startStream`;
+3. appends standard Markdown with `chat.appendStream`;
+4. maps `tool_started` / `tool_ended` to `task_update` chunks in Slack's dense task display;
+5. closes the stream with `chat.stopStream`.
+
+Raw model `thinking` and generic tool arguments are never customer-facing. The former is represented by
+Slack's loading state; task cards carry only the tool name and completion state. Agent replies also
+neutralize Slack notification controls such as `<!channel>`; deliberate outbound mentions belong in the
+explicit `slack-send` tool. Successful replies end with a short AI-accuracy disclaimer unless
+`aiDisclaimer: false` is configured. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in
+the Agent prompt when Slack supplies them.
+
+Standard Markdown—not Slack-specific `mrkdwn`—is the output contract. Each API write stays below Slack's
+12,000-character Markdown limit. Link unfurls remain disabled. Very long answers continue in additional
+Markdown messages.
+
+`rendering: "classic"` retains one `💭 Thinking…` message and updates it no more than once every three
+seconds. A native-configured turn also uses this renderer when an explicit `continuous`/custom route sends
+at channel top level, because Slack native streams must reply to a parent user message. This fallback is
+logged. Agent/API failures remain visible in the thread or operator logs.
 
 The scaffolded `slack-send` tool supports text or one local file. File mode uses Slack's current [external
 upload protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
@@ -206,12 +242,22 @@ Slack state lives under:
 
 ```txt
 <state root>/channels/slack/
+├── bot-auth.json       # latest rotating bot access/refresh pair (0600)
 ├── turns.json
 ├── seen.json
 ├── owned-threads.json
 ├── buffers.json
 └── files/
 ```
+
+The onboarded App Manifest enables Slack token rotation. Before expiry, the runtime exchanges the bot
+refresh token, atomically persists the replacement pair in `bot-auth.json`, and uses that durable pair on
+later restarts; all four rotation inputs must be configured together. `deploy --run` overlays any newer
+local pair onto the deploy secrets; at boot the runtime selects whichever env/persisted pair has the newer expiry.
+One Slack app must have one active FastAgent state lineage: stop local `dev` before running the deployed
+copy, or create separate Slack apps for local and production, so two machines never rotate the same
+single-use refresh token independently. A manual classic app may still use
+a long-lived `SLACK_BOT_TOKEN` by omitting every rotation input.
 
 An accepted turn is persisted before the 200 ACK and replayed after an interrupted process. Replay is
 at-least-once: side-effecting Agent tools must be idempotent or tolerate duplication. The execution ceiling
@@ -220,7 +266,7 @@ forever. File-backed channel state supports one process/replica only.
 
 ## Production
 
-`fastagent deploy docker|fly|railway` discovers Slack, carries both required secret names, and prints the
+`fastagent deploy docker|fly|railway` discovers Slack, carries the required access/signing secrets plus any configured rotation credentials, and prints the
 stable `/slack` Request URL. `--run` deploys the app but still reports Slack registration as the required
 manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one replica.
 
@@ -229,4 +275,6 @@ manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one
 - HTTP Events API only; Socket Mode is not included.
 - One Slack workspace installation/token per channel instance; no OAuth installation store or Marketplace multi-tenancy.
 - Edited/deleted messages do not mutate Agent history or buffered context.
-- Native `chat.startStream`/task UI is not used; compatibility comes from `chat.postMessage` + `chat.update`.
+- Slack's Agent messaging experience is enabled for newly onboarded apps and cannot be switched back to the legacy Assistant experience.
+- `rendering: "classic"` exists for plans/apps without native Agent streaming and for intentional top-level replies.
+- Rotating bot credentials require durable single-process state; deleting `bot-auth.json` after the env refresh token has been consumed requires reinstalling/restoring credentials.

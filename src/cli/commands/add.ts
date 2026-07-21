@@ -248,31 +248,33 @@ async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined):
   }
   if (kind !== "feishu" && kind !== "lark" && kind !== "slack") return { behavior: "context", explicit: false };
   if (raw !== undefined) return { behavior: raw, explicit: true };
+  const defaultBehavior: FeishuGroupBehavior = kind === "slack" ? "mentions" : "context";
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    // A defaulted choice inspects and reports only; the sensitive-scope write needs the explicit flag.
+    // Slack defaults to least privilege. Feishu/Lark preserve their context-aware compatibility default.
     console.error(
-      `[fastagent] no interactive terminal — assuming ${kind} group behavior context-aware; pass --group-behavior context explicitly (or mentions for least privilege)`,
+      `[fastagent] no interactive terminal — assuming ${kind} group behavior ${defaultBehavior}; pass --group-behavior explicitly to override`,
     );
-    return { behavior: "context", explicit: false };
+    return { behavior: defaultBehavior, explicit: false };
   }
+  const choices = [
+    {
+      value: "mentions" as const,
+      label: "Mention-only (least privilege)",
+      hint: "only explicit @Agent messages; no group-wide message permission",
+    },
+    {
+      value: "context" as const,
+      label: kind === "slack" ? "Context-aware groups" : "Context-aware groups (recommended)",
+      hint:
+        kind === "slack"
+          ? "bare managed-thread replies + buffer; requires channel/group/mpim history scopes"
+          : "bare managed-thread replies + buffer; im:message.group_msg delivers all group messages",
+    },
+  ];
   const answer = await select<FeishuGroupBehavior>({
     message: "Choose group-chat behavior",
-    initialValue: "context",
-    options: [
-      {
-        value: "context",
-        label: "Context-aware groups (recommended)",
-        hint:
-          kind === "slack"
-            ? "bare managed-thread replies + buffer; requires channel/group/mpim history scopes"
-            : "bare managed-thread replies + buffer; im:message.group_msg delivers all group messages",
-      },
-      {
-        value: "mentions",
-        label: "Mention-only (least privilege)",
-        hint: "only explicit @Agent messages; no group-wide message permission",
-      },
-    ],
+    initialValue: defaultBehavior,
+    options: kind === "slack" ? choices : [...choices].reverse(),
   });
   if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
   return { behavior: answer, explicit: true };

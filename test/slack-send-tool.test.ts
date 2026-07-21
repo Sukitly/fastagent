@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("scaffold slack-send", () => {
-  it("posts mrkdwn text to the selected channel/thread", async () => {
+  it("posts standard Markdown to the selected channel/thread", async () => {
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const calls: { url: string; body: unknown }[] = [];
     vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
@@ -27,7 +27,7 @@ describe("scaffold slack-send", () => {
     });
     const result = await execute({ channelId: "C1", threadTs: "9.0", text: "hello" });
     expect(calls[0]?.url).toContain("/chat.postMessage");
-    expect(calls[0]?.body).toMatchObject({ channel: "C1", thread_ts: "9.0", text: "hello" });
+    expect(calls[0]?.body).toMatchObject({ channel: "C1", thread_ts: "9.0", markdown_text: "hello" });
     expect(JSON.stringify(result.details)).toContain("sent message");
   });
 

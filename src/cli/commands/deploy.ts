@@ -10,6 +10,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts";
+import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
 import { isGeneratedDockerfile } from "../../deploy/container.ts";
@@ -342,6 +343,12 @@ async function writeArtifacts(
   }
 }
 
+function deployEnvironment(target: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
+  if (!channels.includes("slack")) return process.env;
+  const latest = readSlackBotAuthEnv(join(resolveStateRoot(target), "channels", "slack", "bot-auth.json"));
+  return { ...process.env, ...latest };
+}
+
 /**
  * `deploy docker --run`: carry local credentials into Compose's child environment, then reconcile the
  * user-owned local topology. Docker owns container/network/volume lifecycle. A Compose tunnel service,
@@ -375,7 +382,7 @@ async function runDeployDocker(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: process.env,
+    env: deployEnvironment(target, channels),
   });
   const outcome = await deployDockerRun(
     { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
@@ -443,7 +450,7 @@ async function runDeployFly(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: process.env,
+    env: deployEnvironment(target, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
   // here, not through missingSecrets, so the message isn't a contradictory mash of both.
@@ -497,7 +504,7 @@ async function runDeployRailway(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: process.env,
+    env: deployEnvironment(target, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
   if (needsModelCredential) {

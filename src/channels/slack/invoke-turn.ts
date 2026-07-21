@@ -4,8 +4,8 @@ import { log } from "../../log.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
 import type { DownloadedSlackFile, SlackApi } from "./slack-api.ts";
 
-const MRKDWN_INSTRUCTION =
-  "\n\n(Format your reply for Slack mrkdwn: use *bold*, _italic_, `code`, fenced code blocks, and Slack links; do not use HTML.)";
+const MARKDOWN_INSTRUCTION =
+  "\n\n(Format your reply as standard Markdown. Slack renders it natively. Do not use HTML or Slack control-mention syntax such as <!here>, <!channel>, or <!everyone>.)";
 
 export interface SlackTurnTransport {
   api: SlackApi;
@@ -116,7 +116,7 @@ export async function* invokeSlackTurn(
     yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: true };
     return;
   }
-  const prompt = { text: `${text}${resolved.promptSuffix}${MRKDWN_INSTRUCTION}`, images: resolved.images };
+  const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
   const deadline = Date.now() + busyRetry.maxWaitMs;
   for (;;) {
     let retryBusy = false;

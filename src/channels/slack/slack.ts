@@ -7,8 +7,10 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { ensureStateHome } from "../state.ts";
+import { codePointPrefix } from "../text.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
+import { createSlackBotTokenProvider } from "./bot-auth.ts";
 import { collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { invokeSlackTurn } from "./invoke-turn.ts";
 import { createOwnedSlackThreads } from "./owned-threads.ts";
@@ -29,11 +31,17 @@ import {
   slackSenderLabel,
   slackTeamId,
 } from "./parse.ts";
-import { type SlackFailure, defaultErrorMessage, settleSlackPreview, streamSlackReply } from "./preview.ts";
+import {
+  type SlackFailure,
+  type SlackRendering,
+  defaultErrorMessage,
+  settleSlackPreview,
+  streamSlackReply,
+} from "./preview.ts";
 import { type SlackTarget, createSlackApi } from "./slack-api.ts";
 
 export { defaultSlackRoute, slackEnvelope };
-export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRoute };
+export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
 
 const MAX_EVENT_BYTES = 1 << 20;
 const MAX_TURN_ATTEMPTS = 3;
@@ -50,6 +58,8 @@ interface StoredSlackTurn {
   teamId: string;
   channelId: string;
   threadTs?: string;
+  requesterUserId?: string;
+  threadTitle?: string;
   fileIds: string[];
   attempts: number;
 }
@@ -65,6 +75,8 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
     typeof turn.teamId === "string" &&
     typeof turn.channelId === "string" &&
     (turn.threadTs === undefined || typeof turn.threadTs === "string") &&
+    (turn.requesterUserId === undefined || typeof turn.requesterUserId === "string") &&
+    (turn.threadTitle === undefined || typeof turn.threadTitle === "string") &&
     Array.isArray(turn.fileIds) &&
     turn.fileIds.every((id) => typeof id === "string") &&
     typeof turn.attempts === "number"
@@ -73,6 +85,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
 
 interface PendingSlackTurn extends Omit<StoredSlackTurn, "attempts"> {
   previewTs?: string;
+  nativeQueueStatus?: boolean;
 }
 
 export interface SlackChannelOptions {
@@ -80,6 +93,11 @@ export interface SlackChannelOptions {
   botToken: string;
   /** App signing secret used to verify the raw Events API request body. */
   signingSecret: string;
+  /** Rotating OAuth credentials. Omit all four only for a manually managed long-lived bot token. */
+  botRefreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tokenExpiresAt?: number;
   /** Direct-message policy. `threaded` (default) gives every top-level DM its own session/thread;
    * `continuous` keeps one linear session per DM channel. */
   directMessageSession?: "continuous" | "threaded";
@@ -87,9 +105,16 @@ export interface SlackChannelOptions {
    * own session/thread; `continuous` keeps one session for channel-top-level turns while preserving
    * existing Slack threads as separate root sessions. */
   groupMessageSession?: "continuous" | "threaded";
-  /** `context` admits bare replies in managed group threads and buffers unsummoned group discussion.
-   * `mentions` answers only app_mention (plus DMs) and requires fewer history subscriptions/scopes. */
+  /** `mentions` (default, least privilege) answers only app_mention plus DMs. `context` additionally
+   * admits bare replies in managed group threads and buffers unsummoned group discussion. */
   groupBehavior?: "context" | "mentions";
+  /** `native` (default) uses Slack Agent streams/tasks for threaded replies. `classic` retains the
+   * compatibility renderer based on one rate-limited edited message. A top-level target selected by an
+   * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
+   * require a parent user message. */
+  rendering?: SlackRendering;
+  /** Footer for successful Agent replies. Defaults to a short AI-accuracy disclaimer; `false` disables it. */
+  aiDisclaimer?: string | false;
   /** Custom route policy. Providing it disables the default managed-thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
   /** Customer-facing failure formatter; full details always remain in operator logs. */
@@ -119,9 +144,15 @@ export function verifySlackSignature(
 export function slackChannel({
   botToken,
   signingSecret,
+  botRefreshToken,
+  clientId,
+  clientSecret,
+  tokenExpiresAt,
   directMessageSession = "threaded",
   groupMessageSession = "threaded",
-  groupBehavior = "context",
+  groupBehavior = "mentions",
+  rendering = "native",
+  aiDisclaimer,
   route,
   onError,
   apiBaseUrl = "https://slack.com/api",
@@ -135,6 +166,9 @@ export function slackChannel({
   if (!(["context", "mentions"] as const).includes(groupBehavior)) {
     throw new Error('slackChannel groupBehavior must be "context" or "mentions"');
   }
+  if (!(["native", "classic"] as const).includes(rendering)) {
+    throw new Error('slackChannel rendering must be "native" or "classic"');
+  }
 
   return ({ agent, stateRoot }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
@@ -144,23 +178,58 @@ export function slackChannel({
 
     const label = "[slack]";
     const formatError = onError ?? defaultErrorMessage;
-    const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
+    const stateHome = join(stateRoot, "channels", "slack");
+    ensureStateHome(stateHome);
+    const currentBotToken = createSlackBotTokenProvider({
+      statePath: join(stateHome, "bot-auth.json"),
+      botToken,
+      botRefreshToken,
+      clientId,
+      clientSecret,
+      tokenExpiresAt,
+      apiBaseUrl,
+    });
+    const api = createSlackApi({ botToken: currentBotToken, baseUrl: apiBaseUrl });
     let authenticatedTeamId: string | undefined;
     let botUserId: string | undefined;
-    void api.authTest().then(
+    let authenticationState: "pending" | "ready" | "failed" = "pending";
+    const authentication = api.authTest().then(
       (identity) => {
         authenticatedTeamId = identity.teamId;
         botUserId = identity.userId;
+        authenticationState = "ready";
         log.info(`${label} authenticated${identity.teamId ? ` for workspace ${identity.teamId}` : ""}`);
       },
-      (error) =>
-        log.warn(
-          `${label} auth.test failed; inbound verification stays active but outbound calls may fail: ${String(error)}`,
-        ),
+      (error) => {
+        authenticationState = "failed";
+        throw new Error(`Slack auth.test failed — fix SLACK_BOT_TOKEN before accepting events: ${String(error)}`, {
+          cause: error,
+        });
+      },
     );
+    // Construction cannot await Web API IO. Keep the rejection observed; recovered turns and ingress
+    // both gate on the same promise/state below and surface the failure without ACKing new work.
+    void authentication.catch((error) => log.error(`${label} ${String(error)}`));
+    const waitForAuthentication = (): Promise<void> => {
+      if (authenticationState !== "pending") return authentication;
+      return new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Slack auth.test did not finish inside the Events API ACK budget")),
+          2_000,
+        );
+        void authentication.then(
+          () => {
+            clearTimeout(timeout);
+            resolve();
+          },
+          (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
+    };
 
-    const stateHome = join(stateRoot, "channels", "slack");
-    ensureStateHome(stateHome);
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const ownedThreads = createOwnedSlackThreads(join(stateHome, "owned-threads.json"), label);
     const buffer = createSlackContextBuffer(join(stateHome, "buffers.json"), label);
@@ -171,38 +240,57 @@ export function slackChannel({
     });
     const decide = route ?? defaultSlackRoute;
     const toStored = (turn: PendingSlackTurn): StoredSlackTurn => {
-      const { previewTs: _live, ...intent } = turn;
+      const { previewTs: _preview, nativeQueueStatus: _status, ...intent } = turn;
       return { ...intent, attempts: 0 };
     };
     const targetOf = (turn: PendingSlackTurn): SlackTarget => ({
       channelId: turn.channelId,
       threadTs: turn.threadTs,
+      recipientUserId: turn.requesterUserId,
+      recipientTeamId: turn.teamId,
     });
 
     const notices = new Map<string, Promise<void>>();
     const queue = createTurnQueue<PendingSlackTurn>({
       label,
       onQueuedBehind(turn) {
+        const nativeDmStatus = rendering === "native" && turn.threadTs && turn.channelId.startsWith("D");
+        if (nativeDmStatus) turn.nativeQueueStatus = true;
         notices.set(
           turn.id,
-          api.postMessage(targetOf(turn), QUEUED_PLACEHOLDER).then(
-            (ts) => {
-              turn.previewTs = ts;
-            },
-            (error) => log.warn(`${label} queue preview failed (the turn still runs): ${String(error)}`),
-          ),
+          authentication
+            .then(() =>
+              nativeDmStatus
+                ? api.setThreadStatus(targetOf(turn), "is queued behind an earlier request…")
+                : api.postMessage(targetOf(turn), QUEUED_PLACEHOLDER).then((ts) => {
+                    turn.previewTs = ts;
+                  }),
+            )
+            .catch((error) => log.warn(`${label} queue preview failed (the turn stays durable): ${String(error)}`)),
         );
       },
       run: async (turn) => {
         await notices.get(turn.id);
         notices.delete(turn.id);
+        try {
+          await authentication;
+        } catch (error) {
+          // Leave the intent untouched. A fixed token + restart replays it; running now would execute an
+          // Agent turn whose only customer-facing transport is known to be unavailable.
+          log.error(`${label} deferring durable turn ${turn.id} because Slack authentication failed: ${String(error)}`);
+          return;
+        }
         const attempt = store.startAttempt(turn.id, MAX_TURN_ATTEMPTS);
         if (attempt === "exceeded") {
           notifyDropped(turn);
           return;
         }
         if (attempt === "defer") {
-          if (turn.previewTs) {
+          if (turn.nativeQueueStatus) {
+            void api
+              .setThreadStatus(targetOf(turn), "is delayed by a temporary system issue and will retry after restart…")
+              .catch((error) => log.warn(`${label} could not update a deferred Agent status: ${String(error)}`));
+          } else if (turn.previewTs) {
             void settleSlackPreview(api, targetOf(turn), turn.previewTs, DEFERRED_PLACEHOLDER).catch((error) =>
               log.warn(`${label} could not update a deferred queue preview: ${String(error)}`),
             );
@@ -231,8 +319,13 @@ export function slackChannel({
             api,
             targetOf(turn),
             formatError,
-            turn.previewTs,
-            label,
+            {
+              rendering,
+              initialPreviewTs: turn.previewTs,
+              threadTitle: turn.threadTitle,
+              disclaimer: aiDisclaimer,
+              label,
+            },
           );
           log.info(`${label} turn done: turn=${turn.id} session=${turn.session} (${Date.now() - startedAt}ms)`);
         } catch (error) {
@@ -244,9 +337,11 @@ export function slackChannel({
     });
 
     const notifyDropped = (turn: PendingSlackTurn): void => {
+      const target = targetOf(turn);
+      if (turn.nativeQueueStatus) void api.setThreadStatus(target, "").catch(() => {});
       void settleSlackPreview(
         api,
-        targetOf(turn),
+        target,
         turn.previewTs,
         "⚠️ I couldn’t complete an earlier request — please ask again.",
       ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
@@ -338,6 +433,16 @@ export function slackChannel({
       const fileIds = slackFileIds(event);
       const baseText = routed.text ?? slackEnvelope(envelope);
       if (!baseText.trim() && fileIds.length === 0) return;
+      const threadTitle =
+        direct && event.thread_ts === undefined
+          ? codePointPrefix(
+              slackMessageText(event)
+                .replace(/<@[A-Z0-9]+>/gi, "")
+                .replace(/\s+/g, " ")
+                .trim(),
+              80,
+            )
+          : undefined;
 
       // Match Feishu/Lark ownership: only a top-level summon that creates an Agent-managed thread owns
       // the root. Mentioning the Agent inside an existing human thread answers once without adopting it.
@@ -354,6 +459,8 @@ export function slackChannel({
           teamId,
           channelId: targetChannel,
           threadTs,
+          requesterUserId: event.user,
+          threadTitle: threadTitle || undefined,
           fileIds,
         },
         true,
@@ -382,6 +489,12 @@ export function slackChannel({
         return Response.json({ challenge: envelope.challenge });
       }
       if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
+      try {
+        await waitForAuthentication();
+      } catch (error) {
+        log.error(`${label} refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
+        return text("slack authentication unavailable\n", 503);
+      }
       acceptEvent(envelope);
       return new Response(null, { status: 200 });
     };

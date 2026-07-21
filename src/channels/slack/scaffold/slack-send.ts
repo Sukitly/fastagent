@@ -3,7 +3,7 @@ import { open, stat } from "node:fs/promises";
 import { basename } from "node:path";
 
 const API = "https://slack.com/api";
-const MAX_TEXT = 39_000;
+const MAX_TEXT = 10_000;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
 
@@ -86,7 +86,7 @@ export default defineTool({
     "line for a chat turn; a scheduled/woken turn must be told its destination.",
   input: z.object({
     channelId: z.string().describe("target Slack channel ID"),
-    text: z.string().optional().describe("mrkdwn message text"),
+    text: z.string().optional().describe("standard Markdown message text"),
     path: z.string().optional().describe("absolute path of a local file to upload"),
     title: z.string().optional().describe("file title (file mode only)"),
     initialComment: z.string().optional().describe("message posted with the file (file mode only)"),
@@ -105,7 +105,7 @@ export default defineTool({
       for (const chunk of chunks) {
         await callSlack(token, "chat.postMessage", {
           channel: channelId,
-          text: chunk,
+          markdown_text: chunk,
           ...(threadTs ? { thread_ts: threadTs } : {}),
           unfurl_links: false,
           unfurl_media: false,

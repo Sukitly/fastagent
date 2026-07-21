@@ -7,9 +7,16 @@ function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
   return {
     authTest: async () => ({}),
     postMessage: async () => "1.0",
+    postMarkdown: async () => "1.0",
     updateMessage: async () => {},
+    updateMarkdown: async () => {},
     deleteMessage: async () => {},
-    sendText: async () => "1.0",
+    sendMarkdown: async () => "1.0",
+    startStream: async () => "1.0",
+    appendStream: async () => {},
+    stopStream: async () => {},
+    setThreadStatus: async () => {},
+    setThreadTitle: async () => {},
     fileInfo: async (id) => ({
       id,
       name: `${id}.txt`,

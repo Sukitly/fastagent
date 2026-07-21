@@ -2,13 +2,14 @@ export type SlackGroupBehavior = "context" | "mentions";
 
 export const SLACK_BASE_BOT_SCOPES = [
   "app_mentions:read",
+  "assistant:write",
   "chat:write",
   "files:read",
   "files:write",
   "im:history",
 ] as const;
 export const SLACK_CONTEXT_BOT_SCOPES = ["channels:history", "groups:history", "mpim:history"] as const;
-export const SLACK_BASE_BOT_EVENTS = ["app_mention", "message.im"] as const;
+export const SLACK_BASE_BOT_EVENTS = ["app_context_changed", "app_home_opened", "app_mention", "message.im"] as const;
 export const SLACK_CONTEXT_BOT_EVENTS = ["message.channels", "message.groups", "message.mpim"] as const;
 
 export interface SlackAppManifest {
@@ -22,6 +23,10 @@ export interface SlackAppManifest {
       home_tab_enabled: boolean;
       messages_tab_enabled: boolean;
       messages_tab_read_only_enabled: boolean;
+    };
+    agent_view: {
+      agent_description: string;
+      suggested_prompts: Array<{ title: string; message: string }>;
     };
     bot_user: { display_name: string; always_online: boolean };
   };
@@ -74,6 +79,13 @@ export function buildSlackManifest(input: {
         messages_tab_enabled: true,
         messages_tab_read_only_enabled: false,
       },
+      agent_view: {
+        agent_description: "A workspace agent powered by the files, skills, and tools in its FastAgent definition.",
+        suggested_prompts: [
+          { title: "What can you do?", message: "What can you help me with?" },
+          { title: "Summarize context", message: "Summarize the relevant context and propose next steps." },
+        ],
+      },
       bot_user: { display_name: slackBotDisplayName(name), always_online: false },
     },
     oauth_config: {
@@ -91,7 +103,7 @@ export function buildSlackManifest(input: {
         : {}),
       org_deploy_enabled: false,
       socket_mode_enabled: false,
-      token_rotation_enabled: false,
+      token_rotation_enabled: true,
     },
   };
 }
