@@ -1,6 +1,6 @@
 /**
  * Channel-neutral live-preview pieces shared by every messaging channel's preview renderer
- * (telegram/preview.ts, feishu/preview.ts): the terminal-failure shape a channel hands to its
+ * (telegram/preview.ts, feishu/preview.ts, slack/preview.ts): the terminal-failure shape a channel hands to its
  * `onError`, the customer-facing default message for it, and the compact tool-arg summary for the
  * live view. The preview LIFECYCLES stay per-platform (message edits vs streaming cards) — only
  * these platform-independent policies live here, so the customer-facing wording cannot drift

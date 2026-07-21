@@ -13,7 +13,7 @@ import { exists } from "./init.ts";
 import { parseEnvContent } from "../env.ts";
 import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
-export type ChannelKind = "github" | "telegram" | "feishu" | "lark";
+export type ChannelKind = "github" | "telegram" | "slack" | "feishu" | "lark";
 
 /** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
 export interface ChannelEnv {
@@ -60,6 +60,18 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     steps: [
       "edit {channel} — customise routing with route() (optional; the defaults already work)",
       "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
+    ],
+  },
+  slack: {
+    env: [
+      { name: "SLACK_BOT_TOKEN", hint: "Slack app → OAuth & Permissions → Bot User OAuth Token", required: true },
+      { name: "SLACK_SIGNING_SECRET", hint: "Slack app → Basic Information → App Credentials", required: true },
+    ],
+    steps: [
+      "Slack Bot Token Scopes: app_mentions:read, chat:write, im:history, files:read, files:write, channels:history, groups:history, mpim:history",
+      "subscribe app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack (Slack verifies it with a challenge)",
+      "reinstall the app after changing scopes, then invite it to each channel it should read",
+      "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
     ],
   },
   // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded
@@ -166,6 +178,17 @@ export function channelSetup(
           ? "group behavior: mention-only — do not grant im:message.group_msg; bare managed-thread replies and group context buffering remain disabled"
           : step,
       ),
+    };
+  }
+  if (kind === "slack" && groupBehavior === "mentions") {
+    return {
+      env: setup.env,
+      steps: [
+        "Slack Bot Token Scopes: app_mentions:read, chat:write, im:history, files:read, files:write (no channel/group/mpim history scopes)",
+        "subscribe only app_mention and message.im; set Request URL to <public-url>/slack",
+        "group behavior: mention-only — bare managed-thread replies and unsummoned group context remain disabled",
+        ...setup.steps.slice(2),
+      ],
     };
   }
   return { env: setup.env, steps: setup.steps };
@@ -313,7 +336,7 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
 export async function scaffoldChannel(
   dir: string,
   kind: ChannelKind,
-  options: { ingress?: FeishuSubscriptionMode } = {},
+  options: { ingress?: FeishuSubscriptionMode; groupBehavior?: FeishuGroupBehavior } = {},
 ): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
@@ -355,6 +378,11 @@ export async function scaffoldChannel(
               !line.includes(`encryptKey: process.env.${prefix}_ENCRYPT_KEY`),
           )
           .join("\n");
+        content = configured;
+      }
+      if (kind === "slack" && options.groupBehavior === "mentions") {
+        const configured = content.replace('groupBehavior: "context"', 'groupBehavior: "mentions"');
+        if (configured === content) throw new Error("slack channel template has no groupBehavior anchor");
         content = configured;
       }
       await writeFile(file, content, { flag: "wx" });

@@ -13,6 +13,7 @@ import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
+import { createSeenRing } from "../seen.ts";
 import { ensureStateHome } from "../state.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
@@ -48,7 +49,6 @@ import {
   settleFeishuPreview,
   streamFeishuReply,
 } from "./preview.ts";
-import { createSeenRing } from "./seen.ts";
 import { connectFeishuWs } from "./ws-ingress.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.

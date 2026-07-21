@@ -128,6 +128,39 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
   });
 
+  it("dispatches Slack registration through the local onboarding seam", async () => {
+    const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
+    const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
+
+    const out = await deployFlyRun(
+      plan({ channels: ["slack"] }),
+      fly,
+      () => {},
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      undefined,
+      registerSlack,
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(registerSlack).toHaveBeenCalledWith("https://bot.fly.dev");
+  });
+
+  it("reports Slack's Events API URL as a manual non-gating registration step", async () => {
+    const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
+    const logs: string[] = [];
+
+    const out = await deployFlyRun(
+      plan({ channels: ["slack"] }),
+      fly,
+      (message) => logs.push(message),
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(logs.join("\n")).toContain("https://bot.fly.dev/slack");
+    expect(logs.at(-1)).toMatch(/slack: webhook registration needs a one-time manual step/);
+  });
+
   it("mixed outcomes: manual notices are logged AND the failed channels still gate", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
