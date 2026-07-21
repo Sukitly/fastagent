@@ -173,6 +173,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
     expect(closed).toBe(true);
 
     let failingCallbacks: Parameters<CreateFeishuWsClient>[0] | undefined;
+    let failedClientClosed = false;
     const failed = connectFeishuWs(
       {
         kind: "lark",
@@ -182,13 +183,22 @@ describe("Feishu/Lark WebSocket ingress", () => {
         onEvent() {},
         createClient(next) {
           failingCallbacks = next;
-          return { async start() {}, close() {} };
+          return {
+            async start() {},
+            close() {
+              failedClientClosed = true;
+            },
+          };
         },
       },
       new AbortController().signal,
     );
+    // createClient resolves on the microtask queue; the client must exist before the terminal error.
+    await Promise.resolve();
     failingCallbacks?.onError(new Error("credentials rejected"));
     await expect(failed.ready).rejects.toThrow(/credentials rejected/);
     await expect(failed.closed).rejects.toThrow(/credentials rejected/);
+    // Terminal failure releases the transport: abort can no longer close (closedSettled), so fail() must.
+    expect(failedClientClosed).toBe(true);
   });
 });

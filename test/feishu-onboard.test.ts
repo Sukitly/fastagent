@@ -26,6 +26,7 @@ describe("Feishu/Lark group-behavior onboarding", () => {
       apiBase: "https://open.feishu.cn",
       api: fx.api,
       behavior: "context",
+      explicit: true,
       note: (message) => fx.notes.push(message),
       openUrl: (url) => fx.opened.push(url),
     });
@@ -45,6 +46,7 @@ describe("Feishu/Lark group-behavior onboarding", () => {
       apiBase: "https://open.feishu.cn",
       api: fx.api,
       behavior: "context",
+      explicit: true,
       note: (message) => fx.notes.push(message),
       openUrl: (url) => fx.opened.push(url),
     });
@@ -63,6 +65,7 @@ describe("Feishu/Lark group-behavior onboarding", () => {
       apiBase: "https://open.larksuite.com",
       api: missing.api,
       behavior: "mentions",
+      explicit: true,
       note: (message) => missing.notes.push(message),
       openUrl: (url) => missing.opened.push(url),
     });
@@ -78,6 +81,7 @@ describe("Feishu/Lark group-behavior onboarding", () => {
       apiBase: "https://open.larksuite.com",
       api: granted.api,
       behavior: "mentions",
+      explicit: true,
       note: (message) => granted.notes.push(message),
       openUrl: (url) => granted.opened.push(url),
     });
@@ -85,6 +89,25 @@ describe("Feishu/Lark group-behavior onboarding", () => {
     expect(granted.notes.join("\n")).toContain("already granted");
     expect(granted.notes.join("\n")).toContain("remove it");
     expect(granted.opened).toEqual(["https://open.larksuite.com/app/cli_l/permission"]);
+  });
+
+  it("never requests the sensitive scope for a defaulted (non-explicit) context choice", async () => {
+    const fx = fixture();
+    const result = await configureGroupBehavior({
+      kind: "feishu",
+      appId: "cli_a",
+      apiBase: "https://open.feishu.cn",
+      api: fx.api,
+      behavior: "context",
+      explicit: false,
+      note: (message) => fx.notes.push(message),
+      openUrl: (url) => fx.opened.push(url),
+    });
+
+    expect(result).toEqual({ publishReady: false });
+    expect(fx.addAppScopes).not.toHaveBeenCalled();
+    expect(fx.notes.join("\n")).toMatch(/defaulted.*--group-behavior context/s);
+    expect(fx.opened).toEqual([]);
   });
 
   it("falls back visibly to manual permission setup when app-config mutation is unavailable", async () => {
@@ -96,6 +119,7 @@ describe("Feishu/Lark group-behavior onboarding", () => {
       apiBase: "https://open.larksuite.com",
       api: fx.api,
       behavior: "context",
+      explicit: true,
       note: (message) => fx.notes.push(message),
       openUrl: (url) => fx.opened.push(url),
     });

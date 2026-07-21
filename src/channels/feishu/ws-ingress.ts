@@ -95,12 +95,16 @@ export function connectFeishuWs(options: FeishuWsConnectionOptions, signal: Abor
   });
   const fail = (error: unknown): void => {
     if (signal.aborted || closedSettled) return;
+    // Settle-then-close: closedSettled first makes a close()-triggered SDK callback re-entry a no-op.
+    closedSettled = true;
+    // Terminal failure must release the transport here: the abort listener's close() no-ops once
+    // closedSettled is set, and only close() destroys SDK-held resources (e.g. its cache sweep timer).
+    if (client) closeClient(client);
     const failure = error instanceof Error ? error : new Error(String(error));
     if (!readySettled) {
       readySettled = true;
       rejectReady(failure);
     }
-    closedSettled = true;
     rejectClosed(failure);
   };
   const createClient = options.createClient ?? ((callbacks) => productionClient(options, callbacks));
@@ -136,12 +140,14 @@ export function connectFeishuWs(options: FeishuWsConnectionOptions, signal: Abor
   };
   const close = (): void => {
     if (closedSettled) return;
+    closedSettled = true; // before closeClient, so a callback re-entry from close() is a no-op
     if (client) closeClient(client);
     if (!readySettled) {
+      // Abort before the first connection: `ready` still settles, and resolution here means
+      // cancellation, not readiness (the LongConnection contract; serve skips ready-side effects).
       readySettled = true;
       resolveReady();
     }
-    closedSettled = true;
     resolveClosed();
   };
   if (signal.aborted) {

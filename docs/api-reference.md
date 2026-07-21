@@ -244,8 +244,8 @@ interface ChannelContext {
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
 interface LongConnection {
-  ready: Promise<void>;
-  closed: Promise<void>;
+  ready: Promise<void>; // settles on first usable connection; on a pre-ready abort it still settles (cancellation)
+  closed: Promise<void>; // resolves after abort-driven shutdown; rejects on terminal failure
 }
 interface LongConnectionChannelModule {
   name: string;

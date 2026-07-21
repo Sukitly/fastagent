@@ -49,7 +49,9 @@ durably buffered for the next `@Agent` turn. It requires the tenant-admin-approv
 `im:message.group_msg` scope, which makes the platform deliver all group messages to the app.
 **Mention-only (least privilege)** skips that scope; users must @Agent on every group turn, and neither
 managed-thread bare replies nor background buffering is available. This choice configures the remote
-App's visibility; it does not add a second runtime routing mode.
+App's visibility; it does not add a second runtime routing mode. Without an interactive terminal the
+choice must be explicit: a run without `--group-behavior` assumes context-aware for guidance but only
+inspects and reports — requesting the sensitive scope requires `--group-behavior context`.
 
 The ingress choice is persisted in `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding `*WebSocketChannel` factory):
 

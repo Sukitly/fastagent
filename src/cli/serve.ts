@@ -119,9 +119,12 @@ export function serve(surface: ServingSurface, port: number, onListening?: (boun
         await Promise.all(
           runs.map(async ({ connection, run }) => {
             await run.ready;
-            log.info(`[fastagent] long connection ready: ${connection.name}`);
+            if (!abort.signal.aborted) log.info(`[fastagent] long connection ready: ${connection.name}`);
           }),
         );
+        // Shutdown raced startup: a pre-ready abort settles `ready` as cancellation, not readiness —
+        // stop() already owns the exit; don't mark ready or report a surface being torn down.
+        if (abort.signal.aborted) return;
         surface.markReady();
         process.send?.({
           type: "ready",

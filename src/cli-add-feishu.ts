@@ -17,6 +17,7 @@ import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
+  type GroupBehaviorChoice,
 } from "./channels/feishu/setup-mode.ts";
 import { cloudFor } from "./channels/feishu/cloud.ts";
 import {
@@ -43,10 +44,13 @@ export async function configureGroupBehavior(input: {
   apiBase: string;
   api: Pick<FeishuApi, "listAppScopes" | "addAppScopes">;
   behavior: FeishuGroupBehavior;
+  /** Whether the author chose the behavior (flag or prompt). A defaulted "context" inspects and
+   * reports only — it must never PATCH the sensitive scope into the app draft. */
+  explicit: boolean;
   note?: (message: string) => void;
   openUrl?: (url: string) => void;
 }): Promise<GroupBehaviorSetup> {
-  const { kind, appId, apiBase, api, behavior } = input;
+  const { kind, appId, apiBase, api, behavior, explicit } = input;
   const note = input.note ?? ((message: string) => console.error(message));
   const openUrl = input.openUrl ?? openExternalUrl;
   let scopes: Awaited<ReturnType<FeishuApi["listAppScopes"]>>;
@@ -103,6 +107,16 @@ export async function configureGroupBehavior(input: {
     openUrl(permissionUrl);
     return { publishReady: false };
   }
+  if (!explicit) {
+    // Defaulted, not chosen: report the gap and how to opt in, but leave the app's requested
+    // permission set untouched (a scripted re-run must not silently escalate a mention-only app).
+    note(
+      `[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted (or could not be verified) — group behavior was ` +
+        `defaulted, so it was not requested. Re-run with --group-behavior context to add it to the app draft, ` +
+        `or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
+    );
+    return { publishReady: false };
+  }
   try {
     await api.addAppScopes(appId, [FEISHU_GROUP_CONTEXT_SCOPE]);
     note(
@@ -129,7 +143,7 @@ export async function onboardFeishuCloudApp(
   kind: "feishu" | "lark",
   envIgnored: boolean,
   ingress: FeishuSubscriptionMode = "webhook",
-  groupBehavior: FeishuGroupBehavior = "context",
+  groupBehavior: GroupBehaviorChoice = { behavior: "context", explicit: false },
 ): Promise<Record<string, string> | undefined> {
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
   // The CLI must never materialize a real credential into a committable file — refuse, don't warn.
@@ -158,7 +172,8 @@ export async function onboardFeishuCloudApp(
         appId,
         apiBase,
         api: createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret }),
-        behavior: groupBehavior,
+        behavior: groupBehavior.behavior,
+        explicit: groupBehavior.explicit,
       });
       return undefined;
     }
@@ -190,7 +205,7 @@ export async function onboardFeishuCloudApp(
     {
       existing,
       ingress,
-      groupBehavior,
+      groupBehavior: groupBehavior.behavior,
       verifyCredentials: async (appId, appSecret) => {
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
@@ -238,7 +253,8 @@ export async function onboardFeishuCloudApp(
       appId: credentials.LARK_APP_ID,
       appSecret: credentials.LARK_APP_SECRET,
     }),
-    behavior: groupBehavior,
+    behavior: groupBehavior.behavior,
+    explicit: groupBehavior.explicit,
   });
   return Object.fromEntries(
     Object.entries(credentials).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
@@ -260,7 +276,7 @@ async function createFeishuAppFlow(
   target: string,
   existing: Readonly<Record<string, string>>,
   ingress: FeishuSubscriptionMode,
-  groupBehavior: FeishuGroupBehavior,
+  groupBehavior: GroupBehaviorChoice,
 ): Promise<void> {
   const { apiBase } = cloudFor("feishu");
   let appId = existing.FEISHU_APP_ID;
@@ -281,7 +297,7 @@ async function createFeishuAppFlow(
       // the receive event. Addons merge those BASE capabilities onto the confirm page; sensitive group
       // permission approval and version publishing remain explicit console work.
       addons: {
-        ...(ingress === "webhook" || groupBehavior === "context"
+        ...(ingress === "webhook" || (groupBehavior.behavior === "context" && groupBehavior.explicit)
           ? { scopes: { tenant: ["application:application:patch"] } }
           : {}),
         events: { items: { tenant: ["im.message.receive_v1"] } },
@@ -326,7 +342,8 @@ async function createFeishuAppFlow(
     appId,
     apiBase,
     api: createFeishuApi({ kind: "feishu", baseUrl: apiBase, appId, appSecret }),
-    behavior: groupBehavior,
+    behavior: groupBehavior.behavior,
+    explicit: groupBehavior.explicit,
   });
 
   if (ingress === "websocket") {

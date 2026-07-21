@@ -7,7 +7,11 @@ import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../../cli-add-feishu.ts";
-import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
+import type {
+  FeishuGroupBehavior,
+  FeishuSubscriptionMode,
+  GroupBehaviorChoice,
+} from "../../channels/feishu/setup-mode.ts";
 import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -87,7 +91,7 @@ export async function runAddChannel(
   if (channelKind === "feishu" || channelKind === "lark") {
     created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress, groupBehavior).catch(failStartup);
   }
-  const { env, steps } = channelSetup(channelKind, ingress, groupBehavior);
+  const { env, steps } = channelSetup(channelKind, ingress, groupBehavior.behavior);
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
@@ -203,17 +207,18 @@ async function resolveIngress(
   return answer;
 }
 
-async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined): Promise<FeishuGroupBehavior> {
+async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined): Promise<GroupBehaviorChoice> {
   if (raw !== undefined && raw !== "context" && raw !== "mentions") {
     failUsage(`--group-behavior must be "context" or "mentions", got "${raw}"`);
   }
-  if (kind !== "feishu" && kind !== "lark") return "context";
-  if (raw !== undefined) return raw;
+  if (kind !== "feishu" && kind !== "lark") return { behavior: "context", explicit: false };
+  if (raw !== undefined) return { behavior: raw, explicit: true };
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+    // A defaulted choice inspects and reports only; the sensitive-scope write needs the explicit flag.
     console.error(
-      `[fastagent] no interactive terminal — defaulting ${kind} group behavior to context-aware (use --group-behavior mentions for least privilege)`,
+      `[fastagent] no interactive terminal — assuming ${kind} group behavior context-aware; pass --group-behavior context to request the group-message scope (or mentions for least privilege)`,
     );
-    return "context";
+    return { behavior: "context", explicit: false };
   }
   const answer = await select<FeishuGroupBehavior>({
     message: "Choose group-chat behavior",
@@ -232,7 +237,7 @@ async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined):
     ],
   });
   if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
-  return answer;
+  return { behavior: answer, explicit: true };
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

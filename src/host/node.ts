@@ -30,7 +30,9 @@ export interface ChannelContext {
 /** A `channels/<name>.ts` route channel: receives mount context and returns its HTTP routes. */
 export type ChannelModule = (ctx: ChannelContext) => Routes;
 
-/** One logical long connection's lifecycle. `ready` settles after its first usable connection;
+/** One logical long connection's lifecycle. `ready` settles after its first usable connection — and
+ * when `signal` aborts before one exists it must still settle: resolution then means cancellation, not
+ * readiness (the server skips ready-side effects once the signal is aborted; it must never hang).
  * `closed` resolves after abort-driven shutdown and rejects on a terminal connection failure. */
 export interface LongConnection {
   ready: Promise<void>;
