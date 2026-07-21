@@ -1,15 +1,15 @@
 /**
- * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → dedup → route → persist → run
- * the turn → stream a live card → ACK 200. Feishu (open.feishu.cn) is the reference cloud. Lark
+ * Canonical Feishu bot-channel engine: verified webhook or official-SDK WebSocket → dedup → route →
+ * persist → enqueue → stream a live card. Feishu (open.feishu.cn) is the reference cloud. Lark
  * international binds this engine through an explicit compatibility profile because its control plane
  * trails Feishu; protocol reuse does not make Lark the design center.
  *
  * The channel kind remains the unit of route, env namespace, state home, logs, and onboarding, so one
- * workspace may mount both without sharing state. Webhook mode only; WebSocket long connection needs
- * the official SDK and a non-HTTP ingress seam. See docs/feishu.md.
+ * workspace may run both without sharing state. Webhook returns the existing route factory; WebSocket
+ * returns an explicit long-connection module. Both feed the same acceptance/turn engine. See docs/feishu.md.
  */
 import { isAbsolute, join } from "node:path";
-import type { ChannelModule } from "../../host/node.ts";
+import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../host/node.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
@@ -29,6 +29,7 @@ import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createOwnedFeishuThreads } from "./owned-threads.ts";
+import { FEISHU_GROUP_CONTEXT_SCOPE } from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -48,6 +49,7 @@ import {
   streamFeishuReply,
 } from "./preview.ts";
 import { createSeenRing } from "./seen.ts";
+import { connectFeishuWs } from "./ws-ingress.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
@@ -124,19 +126,11 @@ interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts" | "bufferK
   preview?: MountedFeishuPreview;
 }
 
-export interface FeishuChannelOptions {
+interface FeishuChannelBaseOptions {
   /** App ID (developer console → Credentials & Basic Info). */
   appId: string;
-  /** App Secret (same page) — drives the tenant_access_token the replies ride on. */
+  /** App Secret (same page) — drives both ingress authentication and outbound API calls. */
   appSecret: string;
-  /** Verification Token (console → Events & Callbacks) — authenticates PLAINTEXT events. */
-  verificationToken: string;
-  /** Encrypt Key (same page, optional there — recommended): when set, ordinary events arrive encrypted
-   *  and signed; this channel then REFUSES plaintext events (fail closed — accepting both would let a
-   *  forger skip the stronger check). Feishu explicitly excludes the encrypted `url_verification`
-   *  handshake from event signature verification; that narrow path is authenticated after decryption
-   *  by the Verification Token. Must match the console exactly. */
-  encryptKey?: string;
   /** Direct-message context + delivery policy. `threaded` (default) gives every top-level p2p message
    * its own session, creates a platform thread for the answer, and routes later thread messages back
    * by root message id. `continuous` keeps one session per p2p chat and sends ordinary unquoted replies. */
@@ -153,56 +147,78 @@ export interface FeishuChannelOptions {
    *  log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
    *  on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``. */
   onError?: (failed: FeishuFailure) => string | undefined;
-  /** API origin override (tests / self-hosted gateways). The kind fixes the default —
-   *  `feishuChannel` → `https://open.feishu.cn`, `larkChannel` → `https://open.larksuite.com`. */
+  /** API origin override (tests / self-hosted gateways). Feishu factories default to
+   *  `https://open.feishu.cn`; Lark factories default to `https://open.larksuite.com`. */
   baseUrl?: string;
   /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. Defaults to 0
    *  (immediate); the same card is later taken over by the live preview/final answer. */
   queueNoticeDelayMs?: number;
 }
 
-/** Build the canonical Feishu channel. Lark calls the internal profile-bound builder below. */
+export interface FeishuChannelOptions extends FeishuChannelBaseOptions {
+  /** Verification Token for Request-URL authentication. */
+  verificationToken: string;
+  /** Optional webhook Encrypt Key. When set, plaintext events are rejected. */
+  encryptKey?: string;
+}
+
+export type FeishuWebSocketChannelOptions = FeishuChannelBaseOptions & {
+  verificationToken?: never;
+  encryptKey?: never;
+};
+
+/** Build the canonical Feishu Request-URL webhook channel. */
 export function feishuChannel(opts: FeishuChannelOptions): ChannelModule {
   return buildFeishuChannel(FEISHU_CLOUD, opts, feishuChannel.name);
 }
 
-/** Internal compatibility seam: protocol behavior comes from Feishu; the profile binds cloud edges. */
-export function buildFeishuChannel(
+/** Build the canonical Feishu WebSocket long-connection channel. */
+export function feishuWebSocketChannel(opts: FeishuWebSocketChannelOptions): LongConnectionChannelModule {
+  return buildFeishuWebSocketChannel(FEISHU_CLOUD, opts, feishuWebSocketChannel.name);
+}
+
+/** Internal compatibility seams: protocol behavior comes from Feishu; the profile binds cloud edges. */
+interface FeishuWebSocketChannelDeps {
+  connectWs?: typeof connectFeishuWs;
+}
+
+interface FeishuRuntime {
+  acceptEvent(event: FeishuMessageEvent): void;
+  turnsIdle(): Promise<void>;
+}
+
+function validateSessionOptions(opts: FeishuChannelBaseOptions, factoryName: string): void {
+  if (opts.directMessageSession !== undefined && !["continuous", "threaded"].includes(opts.directMessageSession)) {
+    throw new Error(`${factoryName} directMessageSession must be "continuous" or "threaded"`);
+  }
+  if (opts.groupMessageSession !== undefined && !["continuous", "threaded"].includes(opts.groupMessageSession)) {
+    throw new Error(`${factoryName} groupMessageSession must be "continuous" or "threaded"`);
+  }
+}
+
+function createFeishuRuntimeFactory(
   profile: FeishuCloudProfile,
-  {
+  opts: FeishuChannelBaseOptions,
+  factoryName: string,
+): (ctx: ChannelContext) => FeishuRuntime {
+  const {
     appId,
     appSecret,
-    verificationToken,
-    encryptKey,
     directMessageSession = "threaded",
     groupMessageSession = "threaded",
     route,
     onError,
     baseUrl = profile.apiBase,
     queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
-  }: FeishuChannelOptions,
-  factoryName: string,
-): ChannelModule {
-  const { kind, envPrefix } = profile;
+  } = opts;
+  const { kind } = profile;
   const label = `[${kind}]`;
-  // All three are mandatory: without the app credentials no reply can be sent; without the verification
-  // token a plaintext-mode endpoint would accept forged events. Fail at construction (startup), not
-  // silently at the first event.
-  if (!appId || !appSecret) {
-    throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
-  }
-  if (!verificationToken) {
-    throw new Error(
-      `${factoryName} requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)`,
-    );
-  }
-  if (directMessageSession !== "continuous" && directMessageSession !== "threaded") {
-    throw new Error(`${factoryName} directMessageSession must be "continuous" or "threaded"`);
-  }
-  if (groupMessageSession !== "continuous" && groupMessageSession !== "threaded") {
-    throw new Error(`${factoryName} groupMessageSession must be "continuous" or "threaded"`);
-  }
   return ({ agent, stateRoot }) => {
+    // Credential checks run when serving starts, not while the authored module is imported: deployment
+    // can inspect the module shape before secrets exist, while serving still fails before ready.
+    if (!appId || !appSecret) {
+      throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
+    }
     const formatError = onError ?? defaultErrorMessage;
     const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
@@ -215,6 +231,26 @@ export function buildFeishuChannel(
         if (!botOpenId) log.warn(`${label} bot/v3/info returned no open_id — group @mention summon stays off`);
       },
       (e) => log.warn(`${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`),
+    );
+    void api.listAppScopes().then(
+      (scopes) => {
+        const contextAware = scopes.some(
+          (scope) =>
+            scope.name === FEISHU_GROUP_CONTEXT_SCOPE &&
+            scope.grantStatus === 1 &&
+            (scope.type === undefined || scope.type === "tenant"),
+        );
+        if (contextAware) {
+          log.info(
+            `${label} group visibility: context-aware — bare managed-thread replies + buffered discussion enabled`,
+          );
+        } else {
+          log.warn(
+            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare managed-thread replies + group context buffering are unavailable`,
+          );
+        }
+      },
+      (error) => log.warn(`${label} could not inspect group visibility: ${String(error)}`),
     );
     const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId }));
 
@@ -371,7 +407,7 @@ export function buildFeishuChannel(
     // when the platform redelivers. Recovery re-enqueues a crash survivor without re-persisting it.
     const submit = (rec: PendingFeishuTurn, persist: boolean): void => {
       if (persist) {
-        store.add(toStored(rec)); // failed write → webhook 500 → platform redelivery
+        store.add(toStored(rec)); // failed write → HTTP/WS 500 → platform re-push
         seen.add(rec.id); // post-persist, best-effort protection from documented duplicate pushes
       }
       queue.accept(rec);
@@ -399,105 +435,19 @@ export function buildFeishuChannel(
       submit({ ...intent, bufferKey, preview: undefined }, false);
     }
 
-    const handler = async (req: Request): Promise<Response> => {
-      if (req.method !== "POST") return text("POST only\n", 405);
-      const body = await readBodyCapped(req, MAX_EVENT_BYTES);
-      if ("tooLarge" in body) return text("payload too large\n", 413);
-      let outer: Record<string, unknown>;
-      try {
-        outer = JSON.parse(body.text) as Record<string, unknown>;
-        if (typeof outer !== "object" || outer === null) throw new Error("not an object");
-      } catch {
-        return text("invalid json\n", 400);
-      }
-
-      // ── Verification. Two modes, decided by the CONSOLE's Encrypt Key setting, mirrored here. ──────
-      let envelope: Record<string, unknown>;
-      if (typeof outer.encrypt === "string") {
-        if (!encryptKey) {
-          log.error(
-            `${label} received an ENCRYPTED event but no encryptKey is configured — set ${envPrefix}_ENCRYPT_KEY`,
-          );
-          return text("encrypt key not configured\n", 400);
-        }
-        const sig = {
-          timestamp: req.headers.get("x-lark-request-timestamp") ?? "",
-          nonce: req.headers.get("x-lark-request-nonce") ?? "",
-          signature: req.headers.get("x-lark-signature") ?? "",
-        };
-        // Ordinary encrypted events MUST verify the signature over the raw body before decryption.
-        // Feishu's documented exception is Request URL verification: its encrypted challenge carries
-        // no event-signature headers, so it is decrypted first and admitted ONLY when its type is
-        // url_verification; the common constant-time Token check below then authenticates it.
-        if (sig.signature && !verifySignature(encryptKey, sig, body.text)) {
-          log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
-          return text("invalid signature\n", 401);
-        }
-        try {
-          envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
-        } catch {
-          if (!sig.signature) {
-            log.warn(`${label} rejected an unsigned encrypted request that could not be decrypted`);
-            return text("invalid encrypted payload\n", 401);
-          }
-          return text("invalid encrypted payload\n", 400);
-        }
-        if (!sig.signature && envelope.type !== "url_verification") {
-          log.warn(`${label} rejected an encrypted event: missing X-Lark-Signature`);
-          return text("invalid signature\n", 401);
-        }
-      } else {
-        if (encryptKey) {
-          // With an Encrypt Key configured, a PLAINTEXT event can only be a forgery (or a console
-          // mismatch — surfaced in the log): accepting it would let a sender skip the signature.
-          log.warn(`${label} rejected a plaintext event while encryptKey is set (console mismatch, or a forgery)`);
-          return text("plaintext events not accepted\n", 401);
-        }
-        envelope = outer;
-      }
-      // The Verification Token authenticates plaintext mode and the platform-documented unsigned,
-      // encrypted URL challenge; on signed encrypted events it is defense in depth. V2 events carry it
-      // in header.token, while url_verification carries it at the top level. Fail closed when absent.
-      const token =
-        (typeof envelope.token === "string" ? envelope.token : undefined) ??
-        (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
-          ? ((envelope.header as Record<string, unknown>).token as string)
-          : undefined);
-      if (!token || !timingSafeEqualStr(token, verificationToken)) {
-        // Loud on purpose: the send side gets an opaque 401 and the platform just retries — this line is
-        // the operator's ONLY signal that LARK_VERIFICATION_TOKEN does not match the console.
-        log.warn(
-          `${label} rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
-        );
-        return text("invalid token\n", 401);
-      }
-
-      // ── The console's URL-verification challenge (fires when the operator saves the Request URL). ──
-      if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
-        // The console fires this when the operator saves the Request URL; without this line a PASSING
-        // handshake is invisible and "did the challenge even arrive?" becomes guesswork.
-        log.info(`${label} answered the console's url_verification challenge`);
-        return Response.json({ challenge: envelope.challenge });
-      }
-
-      // ── Events. Only im.message.receive_v1 is consumed; everything else is ACKed and dropped
-      // (a non-2xx would just make the platform retry an event this channel will never act on). ──────
-      const header = envelope.header as FeishuEventHeader | undefined;
-      if (header?.event_type !== "im.message.receive_v1") {
-        log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
-        return new Response(null, { status: 200 });
-      }
-      const event = (envelope.event ?? {}) as FeishuMessageEvent;
+    // Transport-neutral acceptance boundary. It performs only the fast pre-ACK work: normalize,
+    // route, persist intent/context, and enqueue. The minutes-long Agent turn remains fire-and-forget.
+    const acceptEvent = (event: FeishuMessageEvent): void => {
       const m = event.message;
-      if (!m?.message_id || !m.chat_id) return new Response(null, { status: 200 });
+      if (!m?.message_id || !m.chat_id) return;
       if (seen.has(m.message_id)) {
         log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
-        return new Response(null, { status: 200 });
+        return;
       }
 
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
-      if (!normalized) return new Response(null, { status: 200 });
+      if (!normalized) return;
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
       const managedThread =
@@ -507,9 +457,6 @@ export function buildFeishuChannel(
         m.root_id !== undefined &&
         ownedThreads.has(m.chat_id, m.root_id);
 
-      // In an Agent-created thread, a bare user continuation still summons. Any explicit mention changes
-      // that intent: only defaultFeishuRoute's structural @THIS-bot match summons; @other-only discussion
-      // is buffered like unsummoned group context. A custom route remains fully authoritative.
       if (!r && route === undefined && managedThread && !normalized.content.hasMentions) r = {};
       if (!r) {
         if (route === undefined && isHumanGroup) {
@@ -526,7 +473,8 @@ export function buildFeishuChannel(
                 key: resource.key,
                 name: resource.name,
               }));
-            // Pre-ACK persistence: a write failure rejects the webhook so the platform can redeliver.
+            // A write failure escapes this boundary. HTTP turns it into a 500 response; the official WS
+            // SDK turns it into a 500 ACK frame. Both transports therefore ask the platform to re-push.
             buffer.push(bufferKey, {
               sender: senderLabel(event.sender) ?? "someone",
               body: bodyText,
@@ -535,7 +483,7 @@ export function buildFeishuChannel(
               files: files.length ? files : undefined,
               images: images.length ? images : undefined,
             });
-            seen.add(m.message_id); // post-persist: a redelivery cannot duplicate buffered context
+            seen.add(m.message_id);
             log.debug(`${label} buffered unsummoned group message ${m.message_id} (place ${bufferKey})`);
           } else {
             log.debug(`${label} not summoned — ignoring empty message ${m.message_id} (chat ${m.chat_id})`);
@@ -543,87 +491,185 @@ export function buildFeishuChannel(
         } else {
           log.debug(`${label} not summoned — ignoring message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
         }
-        return new Response(null, { status: 200 });
+        return;
       }
-      {
-        const threadedP2p = directMessageSession === "threaded" && m.chat_type === "p2p";
-        const threadedGroup = groupMessageSession === "threaded" && m.chat_type === "group";
-        const threadedConversation = threadedP2p || threadedGroup;
-        // A top-level threaded message has no thread_id yet. Its tenant-unique message_id is therefore
-        // the only identity available both before and after the first reply creates the thread.
-        // Continuations carry that same value as root_id (field-verified on Feishu p2p; shared protocol
-        // shape for groups/Lark). Prefix with the channel kind to isolate Feishu/Lark while keeping pi's
-        // provider-facing session/cache key under 64 characters.
-        if (threadedConversation && m.thread_id !== undefined && m.root_id === undefined) {
-          log.warn(
-            `${label} threaded ${m.chat_type} message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
-          );
-        }
-        const defaultSession = threadedConversation
-          ? `${kind}:${m.thread_id === undefined ? m.message_id : (m.root_id ?? `missing-root:${m.thread_id}`)}`
-          : placeKey(m);
-        const session = r.session ?? defaultSession;
-        const chatId = r.chatId ?? m.chat_id;
-        // Groups always quote the summon. Threaded groups and p2p add reply_in_thread: on a top-level
-        // message that creates the thread, and on a continuation it keeps the answer inside it. Only
-        // quote when the resolved target is the source chat — a custom redirect cannot reuse a message
-        // id there. A continuous group still keeps replies inside an already-existing platform topic.
-        const sameTarget = chatId === m.chat_id;
-        const replyTo = sameTarget && (m.chat_type === "group" || threadedP2p) ? m.message_id : undefined;
-        const replyInThread =
-          replyTo !== undefined && (threadedConversation || m.thread_id !== undefined) ? true : undefined;
-        // Queue feedback always identifies the exact ask, including continuous modes. In threaded mode
-        // it inherits replyInThread, so an ask queued inside a root cannot leak a status card to main chat.
-        const queueReplyTo = sameTarget ? m.message_id : undefined;
-        const resources = normalized.content.resources;
-        const images = resources
-          .filter((resource) => resource.kind === "image")
-          .map((resource) => ({ msg: resource.messageId, key: resource.key }));
-        const files = resources
-          .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
-          .map((resource) => ({ msg: resource.messageId, key: resource.key, name: resource.name }));
-        const baseText = r.text ?? cloudEnvelope(event, kind);
-        if (baseText.trim() !== "" || images.length > 0 || files.length > 0) {
-          // Persist ownership before ACK. The platform thread does not exist until the first reply lands,
-          // but a failed reply has no continuation to misroute; pre-ACK ownership closes the opposite,
-          // worse window (thread created, process dies, then its unmentioned continuation is forgotten).
-          if (
-            route === undefined &&
-            threadedGroup &&
-            m.thread_id === undefined &&
-            sameTarget &&
-            replyInThread === true
-          ) {
-            ownedThreads.add(m.chat_id, m.message_id);
-          }
-          submit(
-            {
-              id: m.message_id,
-              seq: ++seqCounter,
-              session,
-              baseText,
-              bufferKey,
-              chatId,
-              replyTo,
-              queueReplyTo,
-              replyInThread,
-              // Inside a threaded session the root conversation history already contains the previous
-              // turns. Reloading parent_id would duplicate that input (and its attachments). A top-level
-              // quoted reply has no thread_id, starts a new root, and still hydrates its referent.
-              parentId: threadedConversation && m.thread_id !== undefined ? undefined : m.parent_id,
-              images,
-              files,
-            },
-            true,
-          );
-        }
+
+      const threadedP2p = directMessageSession === "threaded" && m.chat_type === "p2p";
+      const threadedGroup = groupMessageSession === "threaded" && m.chat_type === "group";
+      const threadedConversation = threadedP2p || threadedGroup;
+      if (threadedConversation && m.thread_id !== undefined && m.root_id === undefined) {
+        log.warn(
+          `${label} threaded ${m.chat_type} message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
+        );
       }
-      // ACK immediately (the platform expects a fast 200; the turn may outlast it by minutes) —
-      // lifecycle goes to stderr; after the 200 those lines are the operator's only signal.
-      return new Response(null, { status: 200 });
+      const defaultSession = threadedConversation
+        ? `${kind}:${m.thread_id === undefined ? m.message_id : (m.root_id ?? `missing-root:${m.thread_id}`)}`
+        : placeKey(m);
+      const session = r.session ?? defaultSession;
+      const chatId = r.chatId ?? m.chat_id;
+      const sameTarget = chatId === m.chat_id;
+      const replyTo = sameTarget && (m.chat_type === "group" || threadedP2p) ? m.message_id : undefined;
+      const replyInThread =
+        replyTo !== undefined && (threadedConversation || m.thread_id !== undefined) ? true : undefined;
+      const queueReplyTo = sameTarget ? m.message_id : undefined;
+      const resources = normalized.content.resources;
+      const images = resources
+        .filter((resource) => resource.kind === "image")
+        .map((resource) => ({ msg: resource.messageId, key: resource.key }));
+      const files = resources
+        .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
+        .map((resource) => ({ msg: resource.messageId, key: resource.key, name: resource.name }));
+      const baseText = r.text ?? cloudEnvelope(event, kind);
+      if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
+
+      if (route === undefined && threadedGroup && m.thread_id === undefined && sameTarget && replyInThread === true) {
+        ownedThreads.add(m.chat_id, m.message_id);
+      }
+      submit(
+        {
+          id: m.message_id,
+          seq: ++seqCounter,
+          session,
+          baseText,
+          bufferKey,
+          chatId,
+          replyTo,
+          queueReplyTo,
+          replyInThread,
+          parentId: threadedConversation && m.thread_id !== undefined ? undefined : m.parent_id,
+          images,
+          files,
+        },
+        true,
+      );
     };
-    // Test/observability seam: await the fire-and-forget turns this handler enqueues (see turn-queue).
-    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () => queue.idle();
-    return { [`POST /${kind}`]: handler };
+
+    return { acceptEvent, turnsIdle: () => queue.idle() };
+  };
+}
+
+function createFeishuWebhookRoutes(
+  profile: FeishuCloudProfile,
+  opts: FeishuChannelOptions,
+  runtime: FeishuRuntime,
+): Routes {
+  const { verificationToken, encryptKey } = opts;
+  const { kind, envPrefix } = profile;
+  const label = `[${kind}]`;
+  const handler = async (req: Request): Promise<Response> => {
+    if (req.method !== "POST") return text("POST only\n", 405);
+    const body = await readBodyCapped(req, MAX_EVENT_BYTES);
+    if ("tooLarge" in body) return text("payload too large\n", 413);
+    let outer: Record<string, unknown>;
+    try {
+      outer = JSON.parse(body.text) as Record<string, unknown>;
+      if (typeof outer !== "object" || outer === null) throw new Error("not an object");
+    } catch {
+      return text("invalid json\n", 400);
+    }
+
+    let envelope: Record<string, unknown>;
+    if (typeof outer.encrypt === "string") {
+      if (!encryptKey) {
+        log.error(
+          `${label} received an ENCRYPTED event but no encryptKey is configured — set ${envPrefix}_ENCRYPT_KEY`,
+        );
+        return text("encrypt key not configured\n", 400);
+      }
+      const sig = {
+        timestamp: req.headers.get("x-lark-request-timestamp") ?? "",
+        nonce: req.headers.get("x-lark-request-nonce") ?? "",
+        signature: req.headers.get("x-lark-signature") ?? "",
+      };
+      if (sig.signature && !verifySignature(encryptKey, sig, body.text)) {
+        log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
+        return text("invalid signature\n", 401);
+      }
+      try {
+        envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
+      } catch {
+        if (!sig.signature) {
+          log.warn(`${label} rejected an unsigned encrypted request that could not be decrypted`);
+          return text("invalid encrypted payload\n", 401);
+        }
+        return text("invalid encrypted payload\n", 400);
+      }
+      if (!sig.signature && envelope.type !== "url_verification") {
+        log.warn(`${label} rejected an encrypted event: missing X-Lark-Signature`);
+        return text("invalid signature\n", 401);
+      }
+    } else {
+      if (encryptKey) {
+        log.warn(`${label} rejected a plaintext event while encryptKey is set (console mismatch, or a forgery)`);
+        return text("plaintext events not accepted\n", 401);
+      }
+      envelope = outer;
+    }
+    const token =
+      (typeof envelope.token === "string" ? envelope.token : undefined) ??
+      (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
+        ? ((envelope.header as Record<string, unknown>).token as string)
+        : undefined);
+    if (!token || !timingSafeEqualStr(token, verificationToken)) {
+      log.warn(
+        `${label} rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
+      );
+      return text("invalid token\n", 401);
+    }
+
+    if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
+      log.info(`${label} answered the console's url_verification challenge`);
+      return Response.json({ challenge: envelope.challenge });
+    }
+    const header = envelope.header as FeishuEventHeader | undefined;
+    if (header?.event_type !== "im.message.receive_v1") {
+      log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
+      return new Response(null, { status: 200 });
+    }
+    runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
+    return new Response(null, { status: 200 });
+  };
+  (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;
+  return { [`POST /${kind}`]: handler };
+}
+
+export function buildFeishuChannel(
+  profile: FeishuCloudProfile,
+  opts: FeishuChannelOptions,
+  factoryName: string,
+): ChannelModule {
+  validateSessionOptions(opts, factoryName);
+  const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
+  return (ctx) => {
+    if (!opts.verificationToken) {
+      throw new Error(`${factoryName} requires a non-empty verificationToken (console → Events & Callbacks)`);
+    }
+    return createFeishuWebhookRoutes(profile, opts, createRuntime(ctx));
+  };
+}
+
+export function buildFeishuWebSocketChannel(
+  profile: FeishuCloudProfile,
+  opts: FeishuWebSocketChannelOptions,
+  factoryName: string,
+  deps: FeishuWebSocketChannelDeps = {},
+): LongConnectionChannelModule {
+  validateSessionOptions(opts, factoryName);
+  const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
+  return {
+    name: `${profile.kind} websocket`,
+    connect(ctx, signal) {
+      const runtime = createRuntime(ctx);
+      return (deps.connectWs ?? connectFeishuWs)(
+        {
+          kind: profile.kind,
+          appId: opts.appId,
+          appSecret: opts.appSecret,
+          domain: opts.baseUrl ?? profile.apiBase,
+          onEvent: runtime.acceptEvent,
+        },
+        signal,
+      );
+    },
   };
 }

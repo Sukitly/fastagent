@@ -74,6 +74,34 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).toContain("# railway variables set FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
   });
 
+  it("forbids App Sleeping and omits webhook-only setup for long-connection Lark", () => {
+    const out = runbook(
+      planRailwayDeploy({
+        ...base,
+        modelAuth: undefined,
+        channels: ["lark"],
+        longConnectionChannels: ["lark"],
+      }),
+    );
+    expect(out).toContain("LARK_APP_ID=<value>");
+    expect(out).toContain("LARK_APP_SECRET=<value>");
+    expect(out).not.toContain("LARK_VERIFICATION_TOKEN");
+    expect(out).not.toContain("Request URL = https://<your-domain>/lark");
+    expect(out).toContain("do NOT enable App Sleeping — a long-connection channel");
+  });
+
+  it("forbids App Sleeping for a custom long-connection channel", () => {
+    const out = runbook(
+      planRailwayDeploy({
+        ...base,
+        modelAuth: undefined,
+        channels: [],
+        longConnectionChannels: ["socket"],
+      }),
+    );
+    expect(out).toContain("do NOT enable App Sleeping — a long-connection channel");
+  });
+
   it("creates the service, and orders it before the service-scoped volume/variables/up (Railway model)", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
     // railway init makes only a project; the service must exist before volume/variables/up.

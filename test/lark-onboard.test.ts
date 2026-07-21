@@ -56,6 +56,32 @@ describe("guided Lark app onboarding", () => {
     expect(fx.notes.at(-1)).toContain("Subscription mode changed to webhook");
   });
 
+  it("WebSocket mode stops after validating the credential pair and never asks for a token", async () => {
+    const fx = fakeIO(["cli_ws", "secret"]);
+    const bootstrapWebhook = vi.fn(async () => ({ token: "must-not-run" }));
+    await expect(
+      onboardLarkApp(fx.io, {
+        ingress: "websocket",
+        verifyCredentials: async () => {},
+        bootstrapWebhook,
+      }),
+    ).resolves.toEqual({ LARK_APP_ID: "cli_ws", LARK_APP_SECRET: "secret" });
+    expect(bootstrapWebhook).not.toHaveBeenCalled();
+    expect(fx.prompts).toHaveLength(2);
+    expect(fx.notes.at(-1)).toMatch(/long connection.*do not publish yet.*No Verification Token/);
+  });
+
+  it("lets an explicit mention-only WebSocket setup proceed directly to publish", async () => {
+    const fx = fakeIO(["cli_ws", "secret"]);
+    await onboardLarkApp(fx.io, {
+      ingress: "websocket",
+      groupBehavior: "mentions",
+      verifyCredentials: async () => {},
+    });
+    expect(fx.notes.at(-1)).toMatch(/then create \+ publish/);
+    expect(fx.notes.at(-1)).not.toContain("do not publish yet");
+  });
+
   it("prompts for the console token only after a definitive config-API fallback", async () => {
     const fx = fakeIO(["cli_app", "secret", "manual-token"]);
     await expect(

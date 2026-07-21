@@ -41,6 +41,33 @@ describe("deploy/fly: planFlyDeploy", () => {
     );
   });
 
+  it("keeps one machine running and drops webhook-only secrets/URLs for long-connection Feishu", () => {
+    const plan = planFlyDeploy({
+      ...base,
+      modelAuth: undefined,
+      channels: ["feishu"],
+      longConnectionChannels: ["feishu"],
+    });
+    const toml = flyToml(plan);
+    const out = runbook(plan);
+    expect(toml).toContain("min_machines_running = 1");
+    expect(toml).toContain("long-connection channel needs a running machine");
+    expect(out).toContain("FEISHU_APP_ID=<value>");
+    expect(out).toContain("FEISHU_APP_SECRET=<value>");
+    expect(out).not.toContain("FEISHU_VERIFICATION_TOKEN");
+    expect(out).not.toContain("https://bot.fly.dev/feishu");
+  });
+
+  it("keeps one machine running for a custom long-connection channel", () => {
+    const plan = planFlyDeploy({
+      ...base,
+      modelAuth: undefined,
+      channels: [],
+      longConnectionChannels: ["socket"],
+    });
+    expect(flyToml(plan)).toContain("min_machines_running = 1");
+  });
+
   it("--stop and --no-scale-to-zero flags shape the generated autostop", () => {
     const stopped = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], autostop: "stop" }));
     expect(stopped).toContain('auto_stop_machines = "stop"');

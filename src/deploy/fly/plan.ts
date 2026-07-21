@@ -32,8 +32,10 @@ export interface FlyPlanInput extends ContainerInput {
    * `"OAuth"`/`"stored credential"` (a local login the server can't use), or undefined (unconfigured).
    */
   modelAuth: string | undefined;
-  /** Channels discovered in the workspace — each contributes its secret metadata + webhook step. */
+  /** Known first-party channels — each contributes its secret metadata + webhook step. */
   channels: ChannelKind[];
+  /** All long-connection channel basenames, including custom channels — require one running machine. */
+  longConnectionChannels?: string[];
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
   /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). CLI `--stop`. */
@@ -60,6 +62,7 @@ function flyToml(
   autostop: "suspend" | "stop",
   scaleToZero: boolean,
   hasTimeTriggers: boolean,
+  hasLongConnectionChannel: boolean,
 ): string {
   // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, OR the
   // operator opted out of scale-to-zero. GitHub's is a SAFETY default — its fire-and-forget turns have no
@@ -70,9 +73,11 @@ function flyToml(
     ? `  min_machines_running = 1         # github turns have no replay — don't scale to zero (an in-flight review would be lost)`
     : hasTimeTriggers
       ? `  min_machines_running = 1         # schedules/wake-ups need a running machine (no external wake-up for a cron instant)`
-      : !scaleToZero
-        ? `  min_machines_running = 1         # kept running (--no-scale-to-zero)`
-        : `  min_machines_running = 0         # scale to zero`;
+      : hasLongConnectionChannel
+        ? `  min_machines_running = 1         # long-connection channel needs a running machine (cannot wake from zero)`
+        : !scaleToZero
+          ? `  min_machines_running = 1         # kept running (--no-scale-to-zero)`
+          : `  min_machines_running = 0         # scale to zero`;
   const stopLine =
     autostop === "stop"
       ? `  auto_stop_machines = "stop"      # stop on idle (cold start on the next webhook)`
@@ -121,6 +126,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
         input.autostop,
         input.scaleToZero,
         input.hasTimeTriggers,
+        (input.longConnectionChannels?.length ?? 0) > 0,
       ),
     },
     ...containerArtifacts(input),
@@ -130,7 +136,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   // model key (when local auth is an env key) + every discovered channel's secrets. Names + hints as
   // COMMENT lines (a `#` inside a `\`-continued command would break the shell), then one flat, executable
   // `fly secrets set` the coding agent fills — `<value>` placeholders, never inline comments.
-  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
+  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets, input.longConnectionChannels);
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
@@ -222,7 +228,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     );
   }
   for (const kind of ["feishu", "lark"] as const) {
-    if (!channels.includes(kind)) continue;
+    if (!channels.includes(kind) || input.longConnectionChannels?.includes(kind)) continue;
     const label = kind === "feishu" ? "Feishu" : "Lark";
     post.push(
       `# After deploy — set the ${label} event Request URL (developer console → Events & Callbacks).`,

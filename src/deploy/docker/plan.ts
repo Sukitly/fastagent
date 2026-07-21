@@ -17,6 +17,8 @@ export interface DockerPlanInput extends ContainerInput {
   modelAuth: string | undefined;
   /** Known channels contribute their environment-variable names and webhook registration. */
   channels: ChannelKind[];
+  /** All long-connection channel basenames, including custom channels. */
+  longConnectionChannels?: string[];
   /** Generate an optional Cloudflare Quick Tunnel service in Compose. Generation only; `--run` starts it. */
   tunnel: boolean;
   /** Extra environment-variable names declared in config.deploy.secrets. */
@@ -86,7 +88,7 @@ function buildContext(kitDir?: string): string {
 }
 
 function composeYaml(input: DockerPlanInput): string {
-  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
+  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
   // Always leave the auth-seed seam in the committed topology. `--run` uses it for OAuth/stored auth;
   // it is empty otherwise. Values never land in this file — Compose interpolates them at invocation.
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
@@ -144,10 +146,11 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   const composePath = input.kitDir ? `${input.kitDir}/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
   const compose = `docker compose -f ${composePath}`;
-  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
+  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
   const required = secrets.filter((secret) => secret.required);
   const optional = secrets.filter((secret) => !secret.required);
-  const paths = dockerWebhookPaths(input.channels);
+  const routeChannels = input.channels.filter((kind) => !input.longConnectionChannels?.includes(kind));
+  const paths = dockerWebhookPaths(routeChannels);
 
   const runbook: string[] = [
     `# Run FastAgent in local Docker. ${composePath} / Dockerfile(.dockerignore) are generated above.`,

@@ -124,17 +124,16 @@ export function telegramChannel({
   botUsername,
   apiBaseUrl = "https://api.telegram.org",
 }: TelegramChannelOptions): ChannelModule {
-  // Both are mandatory: an unset secret_token would accept forged updates (the endpoint is public);
-  // the bot token is required to send the reply. Fail at construction (startup), not silently.
-  if (!secretToken) {
-    throw new Error(
-      "telegramChannel requires a non-empty secretToken (the webhook secret_token; an unset one accepts forged updates)",
-    );
-  }
-  if (!botToken) {
-    throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
-  }
   return ({ agent, stateRoot }) => {
+    // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
+    if (!secretToken) {
+      throw new Error(
+        "telegramChannel requires a non-empty secretToken (the webhook secret_token; an unset one accepts forged updates)",
+      );
+    }
+    if (!botToken) {
+      throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
+    }
     const formatError = onError ?? defaultErrorMessage;
     // One getMe at startup: the bot's @username (for the default route's group @mention summon, only when
     // not supplied) and the group-privacy flag — privacy mode off is required to receive the un-summoned

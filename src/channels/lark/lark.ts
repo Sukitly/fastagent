@@ -3,7 +3,7 @@
  * this module binds it to Lark's cloud profile and exposes natural Lark-branded public names. Lark's
  * weaker control-plane capabilities live in onboarding/registration, not in a fork of the turn engine.
  */
-import type { ChannelModule } from "../../host/node.ts";
+import type { ChannelModule, LongConnectionChannelModule } from "../../host/node.ts";
 import { LARK_COMPAT_CLOUD } from "../feishu/cloud.ts";
 import {
   type FeishuChannelOptions,
@@ -11,12 +11,15 @@ import {
   type FeishuMessage,
   type FeishuMessageEvent,
   type FeishuRoute,
+  type FeishuWebSocketChannelOptions,
   buildFeishuChannel,
+  buildFeishuWebSocketChannel,
   defaultFeishuRoute,
 } from "../feishu/feishu.ts";
 import { cloudEnvelope } from "../feishu/parse.ts";
 
 export type LarkChannelOptions = FeishuChannelOptions;
+export type LarkWebSocketChannelOptions = FeishuWebSocketChannelOptions;
 export type LarkFailure = FeishuFailure;
 export type LarkMessage = FeishuMessage;
 export type LarkMessageEvent = FeishuMessageEvent;
@@ -30,4 +33,8 @@ export function larkEnvelope(event: LarkMessageEvent): string {
 
 export function larkChannel(opts: LarkChannelOptions): ChannelModule {
   return buildFeishuChannel(LARK_COMPAT_CLOUD, opts, larkChannel.name);
+}
+
+export function larkWebSocketChannel(opts: LarkWebSocketChannelOptions): LongConnectionChannelModule {
+  return buildFeishuWebSocketChannel(LARK_COMPAT_CLOUD, opts, larkWebSocketChannel.name);
 }

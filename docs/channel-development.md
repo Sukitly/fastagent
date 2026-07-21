@@ -1,6 +1,6 @@
 ---
 title: Channel development
-description: "Build a FastAgent channel adapter: the adapter/glue split, the ChannelModule contract, packaging third-party channels, and testing guidance."
+description: "Build a FastAgent channel adapter: route and long-connection contracts, the adapter/glue split, packaging, and testing guidance."
 status: current
 ---
 
@@ -27,7 +27,7 @@ For a community channel, publish the adapter as a separate package and keep the 
 
 ## Workspace discovery
 
-A workspace channel is a module in `channels/` that default-exports a `ChannelModule`:
+A workspace channel is a module in `channels/` that default-exports either a route `ChannelModule` or a `LongConnectionChannelModule`. Route form:
 
 ```ts
 import type { ChannelModule } from "@fastagent-sh/fastagent/core";
@@ -43,7 +43,9 @@ const channel: ChannelModule = ({ agent, stateRoot }) => ({
 export default channel;
 ```
 
-`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same assembled agent, and merge the returned route tables. The module factory must be synchronous and return a non-empty `Routes` object; async setup belongs inside the returned request handler. Any enabled channel that fails to load fails serving. Rename a file to `<name>.ts.disabled` when it should remain present but disabled.
+`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`. A function export is called synchronously with the assembled agent and must return a non-empty `Routes` object; an object export must implement `{ name, connect(ctx, signal) }` and return `{ ready, closed }`. `ready` settles once the first usable connection is up; when the signal aborts before that, it must still settle (resolution then means cancellation — the server skips ready-side effects once the signal is aborted — and it must never hang). `closed` resolves after abort-driven shutdown and rejects on terminal transport failure. Long-connection adapters own reconnects and translate the framework's `AbortSignal` into their transport's close operation. Any enabled channel that fails to load fails serving. Rename a file to `<name>.ts.disabled` when it should remain present but disabled.
+
+Deployment preflight also imports every enabled channel to inspect this function/object shape, but it does not call a route module or open a connection. Module top-level code must therefore be import-safe when runtime secrets are absent: capture options in the adapter factory, then validate credentials when the route module is activated or `connect()` runs. An import failure remains fatal because the same enabled channel would fail after deployment.
 
 Route keys are either:
 
@@ -61,7 +63,8 @@ A channel adapter should depend on the engine-neutral `@fastagent-sh/fastagent/c
 | Export | Use |
 |---|---|
 | `Agent` | the agent type |
-| `ChannelModule`, `Routes`, `ChannelHandler` | workspace module and route types |
+| `ChannelModule`, `Routes`, `ChannelHandler` | HTTP route module and route types |
+| `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
 | `collect` | buffer a turn into `{ text, data }` |
 | `AgentFailure` | distinguish failed turns when using `collect` |
 | `readBodyCapped` | read a request body with a byte cap |

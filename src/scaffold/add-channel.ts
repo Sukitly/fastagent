@@ -11,6 +11,7 @@ import { assertInsideWorkspace } from "../workspace.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { parseEnvContent } from "../env.ts";
+import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
 export type ChannelKind = "github" | "telegram" | "feishu" | "lark";
 
@@ -63,9 +64,9 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
   // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded
   // compatibility profile. Each remains its own channel KIND: route, env, state, console, onboarding.
-  // No `generate` in either: every value comes FROM the platform (a locally generated Encrypt Key
-  // would break inbound events until mirrored in the console). `add feishu` scan-creates the app;
-  // Lark lacks that control-plane capability, so `add lark` guides console credential collection.
+  // This table is the webhook setup; continuous mode below selects only App ID/Secret. No `generate`
+  // in either: values come FROM the platform. `add feishu` scan-creates the app; Lark lacks that
+  // control-plane capability, so `add lark` guides console credential collection.
   feishu: {
     env: [
       {
@@ -90,8 +91,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "optional before publishing: add the sensitive im:message.group_msg permission (tenant-admin approval) to receive unmentioned managed-thread continuations and buffer other group discussion",
-      "PUBLISH the app version on the page the CLI opened — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
@@ -114,7 +115,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
-      "optional before publishing: add the sensitive im:message.group_msg permission (tenant-admin approval) to receive unmentioned managed-thread continuations and buffer other group discussion",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
       "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
@@ -124,10 +125,50 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
 /** The channel kinds `fastagent add <kind>` can scaffold. */
 export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
-/** The env vars + next-step lines a scaffolded channel needs (for the CLI to print). */
-export function channelSetup(kind: ChannelKind): { env: ChannelEnv[]; steps: string[] } {
-  const { env, steps } = CHANNEL_SCAFFOLDS[kind];
-  return { env, steps };
+const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
+  feishu: {
+    env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) => ["FEISHU_APP_ID", "FEISHU_APP_SECRET"].includes(entry.name)),
+    steps: [
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version",
+      "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
+      "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
+      "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
+    ],
+  },
+  lark: {
+    env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) => ["LARK_APP_ID", "LARK_APP_SECRET"].includes(entry.name)),
+    steps: [
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
+      "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
+      "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
+      "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
+    ],
+  },
+};
+
+/** The mode-specific env vars + next-step lines a scaffolded channel needs. */
+export function channelSetup(
+  kind: ChannelKind,
+  ingress: FeishuSubscriptionMode = "webhook",
+  groupBehavior: FeishuGroupBehavior = "context",
+): { env: ChannelEnv[]; steps: string[] } {
+  const setup =
+    ingress === "websocket" && (kind === "feishu" || kind === "lark")
+      ? WEBSOCKET_SETUPS[kind]
+      : CHANNEL_SCAFFOLDS[kind];
+  if ((kind === "feishu" || kind === "lark") && groupBehavior === "mentions") {
+    return {
+      env: setup.env,
+      steps: setup.steps.map((step) =>
+        step.includes("im:message.group_msg")
+          ? "group behavior: mention-only — do not grant im:message.group_msg; bare managed-thread replies and group context buffering remain disabled"
+          : step,
+      ),
+    };
+  }
+  return { env: setup.env, steps: setup.steps };
 }
 
 /**
@@ -135,7 +176,11 @@ export function channelSetup(kind: ChannelKind): { env: ChannelEnv[]; steps: str
  * copies it to `.env` finds the vars already there. No-op when there is no `.env.example` or the block
  * is already present. Placeholders only — no real secret lands in the committable template.
  */
-export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<boolean> {
+export async function appendChannelEnv(
+  dir: string,
+  kind: ChannelKind,
+  ingress: FeishuSubscriptionMode = "webhook",
+): Promise<boolean> {
   const file = join(dir, ".env.example");
   let current: string;
   try {
@@ -149,7 +194,9 @@ export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<
   // Hint on its OWN line above the placeholder (like the base env.example template) — never inline
   // after `=`: loadEnvFile does not strip trailing comments, so an uncommented `KEY=   # hint` (or a
   // value pasted before the `#`) would carry the hint text into the parsed value.
-  const block = `\n${marker}\n${CHANNEL_SCAFFOLDS[kind].env.map((e) => `# ${e.hint}\n# ${e.name}=`).join("\n")}\n`;
+  const block = `\n${marker}\n${channelSetup(kind, ingress)
+    .env.map((e) => `# ${e.hint}\n# ${e.name}=`)
+    .join("\n")}\n`;
   await appendFile(file, block);
   return true;
 }
@@ -186,6 +233,7 @@ export async function appendChannelDotEnv(
   kind: ChannelKind,
   generated: Record<string, string>,
   overwrite: readonly string[] = [],
+  ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
   const file = join(dir, ".env");
   let current = "";
@@ -195,14 +243,15 @@ export async function appendChannelDotEnv(
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
-  const alreadySet = CHANNEL_SCAFFOLDS[kind].env
+  const env = channelSetup(kind, ingress).env;
+  const alreadySet = env
     .filter((e) => !overwrite.includes(e.name) && hasActiveEnvValue(current, e.name))
     .map((e) => e.name);
   const lines: string[] = [];
   const written: string[] = [];
   const contentLines = current.split("\n");
   let replacedInPlace = false;
-  for (const e of CHANNEL_SCAFFOLDS[kind].env) {
+  for (const e of env) {
     if (alreadySet.includes(e.name)) continue;
     const value = generated[e.name];
     if (value !== undefined) {
@@ -261,7 +310,11 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
  * Scaffold `channels/<kind>.ts` into {@link dir}. Never clobbers an existing file (the glue is
  * authored content). The wx write is the TOCTOU safety net behind {@link channelExists}.
  */
-export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<string> {
+export async function scaffoldChannel(
+  dir: string,
+  kind: ChannelKind,
+  options: { ingress?: FeishuSubscriptionMode } = {},
+): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
   await assertInsideWorkspace(dir, "channels");
@@ -273,8 +326,37 @@ export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<s
   // `channel.ts` is THE adapter (→ channels/<kind>.ts); any other .ts in the bundle is a companion tool
   // (→ tools/<name>, never clobbering an authored one).
   for (const name of channelBundleFiles(kind)) {
-    const content = channelTemplate(kind, name);
+    let content = channelTemplate(kind, name);
     if (name === "channel.ts") {
+      if ((kind === "feishu" || kind === "lark") && options.ingress === "websocket") {
+        const factory = `${kind}Channel`;
+        const wsFactory = `${kind}WebSocketChannel`;
+        let configured = content
+          .replace(`import { ${factory} }`, `import { ${wsFactory} }`)
+          .replace(`export default ${factory}({`, `export default ${wsFactory}({`);
+        if (configured === content) throw new Error(`${kind} channel template has no factory anchors`);
+        const prefix = kind === "feishu" ? "FEISHU" : "LARK";
+        const exportAt = configured.indexOf("export default");
+        const importEnd = configured.indexOf("\n\n");
+        if (exportAt < 0 || importEnd < 0) throw new Error(`${kind} channel template header anchors are missing`);
+        const brand = kind === "feishu" ? "Feishu" : "Lark";
+        configured =
+          `${configured.slice(0, importEnd)}\n\n` +
+          `// ${brand} WebSocket long connection: the process connects OUT to the platform, so no public URL,\n` +
+          `// Verification Token, Encrypt Key, or --tunnel is needed. In Events & Callbacks choose long\n` +
+          `// connection, subscribe im.message.receive_v1, then publish the app version. Keep one process\n` +
+          `// running in production: scale-to-zero/App Sleeping would disconnect ingress.\n` +
+          configured.slice(exportAt);
+        configured = configured
+          .split("\n")
+          .filter(
+            (line) =>
+              !line.includes(`verificationToken: process.env.${prefix}_VERIFICATION_TOKEN`) &&
+              !line.includes(`encryptKey: process.env.${prefix}_ENCRYPT_KEY`),
+          )
+          .join("\n");
+        content = configured;
+      }
       await writeFile(file, content, { flag: "wx" });
       continue;
     }

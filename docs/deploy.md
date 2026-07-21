@@ -63,7 +63,7 @@ fastagent deploy docker --tunnel --run  # generate + start
 fastagent deploy docker --run           # starts the existing app+tunnel topology
 ```
 
-`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: Telegram and Feishu/Lark register automatically; GitHub prints the URL to configure. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
+`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: route-based Telegram and Feishu/Lark register automatically; WebSocket long-connection channels are skipped; GitHub prints the URL to configure. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
 
 The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
 
@@ -103,7 +103,7 @@ Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy 
 2. `fly volumes create data --region <region> --size 1` — one-time; the region **must** match `primary_region` in `fly.toml`.
 3. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
 4. `fly deploy` — build and ship. **A redeploy is this step alone.**
-5. Register each channel's webhook at the live URL (`https://<name>.fly.dev/telegram`, `/webhook`, `/feishu`, `/lark`).
+5. Register each route channel's webhook at the live URL. WebSocket long-connection channels make no registration call.
 
 Or let the CLI do all of it:
 
@@ -111,9 +111,9 @@ Or let the CLI do all of it:
 fastagent deploy fly --run   # idempotent, resumable; carries your local env secrets to Fly
 ```
 
-Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up — its fire-and-forget turns have no replay, so scaling the last machine to zero could drop an in-flight review.
+Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
 
-**Time triggers keep one machine running.** A cron schedule (`schedules/` files) or self-scheduling (`selfSchedule: true`) has no inbound webhook to wake a scaled-to-zero machine — a sleeping box simply misses the instant. Pre-flight detects time triggers and the generated `fly.toml` forces `min_machines_running = 1` (on Railway, the runbook forbids App Sleeping). If you kept an existing scale-to-zero `fly.toml`, `deploy` warns — and `--run` refuses — until you raise it.
+**Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised.
 
 ## Railway
 
@@ -130,7 +130,7 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile`, `.docke
 3. `railway volume add --mount-path /data` — persistent state.
 4. `railway variables set FASTAGENT_STATE_DIR=/data <SECRETS>` — **before** the first deploy, or the box boots without them.
 5. `railway up` — upload + build the Dockerfile on Railway (no local Docker). **A redeploy is this step alone.**
-6. `railway domain` — mint the public URL (Railway's `*.up.railway.app` is not deterministic; read it back), then register each channel's webhook against it.
+6. `railway domain` — mint the public URL, then register route-channel webhooks; long-connection channels are skipped.
 
 Or:
 
@@ -138,7 +138,7 @@ Or:
 fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries your local env secrets
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for — the runbook states it as a manual step (Settings → Deploy → Serverless → App Sleeping). Don't enable it with a GitHub channel (the same no-replay reason as Fly) or with time triggers (`schedules/` files or `selfSchedule` — a sleeping box misses the instant).
+`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, time triggers, or a long-connection channel; a sleeping service cannot hold an outbound connection.
 
 ## Serving an existing repo (agentDir layout)
 
@@ -152,7 +152,7 @@ When the workspace uses `config.agentDir` (a coding agent living in `./agent` wh
 
 ## Other Docker hosts
 
-The generated `Dockerfile` runs the directory on any container platform; `fastagent.compose.yml` is the local single-machine topology. Bring your own remote Docker host by using either artifact and supplying its infrastructure concerns: a persistent volume mounted where `FASTAGENT_STATE_DIR` points, secrets as env vars, public ingress, and channel webhooks.
+The generated `Dockerfile` runs the directory on any container platform; `fastagent.compose.yml` is the local single-machine topology. Bring your own remote Docker host by supplying a persistent volume, secrets, and—only for route channels—public ingress/webhook registration. A long-connection channel requires an always-on process instead.
 
 `config.deploy.apt` bakes extra apt packages into the image; a package needing a custom apt repo or a different base image means providing your own `Dockerfile` (`deploy` keeps an existing one). See [Configuration](configuration.md#config-file).
 

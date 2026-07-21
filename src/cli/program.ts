@@ -269,6 +269,14 @@ const start: CommandSpec = {
 
 /** The retired app-creation flag — parsed so it can explain itself, hidden from help. */
 const CREATE_APP: FlagSpec = { flags: "--create-app", description: "(retired)", hidden: true };
+const INGRESS: FlagSpec = {
+  flags: "--ingress <mode>",
+  description: "Feishu/Lark ingress: websocket or webhook (interactive when omitted)",
+};
+const GROUP_BEHAVIOR: FlagSpec = {
+  flags: "--group-behavior <behavior>",
+  description: "Feishu/Lark groups: context (recommended) or mentions (least privilege)",
+};
 
 const channelSub = (
   kind: "github" | "telegram" | "feishu" | "lark",
@@ -280,11 +288,15 @@ const channelSub = (
   summary,
   description,
   args: [DIR_ARG],
-  flags: [CREATE_APP],
+  flags: [CREATE_APP, ...(kind === "feishu" || kind === "lark" ? [INGRESS, GROUP_BEHAVIOR] : [])],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
-    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, { createApp: f.createApp === true }),
+    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
+      createApp: f.createApp === true,
+      ingress: f.ingress as string | undefined,
+      groupBehavior: f.groupBehavior as string | undefined,
+    }),
 });
 
 const add: CommandSpec = {
@@ -310,22 +322,20 @@ const add: CommandSpec = {
     channelSub(
       "feishu",
       "scaffold the Feishu channel AND create/configure the platform app",
-      "Scaffold channels/feishu.ts AND create/configure the Feishu platform app (scan-to-create), " +
-        "writing credentials to .env.",
-      "Feishu (open.feishu.cn) is the canonical implementation. `add feishu` also CREATES + " +
-        'configures the platform app (confirm a link in the app — the platform\'s "scan to create" ' +
-        "flow; one version-publish action remains) and writes credentials to .env; a persisted " +
-        "ID/Secret pair resumes missing-Token setup instead of creating another app.",
+      "Choose WebSocket or webhook, scaffold channels/feishu.ts, and create/configure the Feishu app " +
+        "through scan-to-create, writing the matching credentials to .env.",
+      "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
+        "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
+        "Context-aware groups (recommended) request admin approval for im:message.group_msg before publish.",
     ),
     channelSub(
       "lark",
       "scaffold the Lark (international) channel with guided credential setup",
-      "Scaffold channels/lark.ts — the Lark international profile over the Feishu engine — and guide " +
-        "credential setup against the intl developer console.",
-      "Lark international (open.larksuite.com) is Feishu's compatibility profile with degraded " +
-        "control-plane setup: opens the intl developer console only for a new/partial pair, validates " +
-        "App ID/Secret, then probes webhook-mode + Token automation; an explicit config-route 404 " +
-        "falls back to a hidden Token prompt + manual mode/URL setup.",
+      "Choose WebSocket or webhook, scaffold channels/lark.ts, and guide credential setup against the " +
+        "international developer console.",
+      "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
+        "App ID/Secret validation; webhook and recommended context-aware group setup probe config " +
+        "automation and fall back to explicit manual steps on the international config-route 404.",
     ),
     {
       name: "skill",

@@ -2,20 +2,41 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendChannelDotEnv, channelSetup } from "../src/scaffold/add-channel.ts";
+import { appendChannelDotEnv, channelSetup, scaffoldChannel } from "../src/scaffold/add-channel.ts";
 
 describe("channel setup guidance", () => {
-  it("separates optional group visibility from mandatory Feishu publish", () => {
+  it("puts recommended context-aware permission approval before publishing and explains mention-only degradation", () => {
     for (const kind of ["feishu", "lark"] as const) {
-      const steps = channelSetup(kind).steps;
-      const optionalScope = steps.find((step) => step.includes("im:message.group_msg"));
-      expect(optionalScope).toContain("optional before publishing");
-      expect(optionalScope).not.toContain("PUBLISH");
-    }
+      for (const ingress of ["webhook", "websocket"] as const) {
+        const contextSteps = channelSetup(kind, ingress, "context").steps;
+        const scopeIndex = contextSteps.findIndex((step) => step.includes("im:message.group_msg"));
+        const publishIndex = contextSteps.findIndex((step, index) => index > scopeIndex && /publish/i.test(step));
+        expect(scopeIndex).toBeGreaterThanOrEqual(0);
+        expect(publishIndex).toBeGreaterThan(scopeIndex);
+        expect(contextSteps[scopeIndex]).toContain("all group messages");
+        expect(contextSteps[scopeIndex]).not.toContain("optional");
 
-    const publish = channelSetup("feishu").steps.find((step) => step.startsWith("PUBLISH"));
-    expect(publish).toContain("switch to webhook mode takes effect on publish");
-    expect(publish).not.toContain("im:message.group_msg");
+        const mentionSteps = channelSetup(kind, ingress, "mentions").steps;
+        expect(mentionSteps.join("\n")).toContain("mention-only");
+        expect(mentionSteps.join("\n")).toContain("bare managed-thread replies");
+        expect(mentionSteps.join("\n")).toContain("disabled");
+      }
+    }
+  });
+
+  it("WebSocket setup needs only App ID/Secret and writes the WebSocket factory into the scaffold", async () => {
+    const setup = channelSetup("feishu", "websocket");
+    expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
+    expect(setup.steps.join("\n")).toContain("without --tunnel");
+
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-scaffold-"));
+    await scaffoldChannel(dir, "feishu", { ingress: "websocket" });
+    const source = await readFile(join(dir, "channels", "feishu.ts"), "utf8");
+    expect(source).toContain("feishuWebSocketChannel");
+    expect(source).not.toContain("feishuChannel(");
+    expect(source).not.toContain("ingress:");
+    expect(source).not.toContain("FEISHU_VERIFICATION_TOKEN");
+    expect(source).not.toContain("FEISHU_ENCRYPT_KEY");
   });
 });
 

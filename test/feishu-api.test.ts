@@ -231,6 +231,40 @@ describe("app config (scan-to-create + webhook registration)", () => {
     expect(fx.calls().at(-1)?.url).toContain("/open-apis/application/v6/applications/cli_a?lang=zh_cn");
   });
 
+  it("lists scope grant state and PATCHes requested tenant scopes into the app draft", async () => {
+    const reqs: { url: string; method?: string; body?: Record<string, unknown> }[] = [];
+    stubFetch((url, init) => {
+      reqs.push({
+        url,
+        method: init.method,
+        body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+      });
+      return url.endsWith("/application/v6/scopes")
+        ? okData({
+            scopes: [
+              { scope_name: "im:message.group_msg", grant_status: 1, scope_type: "tenant" },
+              { scope_name: "im:message.group_msg:get_as_user", grant_status: 0, scope_type: "user" },
+            ],
+          })
+        : okData({});
+    });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+
+    await expect(api.listAppScopes()).resolves.toEqual([
+      { name: "im:message.group_msg", grantStatus: 1, type: "tenant" },
+      { name: "im:message.group_msg:get_as_user", grantStatus: 0, type: "user" },
+    ]);
+    await api.addAppScopes("cli_a", ["im:message.group_msg"]);
+
+    expect(reqs[0]?.url).toContain("/open-apis/application/v6/scopes");
+    expect(reqs[0]?.method).toBe("GET");
+    expect(reqs[1]?.url).toContain("/open-apis/application/v7/applications/cli_a/config");
+    expect(reqs[1]?.method).toBe("PATCH");
+    expect(reqs[1]?.body).toEqual({
+      scope: { add_scopes: [{ scope_name: "im:message.group_msg", token_type: "tenant" }] },
+    });
+  });
+
   it("updateEventSubscription PATCHes webhook mode + the request URL at the v7 config", async () => {
     const reqs: { url: string; method?: string; body: Record<string, unknown> }[] = [];
     stubFetch((url, init) => {

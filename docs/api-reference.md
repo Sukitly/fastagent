@@ -88,6 +88,7 @@ function router(routes: Routes): ChannelHandler;
 function serveNode(handler: ChannelHandler, options: { port: number }): {
   listening: Promise<number>;
   close(): Promise<void>;
+  closeAllConnections(): void;
 };
 ```
 
@@ -245,15 +246,32 @@ interface ChannelContext {
   stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <dir>/.fastagent), absolute
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
+interface LongConnection {
+  ready: Promise<void>; // settles on first usable connection; on a pre-ready abort it still settles (cancellation)
+  closed: Promise<void>; // resolves after abort-driven shutdown; rejects on terminal failure
+}
+interface LongConnectionChannelModule {
+  name: string;
+  connect(ctx: ChannelContext, signal: AbortSignal): LongConnection;
+}
 function loadChannels(
   dir: string,
   ctx: ChannelContext,
-): Promise<{ routes: Routes; collisions: ChannelCollision[]; failures: ModuleLoadFailure[] }>;
+): Promise<{
+  routes: Routes;
+  longConnections: LoadedLongConnectionChannel[];
+  routeChannels: string[];
+  longConnectionChannels: string[];
+  collisions: ChannelCollision[];
+  failures: ModuleLoadFailure[];
+}>;
 ```
 
-A workspace channel default-exports a `ChannelModule` from `channels/<name>.ts`. Bundled adapters
-(`telegramChannel(opts)`, `githubChannel(opts)`) take policy options and return a `ChannelModule`, so
-the channel file is one expression; a channel persisting durable state derives its home from
+A workspace channel default-exports either a route `ChannelModule` or a
+`LongConnectionChannelModule`. Bundled webhook adapters (`telegramChannel(opts)`,
+`githubChannel(opts)`, `feishuChannel(opts)`) return `ChannelModule`; `feishuWebSocketChannel(opts)`
+and `larkWebSocketChannel(opts)` return `LongConnectionChannelModule`. In both forms the channel file
+is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it. Serving fails if any enabled channel
 cannot load.

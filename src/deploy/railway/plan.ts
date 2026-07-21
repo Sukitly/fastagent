@@ -33,8 +33,10 @@ export interface RailwayPlanInput extends ContainerInput {
   serviceName: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Channels discovered in the workspace — each contributes its secret metadata + webhook step. */
+  /** Known first-party channels — each contributes its secret metadata + webhook step. */
   channels: ChannelKind[];
+  /** All long-connection channel basenames, including custom channels — no App Sleeping. */
+  longConnectionChannels?: string[];
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
   // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
@@ -82,7 +84,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ...containerArtifacts(input),
   ];
 
-  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
+  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets, input.longConnectionChannels);
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
@@ -192,7 +194,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
   for (const kind of ["feishu", "lark"] as const) {
-    if (!channels.includes(kind)) continue;
+    if (!channels.includes(kind) || input.longConnectionChannels?.includes(kind)) continue;
     const label = kind === "feishu" ? "Feishu" : "Lark";
     runbook.push(
       `# Set the ${label} event Request URL (developer console → Events & Callbacks). Default route`,
@@ -210,7 +212,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       ? `# Scale-to-zero: do NOT enable App Sleeping — github turns have no replay, a sleep mid-review is lost.`
       : input.hasTimeTriggers
         ? `# Scale-to-zero: do NOT enable App Sleeping — schedules/wake-ups have no external wake-up; a sleeping service sleeps through them.`
-        : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
+        : (input.longConnectionChannels?.length ?? 0) > 0
+          ? `# Scale-to-zero: do NOT enable App Sleeping — a long-connection channel must remain connected.`
+          : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,
   );
 

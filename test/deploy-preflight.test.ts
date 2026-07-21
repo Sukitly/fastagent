@@ -100,11 +100,58 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await writeFile(join(dir, "channels", "slack.ts"), "export default () => ({});\n");
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
-    if (pre.ok)
+    if (pre.ok) {
+      expect(pre.routeChannels).toEqual(["slack"]);
+      expect(pre.longConnectionChannels).toEqual([]);
       expect(pre.messages).toContainEqual({
         level: "note",
-        text: expect.stringContaining('channel "slack" is custom'),
+        text: expect.stringContaining('route channel "slack" is custom'),
       });
+    }
+  });
+
+  it("recognizes a long-connection module structurally and reports its always-on requirement", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(
+      join(dir, "channels", "feishu.mjs"),
+      `export default { name: "feishu websocket", connect() {} };\n`,
+    );
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.channels).toEqual(["feishu"]);
+      expect(pre.routeChannels).toEqual([]);
+      expect(pre.longConnectionChannels).toEqual(["feishu"]);
+      expect(pre.messages).toContainEqual({
+        level: "note",
+        text: expect.stringMatching(/long-connection channel.*keeps one machine running/),
+      });
+    }
+  });
+
+  it("keeps a custom long-connection channel always-on without pretending it has a webhook", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(join(dir, "channels", "socket.mjs"), `export default { name: "custom socket", connect() {} };\n`);
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.channels).toEqual([]);
+      expect(pre.routeChannels).toEqual([]);
+      expect(pre.longConnectionChannels).toEqual(["socket"]);
+      expect(pre.messages).toContainEqual({
+        level: "note",
+        text: expect.stringMatching(/long-connection channel "socket".*keep the process running.*skip webhook/),
+      });
+    }
+  });
+
+  it("fails visibly when an enabled channel throws during deployment inspection", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(join(dir, "channels", "broken.mjs"), `throw new Error("import exploded");\n`);
+    await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
   it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach; --force suppresses it", async () => {

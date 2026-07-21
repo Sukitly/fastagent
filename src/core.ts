@@ -24,6 +24,8 @@ export {
   type ChannelContext,
   type ChannelHandler,
   type ChannelModule,
+  type LongConnection,
+  type LongConnectionChannelModule,
   type Routes,
   router,
   serveNode,

@@ -88,7 +88,7 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
-    w.on("message", (m: { type?: string; port?: number }) => {
+    w.on("message", (m: { type?: string; port?: number; routeChannels?: string[] }) => {
       if (m?.type !== "ready") return;
       everServed = true;
       // Start the tunnel once, on the first worker that binds; reuse it across reloads.
@@ -96,7 +96,10 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(agentDir, t.url, { openUrl: openExternalUrl });
+            void announceWebhooks(agentDir, t.url, {
+              openUrl: openExternalUrl,
+              routeChannels: m.routeChannels,
+            });
           }
         });
       }
