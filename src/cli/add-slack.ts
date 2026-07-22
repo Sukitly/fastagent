@@ -6,11 +6,10 @@ import { ensureStateRootSelfIgnored } from "../engines/pi/definition.ts";
 import { parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
-import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
+import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
 import { readSlackOnboardingState, writeSlackOnboardingState } from "../channels/slack/onboarding-state.ts";
 import { startSlackSetupServer } from "../channels/slack/setup-server.ts";
-import type { GroupBehaviorChoice } from "../channels/feishu/setup-mode.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
 const CONFIG_TOKEN_URL = "https://api.slack.com/apps";

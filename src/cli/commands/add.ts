@@ -7,16 +7,14 @@ import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
-import type {
-  FeishuGroupBehavior,
-  FeishuSubscriptionMode,
-  GroupBehaviorChoice,
-} from "../../channels/feishu/setup-mode.ts";
+import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveAgentDir, resolveStateRoot } from "../../engines/pi/config.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
+  type GroupBehavior,
+  type GroupBehaviorChoice,
   appendChannelDotEnv,
   appendChannelEnv,
   assertChannelReady,
@@ -248,7 +246,7 @@ async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined):
   }
   if (kind !== "feishu" && kind !== "lark" && kind !== "slack") return { behavior: "context", explicit: false };
   if (raw !== undefined) return { behavior: raw, explicit: true };
-  const defaultBehavior: FeishuGroupBehavior = "context";
+  const defaultBehavior: GroupBehavior = "context";
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     console.error(
       `[fastagent] no interactive terminal — assuming ${kind} group behavior ${defaultBehavior}; pass --group-behavior explicitly to override`,
@@ -270,7 +268,7 @@ async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined):
       hint: "only explicit @Agent messages; no group-wide message permission",
     },
   ];
-  const answer = await select<FeishuGroupBehavior>({
+  const answer = await select<GroupBehavior>({
     message: "Choose group-chat behavior",
     initialValue: defaultBehavior,
     options: choices,

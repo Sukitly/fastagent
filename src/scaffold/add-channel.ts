@@ -11,9 +11,20 @@ import { assertInsideWorkspace } from "../workspace.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { parseEnvContent } from "../env.ts";
-import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
+import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
 export type ChannelKind = "github" | "telegram" | "slack" | "feishu" | "lark";
+
+/** Group-visibility choice shared by the slack/feishu/lark onboarding flows. Each channel keeps its
+ * own channel-level type (`SlackGroupBehavior`, `FeishuGroupBehavior`) — this is the CLI-side value. */
+export type GroupBehavior = "context" | "mentions";
+
+/** A resolved group-behavior decision plus whether the author actually chose it (flag or prompt).
+ * A defaulted "context" (non-interactive, no flag) must never drive a sensitive-scope write. */
+export interface GroupBehaviorChoice {
+  behavior: GroupBehavior;
+  explicit: boolean;
+}
 
 /** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
 export interface ChannelEnv {
@@ -180,7 +191,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
 export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
-  groupBehavior?: FeishuGroupBehavior,
+  groupBehavior?: GroupBehavior,
 ): { env: ChannelEnv[]; steps: string[] } {
   const behavior = groupBehavior ?? "context";
   const setup =
@@ -353,7 +364,7 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
 export async function scaffoldChannel(
   dir: string,
   kind: ChannelKind,
-  options: { ingress?: FeishuSubscriptionMode; groupBehavior?: FeishuGroupBehavior } = {},
+  options: { ingress?: FeishuSubscriptionMode; groupBehavior?: GroupBehavior } = {},
 ): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
