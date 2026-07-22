@@ -34,6 +34,8 @@ export interface SlackMessageEvent {
   thread_ts?: string;
   channel?: string;
   channel_type?: string;
+  /** `app_home_opened` only: which App Home tab was opened (`messages` signals a DM open). */
+  tab?: string;
   team?: string;
   files?: SlackFile[];
   /** Included on message.im when the Agent messaging experience is enabled. */

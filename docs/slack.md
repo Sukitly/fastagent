@@ -113,6 +113,7 @@ export default slackChannel({
   rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
   // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
@@ -122,6 +123,10 @@ export default slackChannel({
 
 Required credentials are validated when serving activates the module, so deployment inspection remains
 import-safe while a live endpoint never runs without verification.
+
+On a user's first DM open (`app_home_opened` with `tab: "messages"`), the channel posts a one-time
+plain-Markdown welcome. Set `welcome` to customize the text or `false` to disable it. No interactive
+buttons are used yet, so the message stays plain until an interactivity endpoint exists.
 
 ## Routing and sessions
 

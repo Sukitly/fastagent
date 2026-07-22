@@ -128,6 +128,74 @@ afterEach(async () => {
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
+describe("Slack first-run welcome", () => {
+  const appHome = (input: Partial<NonNullable<SlackEventEnvelope["event"]>> = {}): SlackEventEnvelope => ({
+    type: "event_callback",
+    team_id: "T1",
+    event_id: "Ev-home",
+    event: { type: "app_home_opened", user: "U1", channel: "D1", tab: "messages", ...input },
+  });
+  const welcomeBodies = (fetchMock: ReturnType<typeof okFetch>): string[] =>
+    slackBodies(fetchMock, "chat.postMessage")
+      .map((body) => String(body.markdown_text ?? ""))
+      .filter(Boolean);
+
+  it("sends a one-time welcome on first DM open, without invoking the agent", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent);
+    await handler(signedRequest(appHome()));
+    await settle();
+    const welcomes = welcomeBodies(fetchMock);
+    expect(welcomes).toHaveLength(1);
+    expect(welcomes[0]).toContain("AI agent here to help");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not repeat the welcome on later opens, durably across a restart", async () => {
+    const stateRoot = root();
+    const first = okFetch();
+    vi.stubGlobal("fetch", first);
+    const a = mount(replyingAgent().agent, {}, stateRoot);
+    await a.handler(signedRequest(appHome()));
+    await settle();
+    expect(welcomeBodies(first)).toHaveLength(1);
+
+    const second = okFetch();
+    vi.stubGlobal("fetch", second);
+    const b = mount(replyingAgent().agent, {}, stateRoot);
+    await b.handler(signedRequest(appHome()));
+    await settle();
+    expect(welcomeBodies(second)).toHaveLength(0);
+  });
+
+  it("ignores non-messages tabs", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { handler } = mount(replyingAgent().agent);
+    await handler(signedRequest(appHome({ tab: "home" })));
+    await settle();
+    expect(welcomeBodies(fetchMock)).toHaveLength(0);
+  });
+
+  it("disables the welcome with welcome:false and honors a custom string", async () => {
+    const off = okFetch();
+    vi.stubGlobal("fetch", off);
+    const disabled = mount(replyingAgent().agent, { welcome: false });
+    await disabled.handler(signedRequest(appHome()));
+    await settle();
+    expect(welcomeBodies(off)).toHaveLength(0);
+
+    const custom = okFetch();
+    vi.stubGlobal("fetch", custom);
+    const { handler } = mount(replyingAgent().agent, { welcome: "Custom hi there" });
+    await handler(signedRequest(appHome({ user: "U2" })));
+    await settle();
+    expect(welcomeBodies(custom)).toEqual(["Custom hi there"]);
+  });
+});
+
 describe("Slack signed ingress", () => {
   it("verifies the raw-body HMAC and rejects stale timestamps", () => {
     const body = '{"type":"url_verification","challenge":"x"}';

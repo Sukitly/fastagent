@@ -39,6 +39,7 @@ import {
   streamSlackReply,
 } from "./preview.ts";
 import { type SlackTarget, type SlackTaskDisplayMode, createSlackApi } from "./slack-api.ts";
+import { createWelcomedUsers } from "./welcomed.ts";
 
 export { defaultSlackRoute, slackEnvelope };
 export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
@@ -48,6 +49,7 @@ const MAX_TURN_ATTEMPTS = 3;
 const MAX_SIGNATURE_AGE_S = 5 * 60;
 const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
+const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question or describe a task and I'll get to work.";
 
 interface StoredSlackTurn {
   id: string;
@@ -119,6 +121,10 @@ export interface SlackChannelOptions {
   taskDisplay?: SlackTaskDisplayMode;
   /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
   aiDisclaimer?: string | false;
+  /** First-run direct-message welcome, sent once when a user first opens the DM (`app_home_opened`,
+   * `tab: "messages"`). A string customizes it; `false` disables it. Plain Markdown only — no interactive
+   * buttons until an interactivity endpoint exists. Defaults to a generic greeting. */
+  welcome?: string | false;
   /** Custom route policy. Providing it disables the default managed-thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
   /** Customer-facing failure formatter; full details always remain in operator logs. */
@@ -158,6 +164,7 @@ export function slackChannel({
   rendering = "native",
   taskDisplay = "plan",
   aiDisclaimer,
+  welcome = DEFAULT_WELCOME,
   route,
   onError,
   apiBaseUrl = "https://slack.com/api",
@@ -176,6 +183,9 @@ export function slackChannel({
   }
   if (!(["timeline", "plan", "dense"] as const).includes(taskDisplay)) {
     throw new Error('slackChannel taskDisplay must be "timeline", "plan", or "dense"');
+  }
+  if (welcome !== false && typeof welcome !== "string") {
+    throw new Error("slackChannel welcome must be a string or false");
   }
 
   return ({ agent, stateRoot }) => {
@@ -240,6 +250,7 @@ export function slackChannel({
 
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const ownedThreads = createOwnedSlackThreads(join(stateHome, "owned-threads.json"), label);
+    const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
     const buffer = createSlackContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredSlackTurn>(join(stateHome, "turns.json"), {
       label,
@@ -476,6 +487,41 @@ export function slackChannel({
       );
     };
 
+    // First-run DM welcome: app_home_opened(tab="messages") signals a DM open. Post once per user.
+    const welcomeInFlight = new Set<string>();
+    const welcomes = new Set<Promise<void>>();
+    const maybeWelcome = (envelope: SlackEventEnvelope): void => {
+      if (welcome === false) return;
+      const body = welcome.trim();
+      if (!body) return;
+      const event = envelope.event;
+      if (!event || event.type !== "app_home_opened" || event.tab !== "messages") return;
+      const userId = event.user;
+      const channelId = event.channel;
+      if (!userId || !channelId) return;
+      const teamId = slackTeamId(envelope) ?? authenticatedTeamId;
+      if (!teamId) return;
+      const id = `${teamId}:${userId}`;
+      if (welcomed.has(teamId, userId) || welcomeInFlight.has(id)) return;
+      // Reserve in-memory so rapid re-opens don't double-post; persist to the durable set only on a
+      // successful post, so a failed post simply retries on the next open.
+      welcomeInFlight.add(id);
+      const promise = api
+        .postMarkdown({ channelId }, body)
+        .then(() => {
+          welcomed.add(teamId, userId);
+          log.info(`${label} sent first-run welcome to ${id}`);
+        })
+        .catch((error) =>
+          log.warn(`${label} could not send first-run welcome (retries on next open): ${String(error)}`),
+        )
+        .finally(() => {
+          welcomeInFlight.delete(id);
+          welcomes.delete(promise);
+        });
+      welcomes.add(promise);
+    };
+
     const handler = async (request: Request): Promise<Response> => {
       if (request.method !== "POST") return text("POST only\n", 405);
       const body = await readBodyCapped(request, MAX_EVENT_BYTES);
@@ -504,10 +550,12 @@ export function slackChannel({
         log.error(`${label} refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
         return text("slack authentication unavailable\n", 503);
       }
+      maybeWelcome(envelope);
       acceptEvent(envelope);
       return new Response(null, { status: 200 });
     };
-    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () => queue.idle();
+    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () =>
+      Promise.all([queue.idle(), ...welcomes]).then(() => undefined);
     return { "POST /slack": handler };
   };
 }

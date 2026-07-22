@@ -23,6 +23,7 @@ export default slackChannel({
   rendering: "native", // Slack Agent streams + task timeline; use "classic" only for compatibility
   // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
   // Optional per-reply footer, if your policy requires one: aiDisclaimer: "AI-generated; verify important information.",
+  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: a generic greeting)
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
