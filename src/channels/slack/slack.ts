@@ -491,9 +491,16 @@ export function slackChannel({
             )
           : undefined;
 
-      // Match Feishu/Lark ownership: only a top-level summon that creates an Agent-managed thread owns
-      // the root. Mentioning the Agent inside an existing human thread answers once without adopting it.
-      if (route === undefined && threadedGroup && event.thread_ts === undefined && sameChannel) {
+      // Match Feishu/Lark ownership in context mode: only a top-level summon that creates an
+      // Agent-managed thread owns the root. Mentioning the Agent inside an existing human thread
+      // answers once without adopting it; mention-only mode never consumes ownership state.
+      if (
+        groupBehavior === "context" &&
+        route === undefined &&
+        threadedGroup &&
+        event.thread_ts === undefined &&
+        sameChannel
+      ) {
         ownedThreads.add(teamId, event.channel, rootTs);
       }
       submit(

@@ -528,6 +528,7 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).not.toContain("background");
     expect(() => readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toThrow();
+    expect(() => readFileSync(join(stateRoot, "channels", "slack", "owned-threads.json"), "utf8")).toThrow();
   });
 
   it("persists a turn before ACK and uses only Slack file IDs in the intent", async () => {
