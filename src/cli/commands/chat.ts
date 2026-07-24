@@ -3,11 +3,11 @@ import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { resolveWorkspace } from "../../engines/pi/config.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 export async function runChat(dirArg: string, opts: { model?: string; authPath?: string }): Promise<void> {
-  const ws = resolveWorkspace(resolve(dirArg));
+  const ws = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   loadDotEnv(ws.root);
   installProxyFetch(); // model calls (and the login dialog) must go through the proxy too
   // First-run funnel, FULL picker: chat authenticates through fastagent's credential store like every

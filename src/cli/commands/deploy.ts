@@ -42,7 +42,7 @@ import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failStartupOn, failUsage } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
@@ -65,7 +65,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // ONE deploy semantic for both layouts: bake the WORKBENCH (WYSIWYG). Artifacts land at the
   // workspace root (= the workbench when flat; `.fastagent/` when standalone — plus the one root
   // `.dockerignore` the packers require); host CLIs run from the workbench (the build context).
-  const { root, workbench, layout } = resolveWorkspace(resolve(dirArg));
+  const { root, workbench, layout } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   const standalone = layout === "standalone";
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.

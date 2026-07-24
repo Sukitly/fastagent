@@ -25,7 +25,7 @@ import {
 } from "../../scaffold/add-channel.ts";
 import { exists } from "../../scaffold/init.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failStartupOn, failUsage } from "../fail.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 export async function runAddChannel(
@@ -35,7 +35,7 @@ export async function runAddChannel(
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is workspace surface — everything lands at the
   // workspace ROOT (`.fastagent/` when standalone), the same place dev/start discover channels/.
-  const { root: target } = resolveWorkspace(resolve(dirArg));
+  const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
@@ -274,7 +274,7 @@ export async function runAddSkill(
   dirArg: string,
   opts: { update?: boolean },
 ): Promise<void> {
-  const { root: target } = resolveWorkspace(resolve(dirArg));
+  const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   if (!source) {
     // A missing source is a usage error (exit 2), but the guide is worth more than a bare
     // missing-argument line — the common path (writing your own skill) needs no command at all.

@@ -380,6 +380,19 @@ describe("cli papercuts", () => {
     expect(text.stderr).toMatch(/bad\.mjs/);
   });
 
+  it("an ambiguous layout (config at BOTH roots) fails as a one-line startup error, not a raw stack", async () => {
+    // resolveWorkspace throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
+    // the failStartupOn wrapper the refusal surfaced as an uncaught stack trace (found in acceptance).
+    const dir = await mkdtemp(join(tmpdir(), "fa-ambiguous-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
+    await mkdir(join(dir, ".fastagent"), { recursive: true });
+    await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+    const { code, stderr } = await run(["info", dir]);
+    expect(code).toBe(1); // runtime failure, not a crash
+    expect(stderr).toMatch(/^Error: .*ambiguous/); // the one-line failStartup presentation
+    expect(stderr).not.toMatch(/\n\s+at /); // no stack frames — this is a user-fixable refusal, not a bug
+  });
+
   it("login self-ignores .secrets on an adapted dir before it writes the credential file", async () => {
     // login is the command that CREATES the secret, so its self-ignore must fire independently of the
     // opener — and BEFORE the interactive gate below, so the .gitignore is written even though this

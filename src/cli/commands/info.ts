@@ -17,7 +17,7 @@ import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollision
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -28,7 +28,7 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const { root, workbench, layout } = resolveWorkspace(dir);
+  const { root, workbench, layout } = failStartupOn(() => resolveWorkspace(dir));
   loadDotEnv(root); // skills/tools may read env at load time
   const { config, path: configPath } = await loadConfig(root).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);

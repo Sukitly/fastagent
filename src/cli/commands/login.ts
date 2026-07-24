@@ -13,7 +13,7 @@ import { resolveAuthPath, resolveSecretsDir, resolveWorkspace } from "../../engi
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
@@ -23,7 +23,7 @@ export interface LoginOptions {
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
-  const { root: loginDir } = resolveWorkspace(process.cwd());
+  const { root: loginDir } = failStartupOn(() => resolveWorkspace(process.cwd()));
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const secretsDir = resolveSecretsDir(loginDir);

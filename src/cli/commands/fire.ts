@@ -13,7 +13,7 @@ import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { scheduleSession } from "../../schedule/scheduler.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface FireOptions {
@@ -25,7 +25,7 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const fireDir = resolve(dirArg);
-  const ws = resolveWorkspace(fireDir);
+  const ws = failStartupOn(() => resolveWorkspace(fireDir));
   loadDotEnv(ws.root);
   installProxyFetch();
   await resolveFirstRunModel(ws.root, opts);

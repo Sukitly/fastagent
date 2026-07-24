@@ -5,10 +5,10 @@ import { loadConfig, resolveWorkspace } from "../../engines/pi/config.ts";
 import { resolveWorkspaceTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { turnContext } from "../../engines/pi/tool-context.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failStartupOn, failUsage } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
-  const { root, workbench } = resolveWorkspace(resolve(dirArg));
+  const { root, workbench } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   loadDotEnv(root); // a tool may read a key from .env
   const { config } = await loadConfig(root).catch(failStartup);
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner

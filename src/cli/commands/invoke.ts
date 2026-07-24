@@ -6,7 +6,7 @@ import { resolveWorkspace } from "../../engines/pi/config.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface InvokeOptions {
@@ -18,7 +18,7 @@ export interface InvokeOptions {
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   const invokeDir = resolve(dirArg);
-  const ws = resolveWorkspace(invokeDir);
+  const ws = failStartupOn(() => resolveWorkspace(invokeDir));
   loadDotEnv(ws.root);
   installProxyFetch();
   await resolveFirstRunModel(ws.root, opts);

@@ -14,7 +14,7 @@ import { log, setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../scaffold/init.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
 
@@ -30,7 +30,7 @@ export interface StartOptions {
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const ws = resolveWorkspace(dir);
+  const ws = failStartupOn(() => resolveWorkspace(dir));
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
   const portFlag = parsePort(opts.port, "--port", "flag");
   loadDotEnv(ws.root);
