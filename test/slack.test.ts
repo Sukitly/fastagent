@@ -354,20 +354,20 @@ describe("Slack sessions, context, and managed threads", () => {
       channel: "D1",
       thread_ts: "1.0",
       chunks: [{ type: "markdown_text", text: expect.stringContaining("hello back") }],
-      task_display_mode: "timeline",
+      task_display_mode: "plan",
     });
     expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).not.toContain("AI-generated content");
   });
 
-  it("routes a configured compact taskDisplay into the native stream", async () => {
+  it("routes the configured taskDisplay into the native stream's task_display_mode", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("hello back");
-    const { handler } = mount(agent, { taskDisplay: "plan" });
+    const { handler } = mount(agent, { taskDisplay: "timeline" });
     await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
     await settle();
 
-    expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({ task_display_mode: "plan" });
+    expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({ task_display_mode: "timeline" });
   });
 
   it("renders concise native task details without exposing reasoning or successful tool output", async () => {
