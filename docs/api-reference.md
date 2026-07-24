@@ -142,7 +142,7 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `persona.md`/`skills/` from `dir` (the workspace root) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workbench (where tools operate, whose repo `AGENTS.md` is context) from the workspace root — `createPiAgentFromWorkspace` does this for the standalone layout.
+Load `persona.md`/`skills/` from `dir` (the workspace root) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workbench (where tools operate, whose repo `AGENTS.md` is context) from the workspace root — `createPiAgentFromWorkspace` does this for the embedded layout.
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
@@ -159,8 +159,8 @@ function createPiAgentFromWorkspace(
   configPath?: string;
   modelSpec: string;
   root: string; // the workspace root
-  workbench: string; // the agent's cwd (= root when flat; the parent when standalone)
-  layout: "flat" | "standalone";
+  workbench: string; // the agent's cwd (= root when flat; the parent when embedded)
+  layout: "flat" | "embedded";
   stateRoot: string;
   sessionsDir: string;
   authPath: string;

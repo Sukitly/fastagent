@@ -98,12 +98,12 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("sk-");
   });
 
-  it("namespaces standalone artifacts under .fastagent/ and builds from the workbench root", () => {
+  it("namespaces embedded artifacts under .fastagent/ and builds from the workbench root", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: undefined,
       channels: [],
-      standalone: true,
+      embedded: true,
     });
     expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
       ".dockerignore",

@@ -16,7 +16,7 @@ export async function runChat(dirArg: string, opts: { model?: string; authPath?:
   await resolveFirstRunModel(ws.root, { model: opts.model, authPath: opts.authPath });
   // Run the chat process AT the workbench: pi resolves a session's cwd as `header.cwd ?? process.cwd()`,
   // so aligning process.cwd() with the workbench keeps a cwd-less session on it (= the workspace root
-  // when flat; the host tree when standalone). Paths are absolute.
+  // when flat; the host tree when embedded). Paths are absolute.
   process.chdir(ws.workbench);
   // Lazy-import: chat pulls pi's interactive TUI module graph; headless start/dev never need it.
   const { runPiChat } = await import("../../engines/pi/chat.ts");

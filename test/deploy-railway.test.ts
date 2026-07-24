@@ -24,8 +24,8 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
   });
 
-  it("standalone: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
-    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], standalone: true });
+  it("embedded: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
+    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], embedded: true });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
       ".fastagent/Dockerfile",

@@ -162,7 +162,7 @@ export async function announceWebhooks(
     log.warn(`[fastagent] could not read ${dotEnvPath(dir)}: ${(error as Error).message} — continuing without it`);
   }
   // Serving passes the validated route-channel subset. The basename fallback preserves the public
-  // helper's standalone behavior for callers that did not assemble channels first.
+  // helper's embedded behavior for callers that did not assemble channels first.
   const routeChannels = opts.routeChannels ?? channelBasenames(dir);
   if (routeChannels.length === 0) return;
   // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before

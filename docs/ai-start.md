@@ -18,7 +18,7 @@ Decide which job this is before touching anything:
 
 1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory), then flesh out `persona.md`, skills, and tools from what the user wants.
 2. **An existing directory becomes the agent.** The directory holds what the agent works on or with: `AGENTS.md`, markdown context, skills, tools — or just the projects the agent should manage (a parent directory of repos counts; it needs no agent-shaped files yet). Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
-3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses the standalone layout (the whole workspace in `./.fastagent/`) automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
+3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses the embedded layout (the whole workspace in `./.fastagent/`) automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
 
 All three paths continue with the same steps below: inspect, authenticate, initialize once, test, then connect channels or deploy.
 
@@ -31,8 +31,8 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 
 ## Inspect before changing anything
 
-1. Check whether `fastagent.config.*` exists at the directory root or under `./.fastagent/`. If it does, the directory is already a workspace (flat or standalone).
-2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the workspace root (the directory itself, or `./.fastagent/` when standalone).
+1. Check whether `fastagent.config.*` exists at the directory root or under `./.fastagent/`. If it does, the directory is already a workspace (flat or embedded).
+2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the workspace root (the directory itself, or `./.fastagent/` when embedded).
 3. If code tools are present, check whether `package.json` sets `"type": "module"`.
 4. Ask before choosing a model provider, adding credentials, or changing the existing layout.
 
@@ -68,7 +68,7 @@ Run:
 fastagent init <dir>
 ```
 
-Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory, project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. If a nested layout is needed, init at the root and let init choose the standalone `./.fastagent/` placement itself.
+Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory, project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. If a nested layout is needed, init at the root and let init choose the embedded `./.fastagent/` placement itself.
 
 The default directory is the current directory. `init`:
 
@@ -80,9 +80,9 @@ The default directory is the current directory. `init`:
 FastAgent chooses the layout on the first run:
 
 - flat by default;
-- standalone (the whole workspace in `./.fastagent/`, zero files at the host root) when an existing toolchain or deployment already claims the root, including framework config, `tsconfig`, `go.mod`, `pyproject.toml`, `Cargo.toml`, Docker/Fly/Railway config, or occupied `tools/`, `channels/`, or `skills/` directories.
+- embedded (the whole workspace in `./.fastagent/`, zero files at the host root) when an existing toolchain or deployment already claims the root, including framework config, `tsconfig`, `go.mod`, `pyproject.toml`, `Cargo.toml`, Docker/Fly/Railway config, or occupied `tools/`, `channels/`, or `skills/` directories.
 
-Override only on the first run with `--flat` or `--standalone`. The layout is structural (never configured); to change it later, move the workspace files between the root and `./.fastagent/`.
+Override only on the first run with `--flat` or `--embedded`. The layout is structural (never configured); to change it later, move the workspace files between the root and `./.fastagent/`.
 
 Then run:
 

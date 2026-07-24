@@ -31,7 +31,7 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { STANDALONE_DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import { EMBEDDED_DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
@@ -63,10 +63,10 @@ export interface DeployOptions {
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
   // ONE deploy semantic for both layouts: bake the WORKBENCH (WYSIWYG). Artifacts land at the
-  // workspace root (= the workbench when flat; `.fastagent/` when standalone — plus the one root
+  // workspace root (= the workbench when flat; `.fastagent/` when embedded — plus the one root
   // `.dockerignore` the packers require); host CLIs run from the workbench (the build context).
   const { root, workbench, layout } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
-  const standalone = layout === "standalone";
+  const embedded = layout === "embedded";
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
@@ -86,7 +86,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   const pre = await preflightDeploy({
     root,
     workbench,
-    standalone,
+    embedded,
     config,
     modelSpec,
     run: !!opts.run,
@@ -145,7 +145,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
     await writeArtifacts(workbench, plan.artifacts, {
       force: !!opts.force,
-      neverForce: standalone ? [".dockerignore"] : [],
+      neverForce: embedded ? [".dockerignore"] : [],
     });
     if (opts.run) {
       return runDeployDocker({
@@ -197,10 +197,10 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     });
     await writeArtifacts(workbench, plan.artifacts, {
       force: !!opts.force,
-      neverForce: standalone ? [".dockerignore"] : [],
+      neverForce: embedded ? [".dockerignore"] : [],
     });
     if (opts.run) {
-      if (standalone) {
+      if (embedded) {
         // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner
         // sets (Railway's documented non-root-Dockerfile route), and Railway's default restart policy
         // already equals the file's ON_FAILURE — the dashboard-only Config-as-code pointer only adds
@@ -221,7 +221,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
-        dockerfilePath: standalone ? STANDALONE_DOCKERFILE_PATH_VAR : undefined,
+        dockerfilePath: embedded ? EMBEDDED_DOCKERFILE_PATH_VAR : undefined,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -247,7 +247,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
   // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
   // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
-  // Standalone: fly.toml lives at the workspace root (.fastagent/fly.toml) — the host repo's own
+  // Embedded: fly.toml lives at the workspace root (.fastagent/fly.toml) — the host repo's own
   // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
   const flyTomlPath = join(root, "fly.toml");
   const flyTomlExists = await exists(flyTomlPath);
@@ -300,13 +300,13 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   });
   await writeArtifacts(workbench, plan.artifacts, {
     force: !!opts.force,
-    neverForce: standalone ? [".dockerignore"] : [],
+    neverForce: embedded ? [".dockerignore"] : [],
   });
   if (opts.run) {
     return runDeployFly({
       root,
       workbench,
-      standalone,
+      embedded,
       appName,
       modelAuth,
       authPath,
@@ -333,7 +333,7 @@ async function writeArtifacts(
 ): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
-    // Host-owned paths (the root .dockerignore in the standalone layout): --force means "MY generated
+    // Host-owned paths (the root .dockerignore in the embedded layout): --force means "MY generated
     // artifact is authoritative", which never licenses clobbering the HOST's file — keep it always.
     if (options.neverForce?.includes(a.path) && (await exists(abs))) {
       console.error(
@@ -357,7 +357,7 @@ async function writeArtifacts(
       }
       continue;
     }
-    await mkdir(dirname(abs), { recursive: true }); // standalone artifacts live under .fastagent/
+    await mkdir(dirname(abs), { recursive: true }); // embedded artifacts live under .fastagent/
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
@@ -451,7 +451,7 @@ async function runDeployDocker(params: {
 async function runDeployFly(params: {
   root: string;
   workbench: string;
-  standalone: boolean;
+  embedded: boolean;
   appName: string;
   modelAuth: string | undefined;
   authPath: string;
@@ -463,7 +463,7 @@ async function runDeployFly(params: {
   const {
     root,
     workbench,
-    standalone,
+    embedded,
     appName,
     modelAuth,
     authPath,
@@ -505,8 +505,8 @@ async function runDeployFly(params: {
       missingSecrets,
       channels,
       longConnectionChannels,
-      flyConfig: standalone ? ".fastagent/fly.toml" : "fly.toml",
-      dockerfile: standalone ? ".fastagent/Dockerfile" : undefined,
+      flyConfig: embedded ? ".fastagent/fly.toml" : "fly.toml",
+      dockerfile: embedded ? ".fastagent/Dockerfile" : undefined,
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
@@ -535,7 +535,7 @@ async function runDeployRailway(params: {
   longConnectionChannels: string[];
   extraSecrets: string[];
   intoLinked: boolean;
-  /** RAILWAY_DOCKERFILE_PATH for a standalone workspace; undefined for flat (root Dockerfile auto-detected). */
+  /** RAILWAY_DOCKERFILE_PATH for an embedded workspace; undefined for flat (root Dockerfile auto-detected). */
   dockerfilePath?: string;
 }): Promise<void> {
   const {

@@ -12,8 +12,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import ignore, { type Ignore } from "ignore";
 
-/** The fixed name of a standalone workspace directory (and of the user-global machinery home `~/.fastagent`). */
-export const STANDALONE_DIR = ".fastagent";
+/** The fixed name of an embedded workspace directory (and of the user-global machinery home `~/.fastagent`). */
+export const EMBEDDED_DIR = ".fastagent";
 
 /**
  * Resolve a user-supplied path override (a CLI flag or an env var) to an absolute path, expanding a
@@ -43,7 +43,7 @@ function machineryHome(dir: string): string {
       return resolve(p);
     }
   };
-  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), STANDALONE_DIR) : resolve(dir);
+  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), EMBEDDED_DIR) : resolve(dir);
 }
 
 /**

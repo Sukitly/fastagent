@@ -73,7 +73,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   }).catch(failStartup);
 
   log.info(`[fastagent] start:  ${workbench}`);
-  if (layout === "standalone") log.info(`[fastagent] workspace: ${root} (standalone)`);
+  if (layout === "embedded") log.info(`[fastagent] workspace: ${root} (embedded)`);
   log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);

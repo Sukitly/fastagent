@@ -27,8 +27,8 @@ function run(
 }
 
 describe("cli papercuts", () => {
-  it("deploy (standalone): the host's root .dockerignore is kept even under --force; workspace artifacts written", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-standalone-"));
+  it("deploy (embedded): the host's root .dockerignore is kept even under --force; workspace artifacts written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-embedded-"));
     await mkdir(join(dir, ".fastagent"), { recursive: true });
     await writeFile(
       join(dir, ".fastagent", "fastagent.config.mjs"),
@@ -46,12 +46,12 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/BAKE SECRETS INTO THE IMAGE/); // the critical kept-file warn fired (not force-gated)
     expect(stderr).toMatch(/excludes \.git/); // …and the pull\/push note
     // Workspace artifacts land namespaced under .fastagent/.
-    expect(await readFile(join(dir, ".fastagent", "Dockerfile"), "utf8")).toMatch(/Standalone/);
+    expect(await readFile(join(dir, ".fastagent", "Dockerfile"), "utf8")).toMatch(/Embedded/);
     expect(await readFile(join(dir, ".fastagent", "fly.toml"), "utf8")).toMatch(/FASTAGENT_SECRETS_DIR/);
   });
 
-  it("deploy (standalone) is a first-class layout: generate mode succeeds with the layout note; agentDir is retired", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-standalone-gen-"));
+  it("deploy (embedded) is a first-class layout: generate mode succeeds with the layout note; agentDir is retired", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-embedded-gen-"));
     await mkdir(join(dir, ".fastagent"), { recursive: true });
     await writeFile(
       join(dir, ".fastagent", "fastagent.config.mjs"),
@@ -59,7 +59,7 @@ describe("cli papercuts", () => {
     );
     const result = await run(["deploy", "fly", dir]);
     expect(result.code).toBe(0);
-    expect(result.stderr).toMatch(/standalone image/); // the WYSIWYG bake note is stated
+    expect(result.stderr).toMatch(/embedded image/); // the WYSIWYG bake note is stated
     expect(result.stderr).not.toMatch(/not yet supported/); // no layout gate anywhere
 
     // The retired config key fails visibly — layout is structural now, never configured.
@@ -236,8 +236,8 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/available: daily/);
   });
 
-  it("fire discovers schedules from the standalone workspace root (where the scheduler serves them), not the workbench", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-fire-standalone-"));
+  it("fire discovers schedules from the embedded workspace root (where the scheduler serves them), not the workbench", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-fire-embedded-"));
     await mkdir(join(dir, ".fastagent", "schedules"), { recursive: true });
     await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
     const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;

@@ -52,7 +52,7 @@ There is ONE workspace shape, with two placements. The shape:
 ```
 
 **Flat** places it directly in the directory ("a directory is an agent"): root = workbench.
-**Standalone** nests the identical shape into `<dir>/.fastagent/` — the host tree gets ZERO writes;
+**Embedded** nests the identical shape into `<dir>/.fastagent/` — the host tree gets ZERO writes;
 the parent directory is the WORKBENCH (the agent's cwd, whose `AGENTS.md` ancestors are ② context):
 
 ```txt
@@ -67,7 +67,7 @@ repo/                       # the workbench — what the agent works ON, untouch
 ```
 
 Layout is STRUCTURAL, never configured: `resolveWorkspace(dir)` finds a `fastagent.config.*` at the
-dir root (flat) or under `<dir>/.fastagent/` (standalone); both at once is a refused ambiguity. The
+dir root (flat) or under `<dir>/.fastagent/` (embedded); both at once is a refused ambiguity. The
 machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret store (never
 an image), `.state/` through a volume (`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it
 in a container), `.cache/` is re-derivable.
@@ -425,7 +425,7 @@ required secret names, and a runbook. Docker adds a user-owned `fastagent.compos
 service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
 Quick Tunnel URL and registers webhooks. Both layouts deploy through ONE semantic — bake the workbench
-as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Standalone namespaces
+as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Embedded namespaces
 every artifact under `.fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single host-tree
 write is the root `.dockerignore` the host CLIs' context packers require (kept if the host owns one;
 preflight then checks it — missing secret excludes or a rule dropping `.fastagent` from the context

@@ -61,7 +61,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
   log.info(`[fastagent] dir:    ${a.workbench}`);
-  if (a.layout === "standalone") log.info(`[fastagent] workspace: ${a.root} (standalone)`);
+  if (a.layout === "embedded") log.info(`[fastagent] workspace: ${a.root} (embedded)`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
   log.info(
     `[fastagent] model:  ${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`,

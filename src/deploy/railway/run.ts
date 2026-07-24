@@ -48,7 +48,7 @@ export interface RailwayRunPlan {
   intoLinked: boolean;
   /** `RAILWAY_DOCKERFILE_PATH` value — Railway's service-variable route to a non-root Dockerfile
    *  (builds/dockerfiles docs), set with the machinery variables BEFORE the first `up`. The CLI passes
-   *  `/.fastagent/Dockerfile` for a standalone workspace so the build never falls back to auto-detecting
+   *  `/.fastagent/Dockerfile` for an embedded workspace so the build never falls back to auto-detecting
    *  the host repo root (the config-as-code file also carries the path, but pointing Railway at
    *  `.fastagent/railway.json` is dashboard-only — the variable is the scriptable way). Undefined for
    *  flat: the root `Dockerfile` is auto-detected. */

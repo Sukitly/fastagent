@@ -13,7 +13,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   const { config } = await loadConfig(root).catch(failStartup);
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve the
-  // workspace like the openers so `fastagent tool` finds the SAME tools/ as dev/start when standalone.
+  // workspace like the openers so `fastagent tool` finds the SAME tools/ as dev/start when embedded.
   const { tools, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, root, workbench).catch(
     failStartup,
   );

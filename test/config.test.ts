@@ -59,15 +59,15 @@ describe("config: resolveWorkspace (structural layout resolution)", () => {
     expect(ws.workbench).toBe(dir);
   });
 
-  it("standalone: a config in ./.fastagent/ → root = the nested dir, workbench = the host dir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-standalone-"));
+  it("embedded: a config in ./.fastagent/ → root = the nested dir, workbench = the host dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-embedded-"));
     await mkdir(join(dir, ".fastagent"));
     await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
     const ws = resolveWorkspace(dir);
-    expect(ws.layout).toBe("standalone");
+    expect(ws.layout).toBe("embedded");
     expect(ws.root).toBe(join(dir, ".fastagent"));
     expect(ws.workbench).toBe(dir);
-    // Invoked from INSIDE the standalone root: the SAME workspace resolves (workbench = the parent).
+    // Invoked from INSIDE the embedded root: the SAME workspace resolves (workbench = the parent).
     const inner = resolveWorkspace(join(dir, ".fastagent"));
     expect(inner).toEqual(ws);
   });
@@ -85,12 +85,12 @@ describe("config: resolveWorkspace (structural layout resolution)", () => {
     await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
     expect(() => resolveWorkspace(dir)).toThrow(/ambiguous/);
     // Entry-point-invariant: invoked from INSIDE .fastagent/, the same conflict must refuse the same
-    // way — never silently resolve standalone just because of where the command ran.
+    // way — never silently resolve embedded just because of where the command ran.
     expect(() => resolveWorkspace(join(dir, ".fastagent"))).toThrow(/ambiguous/);
   });
 
   it("a config-less .fastagent/ that READS as a workspace fails loudly (never a silent flat downgrade)", async () => {
-    // A standalone workspace whose config was deleted: resolving the host dir as "flat zero-config"
+    // An embedded workspace whose config was deleted: resolving the host dir as "flat zero-config"
     // would silently lose persona/skills — refuse with the way out (restore config, or init fresh).
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-configless-"));
     await mkdir(join(dir, ".fastagent"));

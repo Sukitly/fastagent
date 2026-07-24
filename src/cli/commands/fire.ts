@@ -30,14 +30,14 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   installProxyFetch();
   await resolveFirstRunModel(ws.root, opts);
   // Schedules are workspace surface — discover them where dev/start/`schedule list` do (the workspace
-  // root), so `fire` sees the same set the scheduler serves in the standalone layout too.
+  // root), so `fire` sees the same set the scheduler serves in the embedded layout too.
   const { schedules, failures } = await loadSchedules(ws.root).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
-    // Name the discovery path in the standalone layout: a schedule misplaced at the workbench root
+    // Name the discovery path in the embedded layout: a schedule misplaced at the workbench root
     // should read as "wrong place", not "broken file".
-    const looked = ws.layout === "standalone" ? ` (looked in .fastagent/schedules)` : "";
+    const looked = ws.layout === "embedded" ? ` (looked in .fastagent/schedules)` : "";
     failStartup(
       new Error(
         `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,

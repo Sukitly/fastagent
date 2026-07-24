@@ -34,7 +34,7 @@ export async function runAddChannel(
   opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is workspace surface — everything lands at the
-  // workspace ROOT (`.fastagent/` when standalone), the same place dev/start discover channels/.
+  // workspace ROOT (`.fastagent/` when embedded), the same place dev/start discover channels/.
   const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
@@ -289,7 +289,7 @@ export async function runAddSkill(
         `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
   }
-  // Skills are workspace surface — vendored into `<root>/skills` (`.fastagent/skills` when standalone).
+  // Skills are workspace surface — vendored into `<root>/skills` (`.fastagent/skills` when embedded).
   const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);

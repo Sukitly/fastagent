@@ -5,7 +5,7 @@
  * Red line: config describes deployment/runtime choices, never authored identity or expertise (those
  * live in persona.md + skills, with AGENTS.md as project context). In a FLAT workspace, deleting the
  * config still leaves a zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL;
- * in a STANDALONE workspace the config doubles as the structural layout marker (resolveWorkspace), so
+ * in a EMBEDDED workspace the config doubles as the structural layout marker (resolveWorkspace), so
  * deleting it un-declares the workspace.
  */
 import { existsSync, statSync } from "node:fs";
@@ -16,12 +16,12 @@ import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import { THINKING_LEVELS, type AnyModel } from "./harness.ts";
 import { moduleLoadHint } from "../../loader.ts";
-import { STANDALONE_DIR, resolveOverridePath, resolveSecretsDir } from "../../workspace.ts";
+import { EMBEDDED_DIR, resolveOverridePath, resolveSecretsDir } from "../../workspace.ts";
 
-// The machinery path resolution (STANDALONE_DIR, resolveStateRoot, resolveSecretsDir) lives in the
+// The machinery path resolution (EMBEDDED_DIR, resolveStateRoot, resolveSecretsDir) lives in the
 // neutral src/workspace.ts (env.ts derives the .env path from it); re-exported here — this module
 // stays the one import point for config + workspace resolution.
-export { STANDALONE_DIR, resolveSecretsDir, resolveStateRoot } from "../../workspace.ts";
+export { EMBEDDED_DIR, resolveSecretsDir, resolveStateRoot } from "../../workspace.ts";
 
 // pi's thinking levels as a runtime value live in harness.ts (THE single source, with the
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
@@ -197,31 +197,31 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   return { config: c, path };
 }
 
-/** The two workspace layouts. ONE directory shape either way — standalone just nests the whole
+/** The two workspace layouts. ONE directory shape either way — embedded just nests the whole
  *  workspace (definition + config + `.secrets/` + `.state/`) inside `<dir>/.fastagent/`. */
-export type WorkspaceLayout = "flat" | "standalone";
+export type WorkspaceLayout = "flat" | "embedded";
 
 export interface ResolvedWorkspace {
   /** The workspace ROOT — where the definition (persona.md/skills/tools/channels/schedules), the
    *  config, and the machinery dirs (`.secrets/`, `.state/`, `.cache/`) live. Absolute. */
   root: string;
   /** The WORKBENCH — what the agent works ON (its cwd; the ② context walk starts here): the parent
-   *  directory for a standalone root, the root itself for flat. Absolute. */
+   *  directory for an embedded root, the root itself for flat. Absolute. */
   workbench: string;
   layout: WorkspaceLayout;
 }
 
 /**
  * Resolve a directory into its workspace: layout is STRUCTURAL, never configured. `<dir>` carrying a
- * fastagent.config.* is flat (root = workbench = dir); `<dir>/.fastagent/` carrying one is standalone
+ * fastagent.config.* is flat (root = workbench = dir); `<dir>/.fastagent/` carrying one is embedded
  * (root = the `.fastagent` dir, workbench = dir — the host tree stays untouched). Both at once is
  * ambiguous → throw (fail visibly, never guess) — the SAME refusal from BOTH entry points (the host
  * dir and inside `.fastagent/`), so where you invoke from can never change what a workspace means.
  * Neither = zero-config, treated as flat — "a directory is an agent" stays the default — EXCEPT when a
  * config-less `<dir>/.fastagent/` still READS as a workspace (persona/skills/tools…): the config is
- * standalone's structural marker, so silently degrading to "the host dir is a flat zero-config agent"
+ * embedded's structural marker, so silently degrading to "the host dir is a flat zero-config agent"
  * would make the authored persona/skills vanish without a trace → throw with the way out instead.
- * Invoked from INSIDE a standalone root (cwd = `<dir>/.fastagent`), the same workspace resolves with
+ * Invoked from INSIDE an embedded root (cwd = `<dir>/.fastagent`), the same workspace resolves with
  * workbench = the parent, so both invocation points behave identically. The ONE owner of this rule —
  * every command and opener resolves through here.
  */
@@ -234,29 +234,29 @@ export function resolveWorkspace(dir: string): ResolvedWorkspace {
     ["persona.md", "skills", "tools", "channels", "schedules", "package.json"].some((n) => existsSync(join(d, n)));
   const ambiguity = (host: string): Error =>
     new Error(
-      `${host} has a fastagent config at BOTH the directory root and ./${STANDALONE_DIR}/ — ambiguous; keep exactly one workspace`,
+      `${host} has a fastagent config at BOTH the directory root and ./${EMBEDDED_DIR}/ — ambiguous; keep exactly one workspace`,
     );
   const configless = (faDir: string): Error =>
     new Error(
       `${faDir} looks like a fastagent workspace (persona/skills/tools…) but has no fastagent.config.* — ` +
-        `the config is the standalone layout's marker. Restore its fastagent.config.mjs, or move the ` +
+        `the config is the embedded layout's marker. Restore its fastagent.config.mjs, or move the ` +
         `directory away and run \`fastagent init\` to scaffold a fresh workspace`,
     );
-  if (basename(base) === STANDALONE_DIR) {
+  if (basename(base) === EMBEDDED_DIR) {
     if (hasConfig(base)) {
       // Entry-point-invariant ambiguity: a flat config on the PARENT is the same both-roots conflict
       // seen from the host dir — refuse identically, never resolve differently by entry.
       if (hasConfig(dirname(base))) throw ambiguity(dirname(base));
-      return { root: base, workbench: dirname(base), layout: "standalone" };
+      return { root: base, workbench: dirname(base), layout: "embedded" };
     }
     if (looksLikeWorkspace(base)) throw configless(base);
   }
   const flat = hasConfig(base);
-  const standaloneDir = join(base, STANDALONE_DIR);
-  const standalone = hasConfig(standaloneDir);
-  if (flat && standalone) throw ambiguity(base);
-  if (standalone) return { root: standaloneDir, workbench: base, layout: "standalone" };
-  if (!flat && existsSync(standaloneDir) && looksLikeWorkspace(standaloneDir)) throw configless(standaloneDir);
+  const embeddedDir = join(base, EMBEDDED_DIR);
+  const embedded = hasConfig(embeddedDir);
+  if (flat && embedded) throw ambiguity(base);
+  if (embedded) return { root: embeddedDir, workbench: base, layout: "embedded" };
+  if (!flat && existsSync(embeddedDir) && looksLikeWorkspace(embeddedDir)) throw configless(embeddedDir);
   return { root: base, workbench: base, layout: "flat" };
 }
 

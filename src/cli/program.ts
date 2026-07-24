@@ -45,8 +45,8 @@ const init: CommandSpec = {
   flags: [
     { flags: "--minimal", description: "persona.md + the example skill + config only (no code tool / package.json)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
-    { flags: "--flat", description: "force the flat layout (skip host-signal detection)", conflicts: ["standalone"] },
-    { flags: "--standalone", description: "force the standalone layout (the whole workspace in ./.fastagent/)" },
+    { flags: "--flat", description: "force the flat layout (skip host-signal detection)", conflicts: ["embedded"] },
+    { flags: "--embedded", description: "force the embedded layout (the whole workspace in ./.fastagent/)" },
   ],
   examples: [
     { cmd: "fastagent init my-agent", note: "a new agent dir, ready to dev" },
@@ -56,7 +56,7 @@ const init: CommandSpec = {
     'Layout: flat by default ("a directory is an agent"); when an existing toolchain/deploy claims ' +
     "the directory (tsconfig/framework config, a non-JS build manifest like " +
     "go.mod/pyproject.toml/Cargo.toml, Dockerfile/fly/railway, or occupied tools/, channels/, or " +
-    "skills/), the WHOLE workspace goes into ./.fastagent/ (standalone — zero files at the host " +
+    "skills/), the WHOLE workspace goes into ./.fastagent/ (embedded — zero files at the host " +
     "root; the layout is structural, not configured) — the reason is printed, no prompt. Both " +
     "layouts share one directory shape.",
   run: async (args, f) =>
@@ -64,7 +64,7 @@ const init: CommandSpec = {
       minimal: f.minimal === true,
       install: f.install !== false,
       flat: f.flat === true,
-      standalone: f.standalone === true,
+      embedded: f.embedded === true,
     }),
 };
 

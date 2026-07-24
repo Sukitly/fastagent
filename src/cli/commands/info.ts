@@ -106,7 +106,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     return;
   }
   console.log(`dir:      ${workbench}`);
-  if (layout === "standalone") console.log(`workspace: ${root} (standalone)`);
+  if (layout === "embedded") console.log(`workspace: ${root} (embedded)`);
   console.log(`config:   ${configPath ?? "(none)"}`);
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
   if (config.thinkingLevel) console.log(`thinking: ${config.thinkingLevel}`);

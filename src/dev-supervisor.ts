@@ -24,7 +24,7 @@ const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.con
 
 /**
  * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the WORKSPACE ROOT
- * (flat: the dir itself; standalone: `<dir>/.fastagent` — nothing in the host tree ever triggers a
+ * (flat: the dir itself; embedded: `<dir>/.fastagent` — nothing in the host tree ever triggers a
  * restart). Ignoring a directory prunes the whole subtree, so everything outside the allowlist —
  * `.state/` machine state, node_modules, .git, and any file/dir the agent writes as work product —
  * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
@@ -55,7 +55,7 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
 /** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
 export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
   // The watch root is the WORKSPACE ROOT (structural — resolveWorkspace): every restart-relevant code
-  // input lives under it in both layouts, so a standalone host tree costs no watchers at all. The
+  // input lives under it in both layouts, so an embedded host tree costs no watchers at all. The
   // layout is assumed STATIC for the dev session (creating/removing `.fastagent/` mid-session is out
   // of scope for watch re-sync).
   const ws = resolveWorkspace(dir);

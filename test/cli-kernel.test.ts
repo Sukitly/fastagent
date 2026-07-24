@@ -308,10 +308,10 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     expect(r.err).toMatch(/Allowed choices are docker, fly, railway/);
   });
 
-  it("conflicting flags are rejected by the parser (init --flat vs --standalone)", async () => {
-    const r = await parse(["init", "--flat", "--standalone"]);
+  it("conflicting flags are rejected by the parser (init --flat vs --embedded)", async () => {
+    const r = await parse(["init", "--flat", "--embedded"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/'--flat' cannot be used with option '--standalone/);
+    expect(r.err).toMatch(/'--flat' cannot be used with option '--embedded/);
   });
 });
 

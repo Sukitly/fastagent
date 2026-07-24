@@ -177,7 +177,7 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ### When the repo already owns `tools/` or `channels/`
 
-Use the **standalone layout** (the whole workspace in `./.fastagent/`) so FastAgent scans the
+Use the **embedded layout** (the whole workspace in `./.fastagent/`) so FastAgent scans the
 workspace's own directories instead of the host repo's names; `fastagent init` chooses this layout
 automatically when those directories are occupied (the layout is structural — detected from the
 directory shape, never configured). Within the workspace, a broken tool is reported and skipped, while

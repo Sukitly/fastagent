@@ -131,7 +131,7 @@ export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } 
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
-  // (the standalone×code-repo cell's persona; core.md §11), keeping the tools list + guidelines below.
+  // (the embedded×code-repo cell's persona; core.md §11), keeping the tools list + guidelines below.
   const identity =
     options.persona?.trim() ||
     "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";

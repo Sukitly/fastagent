@@ -86,7 +86,7 @@ export interface WorkspaceAssembly {
   modelSpec: string;
   /** Absolute workspace root — definition + config + machinery live here (resolveWorkspace().root). */
   root: string;
-  /** Absolute workbench — the agent's cwd / ②-context walk start (= root when flat; the parent when standalone). */
+  /** Absolute workbench — the agent's cwd / ②-context walk start (= root when flat; the parent when embedded). */
   workbench: string;
   layout: WorkspaceLayout;
   /** Absolute state root (FASTAGENT_STATE_DIR > <root>/.state). */
@@ -106,8 +106,8 @@ export async function resolveWorkspaceAssembly(
   options: { model?: string; authPath?: string } = {},
 ): Promise<WorkspaceAssembly> {
   // Layout is structural (resolveWorkspace): the ROOT carries definition + config + machinery; the
-  // WORKBENCH (= root when flat, the parent when standalone) is what the agent works on — its cwd and
-  // the start of the ②-context walk (a standalone agent reads the host repo's AGENTS.md from there).
+  // WORKBENCH (= root when flat, the parent when embedded) is what the agent works on — its cwd and
+  // the start of the ②-context walk (an embedded agent reads the host repo's AGENTS.md from there).
   const { root, workbench, layout } = resolveWorkspace(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(root);
   const modelSpec = resolveModelSpec(options.model, config);

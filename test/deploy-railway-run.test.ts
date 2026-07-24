@@ -74,7 +74,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
   });
 
-  it("standalone: RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
+  it("embedded: RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
     // Railway's documented service-variable route to a non-root Dockerfile — without it the build
     // auto-detects the host repo root (config-as-code could carry the path, but pointing Railway at
     // .fastagent/railway.json is dashboard-only; the variable keeps --run a one-command deploy).

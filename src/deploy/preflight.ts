@@ -12,7 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
-import { STANDALONE_DIR, resolveAuthPath } from "../engines/pi/config.ts";
+import { EMBEDDED_DIR, resolveAuthPath } from "../engines/pi/config.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
@@ -63,9 +63,9 @@ export async function preflightDeploy(input: {
    *  container facts (package.json/lockfile) read it: the workspace's manifest drives the image's
    *  install step, never the host repo's (whose manifest belongs to the host's own deploy). */
   root: string;
-  /** The workbench (build context; = root when flat, the host tree when standalone). */
+  /** The workbench (build context; = root when flat, the host tree when embedded). */
   workbench: string;
-  standalone: boolean;
+  embedded: boolean;
   config: FastagentConfig;
   modelSpec: string | undefined;
   /** `--run` fully deploys, so a model that won't travel is a GATE (a known crash-loop); else it warns. */
@@ -76,7 +76,7 @@ export async function preflightDeploy(input: {
    *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
   authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {
-  const { root, workbench, standalone, config, modelSpec, run, force, authPathFlag } = input;
+  const { root, workbench, embedded, config, modelSpec, run, force, authPathFlag } = input;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
@@ -154,7 +154,7 @@ export async function preflightDeploy(input: {
 
   // Container facts (shared by every host) + the warnings that follow. The facts describe the
   // WORKSPACE — its package.json/runtime/lockfile drive the image's install step — never the host
-  // repo's (standalone bakes the whole workbench, but the host's manifest belongs to its own deploy).
+  // repo's (embedded bakes the whole workbench, but the host's manifest belongs to its own deploy).
   const hasPackageJson = await exists(join(root, "package.json"));
   const pkg = await readPackageJson(root);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(root, pkg);
@@ -165,7 +165,7 @@ export async function preflightDeploy(input: {
   // Does the baked workbench ship a `.git`? ONE fact driving both the image's git install (below)
   // and the plans' runbook wording — the write-back loop needs the history AND the binary together.
   const shipsGit = await exists(join(workbench, ".git"));
-  if (standalone) {
+  if (embedded) {
     // After the facts: the deps sentence must match the workspace's actual shape (a markdown-only
     // workspace has no package.json and installs nothing — the note must not point at a file that
     // doesn't exist).
@@ -180,7 +180,7 @@ export async function preflightDeploy(input: {
     messages.push({
       level: "note",
       text:
-        `standalone image: the whole directory is baked as the agent's workbench (WYSIWYG — what you see ` +
+        `embedded image: the whole directory is baked as the agent's workbench (WYSIWYG — what you see ` +
         `is what ships, git or not, clean or not); ${deps}. ${durability}.`,
     });
   }
@@ -209,7 +209,7 @@ export async function preflightDeploy(input: {
   }
   // A KEPT workbench-root .dockerignore silently replaces the generated one's protections — read it
   // and check SPECIFICALLY (the generic "kept" line suggests --force, which never clobbers the host's
-  // file). The critical ones: (a) a rule matching `.fastagent` on a standalone deploy — the packer
+  // file). The critical ones: (a) a rule matching `.fastagent` on an embedded deploy — the packer
   // would drop the WHOLE workspace from the context (the box boots with no agent and crash-loops);
   // (b) `.secrets`/`.env` excludes — without them the packer BAKES SECRETS INTO THE IMAGE. Both GATE
   // under --run (a full deploy must not push a broken or secret-laden image; same discipline as the
@@ -224,9 +224,9 @@ export async function preflightDeploy(input: {
       l === name || l === `${name}/` || l === `**/${name}` || l === `**/${name}/` || l === `/${name}`;
     const covers = (name: string): boolean =>
       lines.some((l) => matches(l, name)) && !lines.some((l) => l.startsWith("!") && matches(l.slice(1), name));
-    if (standalone && covers(STANDALONE_DIR)) {
+    if (embedded && covers(EMBEDDED_DIR)) {
       const text =
-        `your .dockerignore (kept) excludes \`${STANDALONE_DIR}\` — the build context would ship WITHOUT the ` +
+        `your .dockerignore (kept) excludes \`${EMBEDDED_DIR}\` — the build context would ship WITHOUT the ` +
         `agent workspace entirely (the deployed box has no persona/config and crash-loops). Remove that line ` +
         `from it before deploying.`;
       if (run) return { ok: false, gate: text };
@@ -278,7 +278,7 @@ export async function preflightDeploy(input: {
     hasLockfile,
     version: await fastagentVersion(),
     apt,
-    standalone,
+    embedded,
     shipsGit,
   };
   const port = config.http?.port ?? 8787;

@@ -215,8 +215,8 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("resolves the standalone layout: persona/tools from .fastagent/, ② context walked from the workbench", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-standalone-"));
+  it("resolves the embedded layout: persona/tools from .fastagent/, ② context walked from the workbench", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-embedded-"));
     try {
       await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workbench
       const root = join(dir, ".fastagent");

@@ -12,12 +12,12 @@ import { basename, resolve } from "node:path";
 export const baseTemplate = (name: string): string =>
   readFileSync(new URL(`./templates/${name}`, import.meta.url), "utf8");
 
-/** The persona template; in the standalone layout a locator note is appended (anchor-free — no
+/** The persona template; in the embedded layout a locator note is appended (anchor-free — no
  *  silent-miss risk) so the self-iteration guidance ("write skills beside this file") points into the
  *  `.fastagent/` workspace — a skill written to the host root's `skills/` would never be scanned. */
-export function personaTemplate(standalone = false): string {
+export function personaTemplate(embedded = false): string {
   const base = baseTemplate("persona.md");
-  if (!standalone) return base;
+  if (!embedded) return base;
   return `${base}\nNote: your whole definition lives in \`.fastagent/\` at the workspace root — this file is \`.fastagent/persona.md\`, and a new skill goes to \`.fastagent/skills/<name>/SKILL.md\` (a \`skills/\` outside \`.fastagent/\` is not scanned). Everything OUTSIDE \`.fastagent/\` is the project you work on, not your definition.\n`;
 }
 

@@ -166,8 +166,8 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(docker).toContain("npm i -g @fastagent-sh/fastagent");
   });
 
-  it("standalone: artifacts namespaced under .fastagent/, workspace deps installed, .git shipped, explicit deploy flags", () => {
-    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], standalone: true });
+  it("embedded: artifacts namespaced under .fastagent/, workspace deps installed, .git shipped, explicit deploy flags", () => {
+    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], embedded: true });
     // Artifacts never collide with the host repo's own deploy files.
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the host has one)
@@ -199,14 +199,14 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
   });
 
-  it("standalone: bun workspace uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
+  it("embedded: bun workspace uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
     const bun = planFlyDeploy({
       ...base,
       runtime: "bun",
       bunVersion: "1.3.13",
       modelAuth: undefined,
       channels: [],
-      standalone: true,
+      embedded: true,
     });
     const bunDf = bun.artifacts.find((a) => a.path === ".fastagent/Dockerfile")?.content ?? "";
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
@@ -219,7 +219,7 @@ describe("deploy/fly: planFlyDeploy", () => {
       hasPackageJson: false,
       modelAuth: undefined,
       channels: [],
-      standalone: true,
+      embedded: true,
     });
     const mdDf = md.artifacts.find((a) => a.path === ".fastagent/Dockerfile")?.content ?? "";
     expect(mdDf).toContain("FROM node:22-slim");
