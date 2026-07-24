@@ -278,7 +278,7 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("rejects invalid session, rendering, task-display, and reaction policies at construction", () => {
+  it("rejects invalid session, rendering, and reaction policies at construction", () => {
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -293,13 +293,6 @@ describe("Slack signed ingress", () => {
         rendering: "invalid" as "native",
       }),
     ).toThrow(/rendering/);
-    expect(() =>
-      slackChannel({
-        botToken: "xoxb-test",
-        signingSecret: SECRET,
-        taskDisplay: "invalid" as "dense",
-      }),
-    ).toThrow(/taskDisplay/);
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -353,24 +346,12 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(JSON.parse(String(start?.[1]?.body))).toMatchObject({
       channel: "D1",
       thread_ts: "1.0",
-      chunks: [{ type: "markdown_text", text: expect.stringContaining("hello back") }],
-      task_display_mode: "timeline",
+      markdown_text: expect.stringContaining("hello back"),
     });
     expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).not.toContain("AI-generated content");
   });
 
-  it("routes the configured taskDisplay into the native stream's task_display_mode", async () => {
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { agent } = replyingAgent("hello back");
-    const { handler } = mount(agent, { taskDisplay: "plan" });
-    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
-    await settle();
-
-    expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({ task_display_mode: "plan" });
-  });
-
-  it("renders concise native task details without exposing reasoning or successful tool output", async () => {
+  it("renders concise native tool traces without exposing reasoning or successful tool output", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     let prompt: Prompt | undefined;
@@ -410,17 +391,10 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(outbound).toContain("&lt;!channel>");
     expect(outbound).toContain("Custom policy footer.");
     expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({
-      chunks: [{ type: "task_update", id: "t1", title: "Search", details: "public docs", status: "in_progress" }],
+      markdown_text: expect.stringContaining("**Search** — `public docs`"),
     });
     expect(slackBodies(fetchMock, "chat.appendStream")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          chunks: [{ type: "task_update", id: "t1", title: "Search", details: "public docs", status: "complete" }],
-        }),
-        expect.objectContaining({
-          chunks: [{ type: "markdown_text", text: expect.stringContaining("# Safe answer") }],
-        }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ markdown_text: expect.stringContaining("# Safe answer") })]),
     );
   });
 

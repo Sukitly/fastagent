@@ -86,8 +86,8 @@ describe("Slack reply rendering", () => {
   });
 });
 
-describe("native Slack tool tasks", () => {
-  it("shows the operation and a bounded failed result in the native task card", async () => {
+describe("native Slack tool traces", () => {
+  it("shows the invoked operation and a bounded failed result as inline Markdown", async () => {
     const api = fakeApi();
     const events = (async function* (): AsyncIterable<AgentEvent> {
       yield {
@@ -113,33 +113,17 @@ describe("native Slack tool tasks", () => {
       disclaimer: false,
     });
 
-    const started = vi.mocked(api.startStream).mock.calls[0]?.[1]?.chunks?.[0];
-    expect(started).toMatchObject({
-      type: "task_update",
-      id: "tool-1",
-      title: "Bash",
-      status: "in_progress",
-    });
-    if (started?.type !== "task_update") throw new Error("missing started task update");
-    expect(started.details).toContain("npm test &lt;!channel>");
-    expect(started.details).not.toContain("<!channel>");
+    const invocation = vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "";
+    expect(invocation).toContain("**Bash** — `npm test &lt;!channel>");
+    expect(invocation).not.toContain("<!channel>");
 
-    const ended = vi
-      .mocked(api.appendStream)
-      .mock.calls.flatMap(([, , content]) => content.chunks ?? [])
-      .find((chunk) => chunk.type === "task_update" && chunk.status === "error");
-    expect(ended).toMatchObject({
-      type: "task_update",
-      id: "tool-1",
-      title: "Bash",
-      details: started.details,
-      status: "error",
-    });
-    if (ended?.type !== "task_update") throw new Error("missing ended task update");
-    expect(ended.output).toContain("permission denied &lt;!here>");
-    expect(ended.output).not.toContain("<!here>");
-    expect(Array.from(`${ended.title}${ended.details ?? ""}${ended.output ?? ""}`)).toHaveLength(256);
-    expect(ended.output?.endsWith("…")).toBe(true);
+    const appended = vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? "");
+    const failure = appended.find((text) => text.includes("failed")) ?? "";
+    expect(failure).toContain("**Bash** failed — `permission denied &lt;!here>");
+    expect(failure).not.toContain("<!here>");
+    expect(failure).toContain("…");
+    expect(Array.from(failure).length).toBeLessThanOrEqual(300);
+    expect(appended.join("\n")).toContain("Recovered.");
   });
 });
 
