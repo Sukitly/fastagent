@@ -140,6 +140,42 @@ describe("native Slack tool tasks", () => {
     expect(ended.output).not.toContain("<!here>");
     expect(Array.from(`${ended.title}${ended.details ?? ""}${ended.output ?? ""}`)).toHaveLength(256);
     expect(ended.output?.endsWith("…")).toBe(true);
+    expect(vi.mocked(api.startStream).mock.calls[0]?.[2]).toBe("timeline");
+  });
+
+  it("folds operation details into the title for Slack's compact layouts", async () => {
+    const api = fakeApi();
+    const events = (async function* (): AsyncIterable<AgentEvent> {
+      yield { type: "tool_started", id: "tool-1", name: "bash", args: { command: "find src -type f" } };
+      yield { type: "tool_ended", id: "tool-1", isError: false, content: null };
+      yield { type: "completed" };
+    })();
+
+    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+      rendering: "native",
+      taskDisplay: "plan",
+      disclaimer: false,
+    });
+
+    const started = vi.mocked(api.startStream).mock.calls[0]?.[1]?.chunks?.[0];
+    expect(started).toEqual({
+      type: "task_update",
+      id: "tool-1",
+      title: "Bash find src -type f",
+      status: "in_progress",
+    });
+    expect(vi.mocked(api.startStream).mock.calls[0]?.[2]).toBe("plan");
+
+    const ended = vi
+      .mocked(api.appendStream)
+      .mock.calls.flatMap(([, , content]) => content.chunks ?? [])
+      .find((chunk) => chunk.type === "task_update" && chunk.status === "complete");
+    expect(ended).toEqual({
+      type: "task_update",
+      id: "tool-1",
+      title: "Bash find src -type f",
+      status: "complete",
+    });
   });
 });
 

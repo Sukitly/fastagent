@@ -76,9 +76,14 @@ function toolResultText(value: Json): string {
   return JSON.stringify(value);
 }
 
-function nativeTaskDetails(args: Json): string | undefined {
-  const details = sanitizeSlackMarkdown(summarizeToolArgs(args));
-  return details || undefined;
+function nativeTask(name: string, args: Json, displayMode: SlackTaskDisplayMode): NativeTask {
+  const title = humanizeToolName(name);
+  const details = sanitizeSlackMarkdown(summarizeToolArgs(args)) || undefined;
+  // Slack's plan/dense blocks persist only task title + status; details/output are timeline-only in
+  // the rendered message. Keep compact modes useful by folding the operation into their title.
+  return displayMode === "timeline"
+    ? { title, details }
+    : { title: truncateCodePointPrefix([title, details].filter(Boolean).join(" "), NATIVE_TASK_TEXT_MAX) };
 }
 
 /** Failed output is the only result content made customer-facing: one line, sanitized, and fitted
@@ -401,10 +406,7 @@ async function streamNativeSlackReply(
           setStatus("hit a temporary problem — retrying…");
         }
       } else if (event.type === "tool_started") {
-        const task: NativeTask = {
-          title: humanizeToolName(event.name),
-          details: nativeTaskDetails(event.args),
-        };
+        const task = nativeTask(event.name, event.args, taskDisplayMode);
         toolTasks.set(event.id, task);
         sendTask({ type: "task_update", id: event.id, ...task, status: "in_progress" });
       } else if (event.type === "tool_ended") {
@@ -472,7 +474,7 @@ export async function streamSlackReply(
     initialPreviewTs,
     threadTitle,
     disclaimer,
-    taskDisplay = "plan",
+    taskDisplay = "timeline",
     label = "[slack]",
   } = options;
   if (rendering === "native" && target.threadTs) {
