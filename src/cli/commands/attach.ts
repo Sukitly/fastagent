@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
-import { resolveStateRoot } from "../../engines/pi/config.ts";
+import { resolveStateRoot, resolveWorkspace } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
@@ -115,7 +115,7 @@ async function drainEvents(iterator: AsyncIterator<SessionEvent>, io: AttachIo):
 
 export async function runAttach(sessionArg: string, dirArg: string | undefined, opts: AttachOptions): Promise<void> {
   setLogLevel("info");
-  const dir = resolve(dirArg ?? ".");
+  const { root: dir } = resolveWorkspace(resolve(dirArg ?? "."));
   loadDotEnv(dir);
   // --url and --token travel together, and BOTH must be non-empty: a lone --url (or an empty
   // token) silently falling back to the LOCAL control.json would attach (and steer!) a same-named

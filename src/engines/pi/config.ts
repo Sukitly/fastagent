@@ -6,9 +6,9 @@
  * live in persona.md + skills, with AGENTS.md as project context). Deleting the config still leaves a
  * zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
  */
-import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { FastagentTool } from "./tool.ts";
@@ -26,14 +26,6 @@ export interface FastagentConfig {
    *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
    *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
   thinkingLevel?: ThinkingLevel;
-  /**
-   * The agent-definition subdirectory (persona.md, skills/, tools/, channels/), relative to the config
-   * file's directory. Default: the config directory itself (flat — today's behaviour). Point it at a
-   * sibling like `"./agent"` to serve an existing repo as a coding agent: the config dir stays the run
-   * root (cwd, whose AGENTS.md the agent reads as ② context), while the agent's own surface lives in the
-   * subdir and does not collide with the host's `tools/`/`src/` (core.md scenario grid).
-   */
-  agentDir?: string;
   /** Extra custom tools, appended after pi defaults — never replaces them. `FastagentTool` = AgentTool
    *  plus the optional `deferred` marker (see defineTool). */
   tools?: FastagentTool[];
@@ -134,7 +126,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     if (
       key !== "model" &&
       key !== "thinkingLevel" &&
-      key !== "agentDir" &&
       key !== "tools" &&
       key !== "http" &&
       key !== "deploy" &&
@@ -142,7 +133,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
       key !== "sessionControl"
     ) {
       throw new Error(
-        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, agentDir, tools, http, deploy, selfSchedule, sessionControl)`,
+        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, tools, http, deploy, selfSchedule, sessionControl)`,
       );
     }
   }
@@ -154,53 +145,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   }
   if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(c.thinkingLevel as string)) {
     throw new Error(`${path}: "thinkingLevel" must be one of ${[...THINKING_LEVELS].join(", ")}`);
-  }
-  if (c.agentDir !== undefined && typeof c.agentDir !== "string") {
-    throw new Error(`${path}: "agentDir" must be a string (a subdirectory relative to the config file)`);
-  }
-  if (typeof c.agentDir === "string") {
-    // Enforce the documented "subdirectory of the config dir" contract: an escaping agentDir (e.g.
-    // "../shared") would still resolve for tool/channel/persona discovery, but `dev`'s chokidar only
-    // watches the config dir subtree — edits outside it would silently never trigger a restart. Reject
-    // it here (fail visibly) rather than let hot-reload break without a signal.
-    const rel = relative(dir, resolve(dir, c.agentDir));
-    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-      throw new Error(
-        `${path}: "agentDir" ("${c.agentDir}") must be a subdirectory of the config directory, not escape it`,
-      );
-    }
-    // An explicitly declared agentDir that doesn't exist is a typo until proven otherwise ("./agnet"):
-    // without this check every opener would assemble an EMPTY agent (no persona, no skills, no tools)
-    // with zero errors — the worst silent failure this config can produce. Deliberately NOT auto-created:
-    // config load is read-only (no implicit operations), and a mkdir would turn the typo into a served
-    // empty agent plus a junk directory.
-    // lstat, not stat: a symlink would pass the literal containment check above while its TARGET lives
-    // outside the config dir — exactly what that check exists to prevent (dev's watch would silently
-    // never see edits). Same rule as init's parent preflight: reject, don't follow.
-    const agentDirAbs = resolve(dir, c.agentDir);
-    const st = lstatSync(agentDirAbs, { throwIfNoEntry: false });
-    if (!st) {
-      throw new Error(`${path}: "agentDir" ("${c.agentDir}") does not exist — create it, or fix the path`);
-    }
-    if (st.isSymbolicLink()) {
-      // Separate message: to its user a symlink LOOKS like a working directory — name the reason and the fix.
-      throw new Error(
-        `${path}: "agentDir" ("${c.agentDir}") is a symlink — not allowed (its target can live outside the ` +
-          `config directory, where dev's watch would never see edits); use a real directory, or point agentDir at the target's real path`,
-      );
-    }
-    if (!st.isDirectory()) {
-      throw new Error(`${path}: "agentDir" ("${c.agentDir}") is not a directory`);
-    }
-    // The leaf lstat can't see a symlinked INTERMEDIATE segment (agentDir "./a/b" with `a` → outside):
-    // realpath equality covers every segment under the config dir in one comparison. dir itself is
-    // realpath'd on both sides, so a symlinked config-dir path (macOS /tmp) stays legal.
-    if (realpathSync(agentDirAbs) !== resolve(realpathSync(dir), relative(dir, agentDirAbs))) {
-      throw new Error(
-        `${path}: "agentDir" ("${c.agentDir}") resolves through a symlink — not allowed (the target can ` +
-          `live outside the config directory, where dev's watch would never see edits); use the real path`,
-      );
-    }
   }
   if (c.selfSchedule !== undefined && typeof c.selfSchedule !== "boolean") {
     throw new Error(`${path}: "selfSchedule" must be a boolean`);
@@ -246,14 +190,47 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   return { config: c, path };
 }
 
+/** The fixed name of a standalone workspace directory (and of the user-global machinery home `~/.fastagent`). */
+export const STANDALONE_DIR = ".fastagent";
+
+/** The two workspace layouts. ONE directory shape either way — standalone just nests the whole
+ *  workspace (definition + config + `.secrets/` + `.state/`) inside `<dir>/.fastagent/`. */
+export type WorkspaceLayout = "flat" | "standalone";
+
+export interface ResolvedWorkspace {
+  /** The workspace ROOT — where the definition (persona.md/skills/tools/channels/schedules), the
+   *  config, and the machinery dirs (`.secrets/`, `.state/`, `.cache/`) live. Absolute. */
+  root: string;
+  /** The WORKBENCH — what the agent works ON (its cwd; the ② context walk starts here): the parent
+   *  directory for a standalone root, the root itself for flat. Absolute. */
+  workbench: string;
+  layout: WorkspaceLayout;
+}
+
 /**
- * The agent-definition dir from config: `config.agentDir` resolved against `dir`, or `dir` itself when
- * unset (flat). The ONE place this is computed — every opener (`dev`/`start`/`info`/`tool`/`deploy`/`chat`)
- * calls it, so the "relative to the config dir, default `.`" rule can never diverge. loadConfig has
- * already validated that agentDir stays under `dir`.
+ * Resolve a directory into its workspace: layout is STRUCTURAL, never configured. `<dir>` carrying a
+ * fastagent.config.* is flat (root = workbench = dir); `<dir>/.fastagent/` carrying one is standalone
+ * (root = the `.fastagent` dir, workbench = dir — the host tree stays untouched). Both at once is
+ * ambiguous → throw (fail visibly, never guess). Neither = zero-config, treated as flat — "a directory
+ * is an agent" stays the default. Invoked from INSIDE a standalone root (cwd = `<dir>/.fastagent`),
+ * the same workspace resolves with workbench = the parent, so both invocation points behave identically.
+ * The ONE owner of this rule — every command and opener resolves through here.
  */
-export function resolveAgentDir(dir: string, config: FastagentConfig): string {
-  return resolve(dir, config.agentDir ?? ".");
+export function resolveWorkspace(dir: string): ResolvedWorkspace {
+  const base = resolve(dir);
+  const hasConfig = (d: string): boolean => WORKSPACE_CONFIG_NAMES.some((name) => existsSync(join(d, name)));
+  if (basename(base) === STANDALONE_DIR && hasConfig(base)) {
+    return { root: base, workbench: dirname(base), layout: "standalone" };
+  }
+  const flat = hasConfig(base);
+  const standalone = hasConfig(join(base, STANDALONE_DIR));
+  if (flat && standalone) {
+    throw new Error(
+      `${base} has a fastagent config at BOTH the directory root and ./${STANDALONE_DIR}/ — ambiguous; keep exactly one workspace`,
+    );
+  }
+  if (standalone) return { root: join(base, STANDALONE_DIR), workbench: base, layout: "standalone" };
+  return { root: base, workbench: base, layout: "flat" };
 }
 
 /** The provider prefix of a "provider/modelId" spec. A spec without "/" returns whole — downstream
@@ -361,37 +338,58 @@ export function resolveAuthPathOverride(
 }
 
 /**
- * The IN-TREE default state root, `<dir>/.fastagent` — what {@link resolveStateRoot} falls back to when
- * `FASTAGENT_STATE_DIR` moves state nowhere. THE single definition of that path segment.
+ * The machinery home for a workspace root: the root itself — EXCEPT when the root is the user's HOME
+ * directory (`fastagent login` run from `~`): machinery then lives under the user-global
+ * `~/.fastagent/` (so `~/.secrets` / `~/.state` are never created). The global home carries the same
+ * unified shape inside it (`~/.fastagent/.secrets/auth.json` — {@link GLOBAL_AUTH_PATH} in auth.ts).
+ * Canonical comparison: `dir` arrives realpath-resolved (process.cwd()), homedir() may be a symlink.
  */
-function projectStateDir(dir: string): string {
-  return join(dir, ".fastagent");
+function machineryHome(dir: string): string {
+  const canonical = (p: string): string => {
+    try {
+      return realpathSync(resolve(p));
+    } catch {
+      return resolve(p);
+    }
+  };
+  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), STANDALONE_DIR) : resolve(dir);
 }
 
 /**
- * The resolved state root — the ONE durable machine-state home everything derives from (auth.json,
- * sessions/, channels/<kind>/): `FASTAGENT_STATE_DIR` env > `<dir>/.fastagent`. Absolute, so channels
- * and the startup report agree regardless of cwd. Definition: single lifecycle (precious, survives
- * redeploy), single process — a container mounts ONE volume here. The finer knobs
- * (`FASTAGENT_SESSIONS_DIR`, `FASTAGENT_AUTH_PATH`) still override their specific path on top.
+ * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/,
+ * control.json): `FASTAGENT_STATE_DIR` env > `<workspaceRoot>/.state`. Absolute, so channels and the
+ * startup report agree regardless of cwd. Definition: mutable runtime state — single lifecycle
+ * (precious, survives redeploy), single process; a container points this at its mounted volume.
+ * Secrets are NOT here — they live under {@link resolveSecretsDir} (a different deploy lifecycle:
+ * secret store vs volume). The finer knob (`FASTAGENT_SESSIONS_DIR`) still overrides its path on top.
  *
  * `FASTAGENT_STATE_DIR` is an OPERATOR override, so a relative value resolves against `process.cwd()`
  * — the CLI convention its sibling knobs share (`resolveOverridePath`), NOT against `dir`. Only the
- * DEFAULT (`<dir>/.fastagent`) is dir-anchored. Deployments set an absolute path (a mounted volume);
- * a relative value is in-tree — hence self-ignored — only when run from the definition dir (cwd == dir).
+ * DEFAULT (`<root>/.state`) is dir-anchored.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? resolve(projectStateDir(dir));
+  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(machineryHome(dir), ".state");
 }
 
-/** The default credentials file under a resolved state root ({@link resolveStateRoot}). */
-export function defaultAuthPath(stateRoot: string): string {
-  return join(stateRoot, "auth.json");
+/**
+ * The resolved secrets dir — everything fastagent manages that must NEVER leave the machine (`.env`,
+ * auth.json): `FASTAGENT_SECRETS_DIR` env > `<workspaceRoot>/.secrets`. Split from the state root on
+ * deploy lifecycle: secrets travel through the host's secret store (env vars / the auth seed), state
+ * through a volume. A deployed box sets both env knobs at its volume (e.g. `/data/.secrets`,
+ * `/data/.state`) so a seeded-then-ROTATED OAuth credential persists across restarts.
+ */
+export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(machineryHome(dir), ".secrets");
 }
 
-/** The effective auth file for a workspace: override if present, else the project-level auth.json. */
+/** The default credentials file under a resolved secrets dir ({@link resolveSecretsDir}). */
+export function defaultAuthPath(secretsDir: string): string {
+  return join(secretsDir, "auth.json");
+}
+
+/** The effective auth file for a workspace: override if present, else `<secrets dir>/auth.json`. */
 export function resolveAuthPath(dir: string, flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAuthPathOverride(flag, env) ?? defaultAuthPath(resolveStateRoot(dir, env));
+  return resolveAuthPathOverride(flag, env) ?? defaultAuthPath(resolveSecretsDir(dir, env));
 }
 
 /** The default sessions dir under a resolved state root ({@link resolveStateRoot}). */

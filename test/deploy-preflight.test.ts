@@ -14,8 +14,9 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
 
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
-    target,
-    agentDir: target, // flat by default; a test overrides via `over` to exercise config.agentDir
+    root: target,
+    workbench: target, // flat by default; a test overrides via `over` to exercise the standalone layout
+    standalone: false,
     config,
     modelSpec: config.model,
     run: false,
@@ -33,44 +34,47 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
   });
 
-  it("agentDir layout: container facts come from the KIT, git is auto-baked, --run stays gated", async () => {
-    const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
-    const agentDir = join(dir, "agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(
-      join(agentDir, "package.json"),
-      `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
+  it("standalone layout: container facts come from the WORKSPACE, git is auto-baked, --run works", async () => {
+    const host = await workspace();
+    const root = join(host, ".fastagent");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    await writeFile(join(root, "package.json"), `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`);
+
+    const ok = await call(
+      root,
+      { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } },
+      {
+        workbench: host,
+        standalone: true,
+        run: true, // standalone is a first-class layout — --run is NOT gated
+      },
     );
-
-    // The whole repo-as-workspace shape is experimental for every automated runner, including Docker.
-    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir, run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/--run is not yet supported for the agentDir layout/);
-
-    // Generate mode remains supported: kit facts drive the image, git rides in apt, and the runbook is explicit.
-    const ok = await call(dir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { agentDir });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
-      expect(ok.container.kitDir).toBe("agent");
-      expect(ok.container.hasPackageJson).toBe(true); // the KIT's manifest, not the (absent) root one
+      expect(ok.container.standalone).toBe(true);
+      expect(ok.container.hasPackageJson).toBe(true); // the WORKSPACE's manifest, not the (absent) host one
       expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git guaranteed, deploy.apt kept, deduped
-      expect(JSON.stringify(ok.messages)).toMatch(/repo-as-workspace/); // the layout note is stated
+      expect(JSON.stringify(ok.messages)).toMatch(/standalone image/); // the layout note is stated
     }
   });
 
-  it("kit layout + a kept host .dockerignore: specific warns for a .git exclude and a missing **/node_modules", async () => {
-    const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
-    const agentDir = join(dir, "agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "package.json"), `{"type":"module"}`);
-    await writeFile(join(dir, ".dockerignore"), ".git\nnode_modules\n"); // the host's own — kept, not ours
+  it("a kept workbench .dockerignore: warns for missing secret/machinery excludes and **/node_modules; notes a .git exclude", async () => {
+    const host = await workspace();
+    const root = join(host, ".fastagent");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    await writeFile(join(root, "package.json"), `{"type":"module"}`);
+    await writeFile(join(host, ".dockerignore"), ".git\nnode_modules\n"); // the host's own — kept, not ours
 
-    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir });
+    const pre = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, standalone: true });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
       const text = JSON.stringify(pre.messages);
-      expect(text).toMatch(/excludes \.git/); // write-back's baked copy is dead — named, not silent
+      expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
+      expect(text).toMatch(/lacks .{0,4}\*\*\/\.state/); // machine state would ship
       expect(text).toMatch(/lacks .{0,4}\*\*\/node_modules/); // the native-binary clobber hazard — named
+      expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
     }
   });
 

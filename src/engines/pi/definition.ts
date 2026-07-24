@@ -121,21 +121,28 @@ export function isUnderDir(targetPath: string, baseDir: string): boolean {
 }
 
 /**
- * Self-ignore a state dir: create it if missing, then write `<stateDir>/.gitignore` = "*" (idempotent
- * — an existing one is kept), so a workspace that runs dev/start never shows machine state as
- * untracked. Creates the dir because a caller may self-ignore it before anything else populates it
- * (e.g. `login` writing auth.json into a not-yet-created root).
+ * Self-ignore a machinery dir: create it if missing, then write `<dir>/.gitignore` = `content`
+ * (idempotent — an existing one is kept), so a workspace that runs dev/start/login never shows machine
+ * state or secrets as untracked-but-committable. Creates the dir because a caller may self-ignore it
+ * before anything else populates it (e.g. `login` writing auth.json into a not-yet-created dir).
  *
- * Module-PRIVATE on purpose: the only entry to the leak guard is {@link ensureStateRootSelfIgnored}
- * (home exclusion + containment). Keeping this unexported makes that single-owner claim hold at the
- * type level — a sibling command can't bypass those checks by writing a `.gitignore` directly.
+ * Module-PRIVATE on purpose: the only entries to the leak guard are {@link ensureStateRootSelfIgnored}
+ * and {@link ensureSecretsDirSelfIgnored} (home exclusion + containment). Keeping this unexported makes
+ * that single-owner claim hold at the type level — a sibling command can't bypass those checks by
+ * writing a `.gitignore` directly.
  */
-async function ensureStateDirSelfIgnored(stateDir: string): Promise<void> {
-  await mkdir(stateDir, { recursive: true });
-  await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
+async function ensureDirSelfIgnored(dir: string, content: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, ".gitignore"), content, { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "EEXIST") throw e;
   });
 }
+
+/** The `.secrets/` self-ignore: everything is a secret EXCEPT the committable template and the
+ *  protection itself (un-ignored so both travel with the workspace through git; git's nested-ignore
+ *  precedence means no root .gitignore entry can re-include the rest). The scaffold's
+ *  templates/secrets.gitignore mirrors these rules. */
+const SECRETS_GITIGNORE = "*\n!.gitignore\n!.env.example\n";
 
 /**
  * The single owner of the self-ignore MECHANISM: iff the resolved state ROOT lands inside the workspace
@@ -162,7 +169,18 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
   if (canonicalPath(dir) === canonicalPath(homedir())) return;
   // Containment on RAW paths: stateRoot is resolve()'d (config.ts) and `dir` is absolute, so it is exact
   // by construction. An external-volume root resolves outside the tree → skip (not ours to ignore).
-  if (isUnderDir(stateRoot, dir)) await ensureStateDirSelfIgnored(stateRoot);
+  if (isUnderDir(stateRoot, dir)) await ensureDirSelfIgnored(stateRoot, "*\n");
+}
+
+/**
+ * The `.secrets/` sibling of {@link ensureStateRootSelfIgnored}: iff the resolved secrets dir lands
+ * inside the workspace tree, make it exist and self-ignore ({@link SECRETS_GITIGNORE}) — called by
+ * every path that WRITES a secret (`login`, the opener, channel onboarding), so a credential or `.env`
+ * value can never land untracked-but-committable. Same home exclusion and containment rules.
+ */
+export async function ensureSecretsDirSelfIgnored(dir: string, secretsDir: string): Promise<void> {
+  if (canonicalPath(dir) === canonicalPath(homedir())) return;
+  if (isUnderDir(secretsDir, dir)) await ensureDirSelfIgnored(secretsDir, SECRETS_GITIGNORE);
 }
 
 /** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath.

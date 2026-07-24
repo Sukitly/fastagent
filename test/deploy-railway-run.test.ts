@@ -63,7 +63,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "status --json",
       "init --name bot",
       "add --service bot",
-      "variables set FASTAGENT_STATE_DIR=/data --service bot", // first --service cmd, BEFORE the volume
+      "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot", // first --service cmd, BEFORE the volume
       "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
       "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
       "volume list --json",

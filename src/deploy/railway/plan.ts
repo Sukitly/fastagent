@@ -59,12 +59,12 @@ const MOUNT = "/data";
 
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
-function railwayJson(kitDir?: string): string {
+function railwayJson(standalone?: boolean): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
-      // dockerfilePath is relative to the repo root (`railway up`'s upload context) in BOTH layouts.
-      build: { builder: "DOCKERFILE", dockerfilePath: kitDir ? `${kitDir}/Dockerfile` : "Dockerfile" },
+      // dockerfilePath is relative to the workbench root (`railway up`'s upload context) in BOTH layouts.
+      build: { builder: "DOCKERFILE", dockerfilePath: standalone ? ".fastagent/Dockerfile" : "Dockerfile" },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -78,9 +78,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   // Kit layout: railway.json is namespaced under the kit too (the host repo may carry its own
   // railway.toml/json for the product). Railway reads config-as-code from the repo root by default,
   // so the runbook adds the dashboard step that points the service at the kit's file (no CLI flag exists).
-  const configPath = input.kitDir ? `${input.kitDir}/railway.json` : "railway.json";
+  const configPath = input.standalone ? ".fastagent/railway.json" : "railway.json";
   const artifacts: Artifact[] = [
-    { path: configPath, content: railwayJson(input.kitDir) },
+    { path: configPath, content: railwayJson(input.standalone) },
     ...containerArtifacts(input),
   ];
 
@@ -109,11 +109,11 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# the later commands resolve it without --service (--run passes --service to stay non-interactive).`,
     `railway add --service ${serviceName}`,
     ``,
-    `# Persistent volume at ${MOUNT} — sessions, auth, channel state. FASTAGENT_STATE_DIR is set to match.`,
+    `# Persistent volume at ${MOUNT} — .state (sessions, channel state) + .secrets (seeded auth).`,
     `railway volume add --mount-path ${MOUNT}`,
     ``,
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
-    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}`,
+    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets`,
   ];
 
   if (requiredSecrets.length > 0) {
@@ -142,10 +142,10 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
 
-  if (input.kitDir) {
+  if (input.standalone) {
     runbook.push(
       ``,
-      `# Repo-as-workspace: point the service at the kit's config file BEFORE the first deploy —`,
+      `# Standalone workspace: point the service at the workspace's config file BEFORE the first deploy —`,
       `# dashboard-only, like App Sleeping (no CLI flag): Service → Settings → Config-as-code →`,
       `# set the file path to ${configPath}. Without it Railway would read the repo root's own config.`,
     );
@@ -155,17 +155,13 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# Deploy — uploads this dir and builds the Dockerfile on Railway (no local Docker needed). This is`,
     `# also the ENTIRE redeploy: re-run \`railway up\` alone (the one-time setup above is not repeated).`,
     `railway up`,
+    ``,
+    `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
+    `# by the agent itself (pull to freshen, commit/push to write back; creds ride config.deploy.secrets).`,
+    `# CAVEAT — \`railway up\` is known to strip .git from its upload: expect NO baked history on the box;`,
+    `# the agent should \`git clone\` its repo in the workbench (same token) before making changes.`,
+    `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
   );
-  if (input.kitDir) {
-    runbook.push(
-      ``,
-      `# Write-back mechanics: git ships in the image and GH_TOKEN-style creds ride config.deploy.secrets;`,
-      `# the POLICY (push vs PR, identity, remote) lives in persona.md. CAVEAT — \`railway up\` is known to`,
-      `# strip .git from its upload, so expect NO baked history on the box: the agent should \`git clone\``,
-      `# its repo in the workspace (same token) before making changes. Un-pushed changes never survive a`,
-      `# redeploy — the image is a snapshot; durability lives in git.`,
-    );
-  }
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).

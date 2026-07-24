@@ -40,8 +40,8 @@ Precedence:
 The selected provider has no credentials.
 
 Most common cause: you ran `fastagent login` **from a different directory**. Login is project-level —
-it writes `<cwd>/.fastagent/auth.json`, and there is no fallback to the global file. Run it inside the
-workspace, or point every project at one shared file with `FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`.
+it writes `<workspace>/.secrets/auth.json`, and there is no fallback to the global file. Run it inside the
+workspace, or point every project at one shared file with `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`.
 
 Options:
 
@@ -93,7 +93,7 @@ For `start`, hosted environments can set `PORT`.
 
 - **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
   with no restart (and no watcher involvement).
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`) restart the
+- **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.secrets/.env`) restart the
   dev worker — a new process is the only way to drop the ESM module cache.
 
 Nothing else is watched: files the agent itself writes into the workspace (its work product) never
@@ -110,7 +110,7 @@ Use `--no-watch` to serve once without the supervisor.
 By default, all machine state (auth, sessions, channel state) lives under the workspace:
 
 ```txt
-<state root>   # default <workspace>/.fastagent
+<state root>   # default <workspace>/.state (credentials live in <workspace>/.secrets)
 ```
 
 A redeploy that replaces the workspace wipes it. Point the whole state root at durable storage:

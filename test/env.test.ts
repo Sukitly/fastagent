@@ -75,7 +75,7 @@ describe("loadEnvFile", () => {
   });
 });
 
-describe("loadDotEnv (workspace <dir>/.env, missing is normal)", () => {
+describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () => {
   it("a dir with no .env is a no-op, not a throw", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-"));
     expect(() => loadDotEnv(dir)).not.toThrow(); // ENOENT swallowed
@@ -84,7 +84,7 @@ describe("loadDotEnv (workspace <dir>/.env, missing is normal)", () => {
   it("a NON-ENOENT read error propagates (a corrupt/unreadable .env fails visibly, never silently)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-bad-"));
     // A directory AT the .env path makes readFileSync throw EISDIR — a non-ENOENT error that must surface.
-    await mkdir(join(dir, ".env"));
+    await mkdir(join(dir, ".secrets", ".env"), { recursive: true });
     expect(() => loadDotEnv(dir)).toThrow(expect.objectContaining({ code: "EISDIR" }));
   });
 });

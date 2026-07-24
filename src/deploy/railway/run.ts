@@ -32,7 +32,8 @@ export interface RailwayRunPlan {
   /** Names both the project (`railway init --name`) and the service (`railway add --service`). Railway
    *  names are project-scoped, not globally unique — the CLI derives it from the dir basename. */
   name: string;
-  /** The volume mount path AND `FASTAGENT_STATE_DIR` (kept in lockstep). `/data`, matching the Fly recipe. */
+  /** The volume mount path; `FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` are set to `.state`/`.secrets`
+   *  under it (kept in lockstep). `/data`, matching the Fly recipe. */
   mountPath: string;
   /** `KEY=value` secrets set one-per-`variable set --stdin`: model key (env auth) or `FASTAGENT_AUTH_SEED`
    *  (file auth) + channel secrets. Never on argv. */
@@ -202,8 +203,18 @@ export async function deployRailwayRun(
   //     volume (which has no --service and would otherwise attach to that service) — so the mismatch fails
   //     visibly with NO side effect. State root on argv (not secret); secrets one-per-`set --stdin` (value
   //     on stdin, never argv). Idempotent. (Order vs the volume is free — both just need to precede `up`.)
-  log(`setting FASTAGENT_STATE_DIR + ${Object.keys(plan.secrets).length} secret(s)…`);
-  if ((await railway(["variables", "set", `FASTAGENT_STATE_DIR=${plan.mountPath}`, ...svc])).code !== 0) {
+  log(`setting FASTAGENT_STATE_DIR/FASTAGENT_SECRETS_DIR + ${Object.keys(plan.secrets).length} secret(s)…`);
+  if (
+    (
+      await railway([
+        "variables",
+        "set",
+        `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`,
+        `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
+        ...svc,
+      ])
+    ).code !== 0
+  ) {
     return gate("`railway variables set` failed — see the railway output above");
   }
   for (const [k, v] of Object.entries(plan.secrets)) {

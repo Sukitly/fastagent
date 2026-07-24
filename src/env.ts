@@ -40,14 +40,28 @@ export function parseEnvContent(content: string): Map<string, string> {
   return parsed;
 }
 
+/** The workspace `.env` file: `<workspaceRoot>/.secrets/.env`. Secrets live in the fastagent-managed
+ *  `.secrets/` dir (self-gitignored, dockerignored, never shipped) — THE path every reader/writer of
+ *  the workspace .env must use, so "where do secrets live" cannot diverge across commands. */
+export function dotEnvPath(root: string): string {
+  return join(root, ".secrets", ".env");
+}
+
+/** The committable template beside it: `<workspaceRoot>/.secrets/.env.example` (un-ignored by the
+ *  `.secrets/.gitignore` the scaffold writes, so the template travels while real values never do). */
+export function envExamplePath(root: string): string {
+  return join(root, ".secrets", ".env.example");
+}
+
 /**
- * Load `<dir>/.env` into `process.env` ({@link loadEnvFile}), treating a MISSING file as normal (no .env)
- * — the workspace-facing entry every command + the tunnel use. Only ENOENT is swallowed; any other read
- * error (a corrupt/unreadable file) propagates, so a real problem surfaces instead of silently skipping.
+ * Load the workspace `.env` ({@link dotEnvPath}) into `process.env` ({@link loadEnvFile}), treating a
+ * MISSING file as normal (no .env) — the workspace-facing entry every command + the tunnel use. `root`
+ * is the workspace ROOT (resolveWorkspace().root). Only ENOENT is swallowed; any other read error (a
+ * corrupt/unreadable file) propagates, so a real problem surfaces instead of silently skipping.
  */
-export function loadDotEnv(dir: string): void {
+export function loadDotEnv(root: string): void {
   try {
-    loadEnvFile(join(dir, ".env"));
+    loadEnvFile(dotEnvPath(root));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
