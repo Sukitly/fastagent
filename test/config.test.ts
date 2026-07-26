@@ -49,67 +49,65 @@ describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bu
   });
 });
 
-describe("config: resolveWorkspace (structural layout resolution)", () => {
+describe("config: resolveWorkspace (structural placement resolution)", () => {
   it("flat: a config at the dir root → root = workbench = dir", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-flat-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
     const ws = resolveWorkspace(dir);
-    expect(ws.layout).toBe("flat");
     expect(ws.root).toBe(dir);
     expect(ws.workbench).toBe(dir);
   });
 
-  it("embedded: a config in ./.fastagent/ → root = the nested dir, workbench = the host dir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-embedded-"));
-    await mkdir(join(dir, ".fastagent"));
-    await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+  it("nested: a config in ./fastagent/ → root = the nested dir, workbench = the host dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-nested-"));
+    await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
     const ws = resolveWorkspace(dir);
-    expect(ws.layout).toBe("embedded");
-    expect(ws.root).toBe(join(dir, ".fastagent"));
+    expect(ws.root).toBe(join(dir, "fastagent"));
     expect(ws.workbench).toBe(dir);
-    // Invoked from INSIDE the embedded root: the SAME workspace resolves (workbench = the parent).
-    const inner = resolveWorkspace(join(dir, ".fastagent"));
+    // Invoked from INSIDE the nested root: the SAME workspace resolves (workbench = the parent).
+    const inner = resolveWorkspace(join(dir, "fastagent"));
     expect(inner).toEqual(ws);
   });
 
   it("zero-config: no config anywhere → flat (a directory is an agent)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-zero-"));
     const ws = resolveWorkspace(dir);
-    expect(ws).toEqual({ root: dir, workbench: dir, layout: "flat" });
+    expect(ws).toEqual({ root: dir, workbench: dir });
   });
 
   it("a config at BOTH roots is ambiguous → throws IDENTICALLY from both entry points", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-both-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
-    await mkdir(join(dir, ".fastagent"));
-    await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
     expect(() => resolveWorkspace(dir)).toThrow(/ambiguous/);
-    // Entry-point-invariant: invoked from INSIDE .fastagent/, the same conflict must refuse the same
-    // way — never silently resolve embedded just because of where the command ran.
-    expect(() => resolveWorkspace(join(dir, ".fastagent"))).toThrow(/ambiguous/);
+    // Entry-point-invariant: invoked from INSIDE fastagent/, the same conflict must refuse the same
+    // way — never silently resolve nested just because of where the command ran.
+    expect(() => resolveWorkspace(join(dir, "fastagent"))).toThrow(/ambiguous/);
   });
 
-  it("a config-less .fastagent/ that READS as a workspace fails loudly (never a silent flat downgrade)", async () => {
-    // An embedded workspace whose config was deleted: resolving the host dir as "flat zero-config"
+  it("a config-less fastagent/ that READS as a workspace fails loudly (never a silent flat downgrade)", async () => {
+    // A nested workspace whose config was deleted: resolving the host dir as "flat zero-config"
     // would silently lose persona/skills — refuse with the way out (restore config, or init fresh).
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-configless-"));
-    await mkdir(join(dir, ".fastagent"));
-    await writeFile(join(dir, ".fastagent", "persona.md"), "You are terse.\n");
+    await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
     expect(() => resolveWorkspace(dir)).toThrow(/fastagent\.config.*fastagent init/s);
     // Same refusal from inside the directory.
-    expect(() => resolveWorkspace(join(dir, ".fastagent"))).toThrow(/fastagent\.config.*fastagent init/s);
+    expect(() => resolveWorkspace(join(dir, "fastagent"))).toThrow(/fastagent\.config.*fastagent init/s);
   });
 
-  it("a .fastagent/ that does NOT read as a workspace stays zero-config flat (a directory is an agent)", async () => {
+  it("a fastagent/ that does NOT read as a workspace stays zero-config flat (a directory is an agent)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-unrelated-"));
-    await mkdir(join(dir, ".fastagent"));
-    await writeFile(join(dir, ".fastagent", "notes.txt"), "unrelated\n");
-    expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir, layout: "flat" });
+    await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "notes.txt"), "unrelated\n");
+    expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir });
   });
 });
 
 describe("config: loadConfig validation", () => {
-  it("rejects the retired agentDir key (layout is structural now, never configured)", async () => {
+  it("rejects the retired agentDir key (placement is structural now, never configured)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentdir-retired-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
     await expect(loadConfig(dir)).rejects.toThrow(/unknown key "agentDir"/);

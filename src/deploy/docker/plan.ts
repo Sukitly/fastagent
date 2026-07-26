@@ -28,7 +28,7 @@ export interface DockerPlanInput extends ContainerInput {
 export interface DockerPlan {
   /** fastagent.compose.yml + the shared Dockerfile/ignore artifacts. */
   artifacts: Artifact[];
-  /** Compose file path relative to the workbench root (namespaced under .fastagent/ when embedded). */
+  /** Compose file path relative to the workbench root (namespaced under fastagent/ when nested). */
   composePath: string;
   /** Ordered local build/run/operate instructions. */
   runbook: string[];
@@ -80,8 +80,8 @@ function composeInterpolation(name: string): string {
 }
 
 /** Relative path from the namespaced Compose file's directory back to the workbench/build root. */
-function buildContext(embedded?: boolean): string {
-  return embedded ? ".." : ".";
+function buildContext(nested?: boolean): string {
+  return nested ? ".." : ".";
 }
 
 function composeYaml(input: DockerPlanInput): string {
@@ -90,8 +90,8 @@ function composeYaml(input: DockerPlanInput): string {
   // it is empty otherwise. Values never land in this file — Compose interpolates them at invocation.
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
-  const context = buildContext(input.embedded);
-  const dockerfile = input.embedded ? ".fastagent/Dockerfile" : "Dockerfile";
+  const context = buildContext(input.nested);
+  const dockerfile = input.nested ? "fastagent/Dockerfile" : "Dockerfile";
   const tunnelService = input.tunnel
     ? `
   # Cloudflare Quick Tunnel: ephemeral URL, generated only with \`deploy docker --tunnel\`.
@@ -142,7 +142,7 @@ volumes:
 
 /** Compute local-Docker artifacts + the runbook; no Docker process is touched here. */
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
-  const composePath = input.embedded ? `.fastagent/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
+  const composePath = input.nested ? `fastagent/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
   const compose = `docker compose -f ${composePath}`;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
@@ -175,11 +175,11 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     );
   }
 
-  if (input.embedded) {
+  if (input.nested) {
     runbook.push(
-      `# Embedded workspace: run from the WORKBENCH ROOT (the directory containing .fastagent/).`,
-      `# Compose lives under .fastagent/ but bakes the whole directory as the agent's workbench;`,
-      `# only the workspace's own dependencies (.fastagent/package.json) are installed.`,
+      `# Nested workspace: run from the WORKBENCH ROOT (the directory containing fastagent/).`,
+      `# Compose lives under fastagent/ but bakes the whole directory as the agent's workbench;`,
+      `# only the workspace's own dependencies (fastagent/package.json) are installed.`,
     );
   }
 

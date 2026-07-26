@@ -5,10 +5,10 @@
  * `$FASTAGENT_SECRETS_DIR` — standard container conventions, no host coupling.
  *
  * ONE deploy semantic for both layouts: bake the WORKBENCH as the image (`COPY . .` — what you see is
- * what ships). Flat: workbench = the workspace. Embedded: workbench = the host tree, with the
- * workspace at `./.fastagent` — the resolver in the image finds it exactly like dev does, so the two
+ * what ships). Flat: workbench = the workspace. Nested: workbench = the host tree, with the
+ * workspace at `./fastagent` — the resolver in the image finds it exactly like dev does, so the two
  * layouts share this generator end to end; the only differences are where deps install (`/app` vs
- * `/app/.fastagent`) and where the Dockerfile itself lives (namespaced under `.fastagent/` so it never
+ * `/app/fastagent`) and where the Dockerfile itself lives (namespaced under `fastagent/` so it never
  * collides with the host repo's own).
  */
 
@@ -45,10 +45,10 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
-  /** Embedded layout: the workspace lives at `./.fastagent` inside the baked workbench. The runtime
+  /** Nested layout: the workspace lives at `./fastagent` inside the baked workbench. The runtime
    *  facts above (hasPackageJson/runtime/hasLockfile) describe THE WORKSPACE (its package.json drives
    *  the image's install step), never the host repo's — whose manifest belongs to the host's own deploy. */
-  embedded?: boolean;
+  nested?: boolean;
   /** Whether the baked workbench ships a `.git` (preflight fact). When true, preflight has already
    *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
    *  their runbook's freshness/write-back guidance from the same fact. */
@@ -68,9 +68,9 @@ function aptLayer(packages?: string[]): string {
 function dockerfile(input: ContainerInput): string {
   // The workspace prefix inside the image: deps install (and the local bin lives) here. undefined =
   // flat (the workspace IS /app) — the emitted lines then carry no noisy "./." segments.
-  const ws = input.embedded ? ".fastagent" : undefined;
-  const layoutNote = input.embedded
-    ? `Embedded: the whole directory is the agent's workbench; the workspace lives in .fastagent/.`
+  const ws = input.nested ? "fastagent" : undefined;
+  const layoutNote = input.nested
+    ? `Nested: the whole directory is the agent's workbench; the workspace lives in fastagent/.`
     : `The directory IS the agent — no build step.`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
@@ -104,7 +104,7 @@ ${apt}WORKDIR /app
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
   // we can't tell a repo-as-agent from a purpose-built workspace, so the safe default keeps everything.
-  // Embedded installs ONLY the workspace's deps — the host repo's own deps are the agent's runtime
+  // Nested installs ONLY the workspace's deps — the host repo's own deps are the agent's runtime
   // concern (it can install them in its workbench when its job needs them).
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to a plain `bun install`
@@ -172,22 +172,22 @@ const DOCKERIGNORE = `**/node_modules
 `;
 
 /**
- * The Dockerfile + ignore artifacts — spread into any host's artifact list. Embedded: the Dockerfile
- * is namespaced under the workspace (`.fastagent/Dockerfile`) so it never collides with the host
+ * The Dockerfile + ignore artifacts — spread into any host's artifact list. Nested: the Dockerfile
+ * is namespaced under the workspace (`fastagent/Dockerfile`) so it never collides with the host
  * repo's own. The ignore ships in TWO forms because context packing is host-CLI-owned and
  * inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own context packers
  * reliably read (kept if the host already has one — preflight then warns specifically about the
  * machinery/secret excludes it must carry) — and (2) a per-Dockerfile
- * `.fastagent/Dockerfile.dockerignore` for plain docker/buildx builds. This root file is the ONE
- * host-tree write the embedded layout ever makes, and only at deploy time — without it the host
+ * `fastagent/Dockerfile.dockerignore` for plain docker/buildx builds. This root file is the ONE
+ * host-tree write the nested layout ever makes, and only at deploy time — without it the host
  * CLI's packer would bake `.secrets/` into the image, which is never acceptable.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
-  if (input.embedded) {
+  if (input.nested) {
     return [
-      { path: ".fastagent/Dockerfile", content: dockerfile(input) },
+      { path: "fastagent/Dockerfile", content: dockerfile(input) },
       { path: ".dockerignore", content: DOCKERIGNORE },
-      { path: ".fastagent/Dockerfile.dockerignore", content: DOCKERIGNORE },
+      { path: "fastagent/Dockerfile.dockerignore", content: DOCKERIGNORE },
     ];
   }
   return [

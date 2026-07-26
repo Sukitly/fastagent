@@ -37,34 +37,31 @@ const init: CommandSpec = {
   name: "init",
   summary: "scaffold a runnable agent and install its dependencies",
   description:
-    "Scaffold a runnable agent in dir (default .) and run npm install. Default is a self-iterating " +
-    "agent: persona.md (its identity), a writing-great-skills example skill, a fetch-url code tool, " +
-    "config, package.json, .gitignore. Never overwrites existing files; an existing AGENTS.md is kept " +
-    "as project context.",
+    "Scaffold a runnable agent and run npm install. The workspace goes into ./fastagent/ in dir " +
+    "(default .) — the rest of the directory gets zero writes; it is what the agent works ON. Default " +
+    "content is a self-iterating agent: persona.md (its identity), a writing-great-skills example " +
+    "skill, a fetch-url code tool, config, package.json, .gitignore. Never overwrites existing files; " +
+    "an existing AGENTS.md is kept as project context.",
   args: [DIR_ARG],
   flags: [
     { flags: "--minimal", description: "persona.md + the example skill + config only (no code tool / package.json)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
-    { flags: "--flat", description: "force the flat layout (skip host-signal detection)", conflicts: ["embedded"] },
-    { flags: "--embedded", description: "force the embedded layout (the whole workspace in ./.fastagent/)" },
+    { flags: "--flat", description: "land the workspace directly in dir (the directory IS the agent)" },
   ],
   examples: [
-    { cmd: "fastagent init my-agent", note: "a new agent dir, ready to dev" },
-    { cmd: "fastagent init", note: "initialize the current directory" },
+    { cmd: "fastagent init", note: "workspace goes into ./fastagent/" },
+    { cmd: "fastagent init my-agent --flat", note: "my-agent itself IS the workspace" },
   ],
   notes:
-    'Layout: flat by default ("a directory is an agent"); when an existing toolchain/deploy claims ' +
-    "the directory (tsconfig/framework config, a non-JS build manifest like " +
-    "go.mod/pyproject.toml/Cargo.toml, Dockerfile/fly/railway, or occupied tools/, channels/, or " +
-    "skills/), the WHOLE workspace goes into ./.fastagent/ (embedded — zero files at the host " +
-    "root; the layout is structural, not configured) — the reason is printed, no prompt. Both " +
-    "layouts share one directory shape.",
+    "One workspace shape, two placements, no detection: by default the whole workspace — definition, " +
+    "config, .secrets/, .state/ — nests into ./fastagent/ and the placement is structural (the " +
+    "directory name is the marker, nothing is configured). --flat is for a directory that is ITSELF " +
+    "the agent (a standalone agent dir, a monorepo package): same shape, landed at the root.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       minimal: f.minimal === true,
       install: f.install !== false,
       flat: f.flat === true,
-      embedded: f.embedded === true,
     }),
 };
 

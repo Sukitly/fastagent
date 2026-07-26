@@ -51,14 +51,16 @@ There is ONE workspace shape, with two placements. The shape:
 └── .cache/                 # reserved: re-derivable content
 ```
 
-**Flat** places it directly in the directory ("a directory is an agent"): root = workbench.
-**Embedded** nests the identical shape into `<dir>/.fastagent/` — the host tree gets ZERO writes;
-the parent directory is the WORKBENCH (the agent's cwd, whose `AGENTS.md` ancestors are ② context):
+The DEFAULT placement (no mode name — it is just what `init` does) nests the whole shape into
+`<dir>/fastagent/` — the host tree gets ZERO writes; the parent directory is the WORKBENCH (the
+agent's cwd, whose `AGENTS.md` ancestors are ② context). The directory is visible on purpose: the
+workspace is the author's code (persona, skills, tools), not tool configuration — fastagent's own
+machinery inside it keeps the dot prefix (`.secrets/`, `.state/`):
 
 ```txt
 repo/                       # the workbench — what the agent works ON, untouched
 ├── AGENTS.md               # host project context, read as ②
-└── .fastagent/             # the WHOLE workspace — the flat shape, nested one level down
+└── fastagent/              # the WHOLE workspace — the flat shape, nested one level down
     ├── persona.md
     ├── skills/  tools/  channels/  schedules/
     ├── fastagent.config.mjs
@@ -66,11 +68,20 @@ repo/                       # the workbench — what the agent works ON, untouch
     └── package.json
 ```
 
-Layout is STRUCTURAL, never configured: `resolveWorkspace(dir)` finds a `fastagent.config.*` at the
-dir root (flat) or under `<dir>/.fastagent/` (embedded); both at once is a refused ambiguity. The
-machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret store (never
-an image), `.state/` through a volume (`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it
-in a container), `.cache/` is re-derivable.
+**Flat** (`init --flat`) places the identical shape directly in the directory ("the directory IS the
+agent": a standalone agent dir, a monorepo package): root = workbench.
+
+Placement is STRUCTURAL, never configured — and deliberately not DETECTED either: `init` has no
+jurisdiction heuristic; it nests unless told `--flat`. `resolveWorkspace(dir)` finds a
+`fastagent.config.*` at the dir root (flat) or under `<dir>/fastagent/` (nested); both at once is a
+refused ambiguity, and `root !== workbench` is the only in-code discriminant (`ResolvedWorkspace` has
+no mode field). The machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's
+secret store (never an image), `.state/` through a volume
+(`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it in a container), `.cache/` is
+re-derivable.
+
+(“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
+see docs/embedding.md. The nested workspace placement is not a mode and has no name.)
 
 The pi reference prompt has four segments:
 
@@ -98,7 +109,7 @@ The pi reference implementation has three reusable rungs:
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromWorkspace` sits above L2. It resolves the layout (`resolveWorkspace`), config,
+`createPiAgentFromWorkspace` sits above L2. It resolves the workspace (`resolveWorkspace`), config,
 model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
 assembly rather than carrying parallel implementations.
 
@@ -424,12 +435,12 @@ unsupported.
 required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one app
 service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
-Quick Tunnel URL and registers webhooks. Both layouts deploy through ONE semantic — bake the workbench
-as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Embedded namespaces
-every artifact under `.fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single host-tree
-write is the root `.dockerignore` the host CLIs' context packers require (kept if the host owns one;
-preflight then checks it — missing secret excludes or a rule dropping `.fastagent` from the context
-gate `--run`, else warn). `.git`
+Quick Tunnel URL and registers webhooks. Both placements deploy through ONE semantic — bake the
+workbench as the image (WYSIWYG: what you see is what ships, git or not, clean or not). A nested root
+namespaces every artifact under `fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single
+host-tree write is the root `.dockerignore` the host CLIs' context packers require (kept if the host
+owns one; preflight then checks it — missing secret excludes or a rule dropping `fastagent` from the
+context gate `--run`, else warn). `.git`
 ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
 deploy machinery — the git binary is baked in exactly when the workbench ships a `.git`; a non-git
 workbench adds it via `config.deploy.apt`.

@@ -41,15 +41,15 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "docs", ".env"))).toBe(true);
   });
 
-  it("embedded: the watch root IS the workspace root — the host tree never enters the scope", () => {
-    // The supervisor watches resolveWorkspace().root (= <host>/.fastagent), so host files are
+  it("nested: the watch root IS the workspace root — the host tree never enters the scope", () => {
+    // The supervisor watches resolveWorkspace().root (= <host>/fastagent), so host files are
     // structurally out of scope: they are never passed to the matcher at all. Within the root the
     // same rules apply as flat — one shape, one matcher.
-    const embeddedRoot = join("/repo", ".fastagent");
-    const ig = devWatchIgnored(embeddedRoot);
-    expect(ig(embeddedRoot)).toBe(false);
-    expect(ig(join(embeddedRoot, "tools", "foo.ts"))).toBe(false);
-    expect(ig(join(embeddedRoot, "persona.md"))).toBe(true); // live-read, no restart
-    expect(ig(join(embeddedRoot, ".secrets", ".env"))).toBe(false);
+    const nestedRoot = join("/repo", "fastagent");
+    const ig = devWatchIgnored(nestedRoot);
+    expect(ig(nestedRoot)).toBe(false);
+    expect(ig(join(nestedRoot, "tools", "foo.ts"))).toBe(false);
+    expect(ig(join(nestedRoot, "persona.md"))).toBe(true); // live-read, no restart
+    expect(ig(join(nestedRoot, ".secrets", ".env"))).toBe(false);
   });
 });

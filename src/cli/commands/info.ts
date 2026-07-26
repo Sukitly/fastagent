@@ -28,7 +28,7 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const { root, workbench, layout } = failStartupOn(() => resolveWorkspace(dir));
+  const { root, workbench } = failStartupOn(() => resolveWorkspace(dir));
   loadDotEnv(root); // skills/tools may read env at load time
   const { config, path: configPath } = await loadConfig(root).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
@@ -75,9 +75,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     console.log(
       JSON.stringify(
         {
-          dir: workbench,
+          workbench,
           root,
-          layout,
           configPath: configPath ?? null,
           model: modelSpec ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
@@ -105,8 +104,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     );
     return;
   }
-  console.log(`dir:      ${workbench}`);
-  if (layout === "embedded") console.log(`workspace: ${root} (embedded)`);
+  console.log(`workspace: ${root}`);
+  console.log(`workbench: ${workbench}`);
   console.log(`config:   ${configPath ?? "(none)"}`);
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
   if (config.thinkingLevel) console.log(`thinking: ${config.thinkingLevel}`);

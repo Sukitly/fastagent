@@ -78,7 +78,7 @@ describe("cli kernel: spec conformance", () => {
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
       [["init"], "Never overwrites existing files"],
-      [["init"], "the WHOLE workspace goes into ./.fastagent/"],
+      [["init"], "The workspace goes into ./fastagent/"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["fire"], "does NOT advance the schedule's fire state"],
       [["schedule", "history"], "did last night's run silently fail"],
@@ -308,10 +308,10 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     expect(r.err).toMatch(/Allowed choices are docker, fly, railway/);
   });
 
-  it("conflicting flags are rejected by the parser (init --flat vs --embedded)", async () => {
-    const r = await parse(["init", "--flat", "--embedded"]);
+  it("an unknown flag is rejected by the parser (init --embedded is gone — nesting is the default)", async () => {
+    const r = await parse(["init", "--embedded"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/'--flat' cannot be used with option '--embedded/);
+    expect(r.err).toMatch(/unknown option '--embedded'/);
   });
 });
 

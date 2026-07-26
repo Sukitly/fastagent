@@ -23,11 +23,11 @@ const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "ag
 
 describe("definition: isUnderDir (the leak-guard predicate — does the state root land in the tree?)", () => {
   const dir = "/work";
-  it("is true for the dir itself and any path inside it (default `.fastagent` OR a custom in-tree root)", () => {
+  it("is true for the dir itself and any path inside it (default `fastagent` OR a custom in-tree root)", () => {
     expect(isUnderDir(dir, dir)).toBe(true); // same dir
-    expect(isUnderDir(join(dir, ".fastagent"), dir)).toBe(true); // default root
+    expect(isUnderDir(join(dir, "fastagent"), dir)).toBe(true); // default root
     expect(isUnderDir(join(dir, "data"), dir)).toBe(true); // custom in-tree FASTAGENT_STATE_DIR
-    expect(isUnderDir(join(dir, ".fastagent", "sessions"), dir)).toBe(true); // nested
+    expect(isUnderDir(join(dir, "fastagent", "sessions"), dir)).toBe(true); // nested
   });
   it("is false for external paths (a mounted volume) and sibling dirs sharing a prefix", () => {
     expect(isUnderDir("/mnt/vol", dir)).toBe(false); // operator's volume
@@ -36,9 +36,9 @@ describe("definition: isUnderDir (the leak-guard predicate — does the state ro
 });
 
 describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () => {
-  it("self-ignores a CUSTOM in-tree state root, not just `.fastagent` (the FASTAGENT_STATE_DIR leak)", async () => {
+  it("self-ignores a CUSTOM in-tree state root, not just `fastagent` (the FASTAGENT_STATE_DIR leak)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const root = join(dir, "data"); // FASTAGENT_STATE_DIR=data → in-tree, not under .fastagent
+    const root = join(dir, "data"); // FASTAGENT_STATE_DIR=data → in-tree, not under fastagent
     await ensureStateRootSelfIgnored(dir, root);
     expect(await readFile(join(root, ".gitignore"), "utf8")).toBe("*\n");
   });

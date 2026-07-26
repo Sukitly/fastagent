@@ -27,6 +27,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { GLOBAL_HOME_DIR } from "../../workspace.ts";
 import { log } from "../../log.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -41,7 +42,7 @@ import lockfile from "proper-lockfile";
  * credential file across projects (safe — one file, one lock-serialized refresh lifecycle). The
  * `fastagent login` CLI is project-level by default, never this.
  */
-export const GLOBAL_AUTH_PATH = join(homedir(), ".fastagent", ".secrets", "auth.json");
+export const GLOBAL_AUTH_PATH = join(homedir(), GLOBAL_HOME_DIR, ".secrets", "auth.json");
 
 export interface FastagentAuthOptions {
   /** Sink for non-fatal auth anomalies (unreadable/corrupt file). Defaults to the process logger (warn). */

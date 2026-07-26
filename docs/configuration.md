@@ -177,10 +177,10 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ### When the repo already owns `tools/` or `channels/`
 
-Use the **embedded layout** (the whole workspace in `./.fastagent/`) so FastAgent scans the
-workspace's own directories instead of the host repo's names; `fastagent init` chooses this layout
-automatically when those directories are occupied (the layout is structural — detected from the
-directory shape, never configured). Within the workspace, a broken tool is reported and skipped, while
+Nothing to do — the default placement (the whole workspace in `./fastagent/`) means FastAgent scans
+the workspace's own directories, never the host repo's names (the placement is structural — the
+`fastagent/` directory is the marker, nothing is configured). Only a `--flat` workspace scans the
+directory root itself. Within the workspace, a broken tool is reported and skipped, while
 a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
 programmatic tools outside the workspace, declare them with `config.tools`.
 

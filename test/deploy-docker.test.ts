@@ -98,22 +98,22 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("sk-");
   });
 
-  it("namespaces embedded artifacts under .fastagent/ and builds from the workbench root", () => {
+  it("namespaces nested artifacts under fastagent/ and builds from the workbench root", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: undefined,
       channels: [],
-      embedded: true,
+      nested: true,
     });
     expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
       ".dockerignore",
-      ".fastagent/Dockerfile",
-      ".fastagent/Dockerfile.dockerignore",
-      ".fastagent/fastagent.compose.yml",
+      "fastagent/Dockerfile",
+      "fastagent/Dockerfile.dockerignore",
+      "fastagent/fastagent.compose.yml",
     ]);
-    expect(plan.composePath).toBe(".fastagent/fastagent.compose.yml");
+    expect(plan.composePath).toBe("fastagent/fastagent.compose.yml");
     expect(compose(plan)).toContain("context: ..");
-    expect(compose(plan)).toContain("dockerfile: .fastagent/Dockerfile");
+    expect(compose(plan)).toContain("dockerfile: fastagent/Dockerfile");
     expect(runbook(plan)).toContain("run from the WORKBENCH ROOT");
   });
 

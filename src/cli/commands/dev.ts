@@ -60,8 +60,8 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
-  log.info(`[fastagent] dir:    ${a.workbench}`);
-  if (a.layout === "embedded") log.info(`[fastagent] workspace: ${a.root} (embedded)`);
+  log.info(`[fastagent] workspace: ${a.root}`);
+  log.info(`[fastagent] workbench: ${a.workbench}`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
   log.info(
     `[fastagent] model:  ${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`,

@@ -54,7 +54,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     definition,
     root,
     workbench,
-    layout,
     config,
     modelSpec,
     stateRoot,
@@ -72,8 +71,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
 
-  log.info(`[fastagent] start:  ${workbench}`);
-  if (layout === "embedded") log.info(`[fastagent] workspace: ${root} (embedded)`);
+  log.info(`[fastagent] workspace: ${root}`);
+  log.info(`[fastagent] workbench: ${workbench}`);
   log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);

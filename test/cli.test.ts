@@ -27,14 +27,14 @@ function run(
 }
 
 describe("cli papercuts", () => {
-  it("deploy (embedded): the host's root .dockerignore is kept even under --force; workspace artifacts written", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-embedded-"));
-    await mkdir(join(dir, ".fastagent"), { recursive: true });
+  it("deploy (nested): the host's root .dockerignore is kept even under --force; workspace artifacts written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-nested-"));
+    await mkdir(join(dir, "fastagent"), { recursive: true });
     await writeFile(
-      join(dir, ".fastagent", "fastagent.config.mjs"),
+      join(dir, "fastagent", "fastagent.config.mjs"),
       `export default { model: "openai-codex/gpt-5.5" };\n`,
     );
-    await writeFile(join(dir, ".fastagent", "package.json"), `{"type":"module"}`);
+    await writeFile(join(dir, "fastagent", "package.json"), `{"type":"module"}`);
     const hostIgnore = "# the HOST product's own rules\n.git\ndist\n";
     await writeFile(join(dir, ".dockerignore"), hostIgnore);
 
@@ -45,24 +45,24 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/kept \.dockerignore/);
     expect(stderr).toMatch(/BAKE SECRETS INTO THE IMAGE/); // the critical kept-file warn fired (not force-gated)
     expect(stderr).toMatch(/excludes \.git/); // …and the pull\/push note
-    // Workspace artifacts land namespaced under .fastagent/.
-    expect(await readFile(join(dir, ".fastagent", "Dockerfile"), "utf8")).toMatch(/Embedded/);
-    expect(await readFile(join(dir, ".fastagent", "fly.toml"), "utf8")).toMatch(/FASTAGENT_SECRETS_DIR/);
+    // Workspace artifacts land namespaced under fastagent/.
+    expect(await readFile(join(dir, "fastagent", "Dockerfile"), "utf8")).toMatch(/Nested/);
+    expect(await readFile(join(dir, "fastagent", "fly.toml"), "utf8")).toMatch(/FASTAGENT_SECRETS_DIR/);
   });
 
-  it("deploy (embedded) is a first-class layout: generate mode succeeds with the layout note; agentDir is retired", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-embedded-gen-"));
-    await mkdir(join(dir, ".fastagent"), { recursive: true });
+  it("deploy (nested) is a first-class placement: generate mode succeeds with the placement note; agentDir is retired", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-nested-gen-"));
+    await mkdir(join(dir, "fastagent"), { recursive: true });
     await writeFile(
-      join(dir, ".fastagent", "fastagent.config.mjs"),
+      join(dir, "fastagent", "fastagent.config.mjs"),
       `export default { model: "openai/gpt-4o-mini" };\n`,
     );
     const result = await run(["deploy", "fly", dir]);
     expect(result.code).toBe(0);
-    expect(result.stderr).toMatch(/embedded image/); // the WYSIWYG bake note is stated
-    expect(result.stderr).not.toMatch(/not yet supported/); // no layout gate anywhere
+    expect(result.stderr).toMatch(/nested image/); // the WYSIWYG bake note is stated
+    expect(result.stderr).not.toMatch(/not yet supported/); // no placement gate anywhere
 
-    // The retired config key fails visibly — layout is structural now, never configured.
+    // The retired config key fails visibly — placement is structural now, never configured.
     const legacy = await mkdtemp(join(tmpdir(), "fa-deploy-legacy-"));
     await writeFile(join(legacy, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
     const rejected = await run(["deploy", "fly", legacy]);
@@ -236,21 +236,21 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/available: daily/);
   });
 
-  it("fire discovers schedules from the embedded workspace root (where the scheduler serves them), not the workbench", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-fire-embedded-"));
-    await mkdir(join(dir, ".fastagent", "schedules"), { recursive: true });
-    await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+  it("fire discovers schedules from the nested workspace root (where the scheduler serves them), not the workbench", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-fire-nested-"));
+    await mkdir(join(dir, "fastagent", "schedules"), { recursive: true });
+    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
     const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
     await writeFile(
-      join(dir, ".fastagent", "schedules", "daily.ts"),
+      join(dir, "fastagent", "schedules", "daily.ts"),
       `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "digest" });\n`,
     );
     const env = { ...process.env };
     delete env.FASTAGENT_MODEL;
     const { code, stderr } = await run(["fire", "nope", dir], undefined, env);
     expect(code).toBe(1);
-    expect(stderr).toMatch(/available: daily/); // found in .fastagent/schedules — the same set dev/start serve
-    expect(stderr).toMatch(/looked in \.fastagent\/schedules/); // a misplaced schedule reads as "wrong place", not "broken file"
+    expect(stderr).toMatch(/available: daily/); // found in fastagent/schedules — the same set dev/start serve
+    expect(stderr).toMatch(/looked in fastagent\/schedules/); // a misplaced schedule reads as "wrong place", not "broken file"
   });
 
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {
@@ -319,7 +319,7 @@ describe("cli papercuts", () => {
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
     expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES the loader diagnostic to the user
     expect(info.channels).toEqual(["github"]);
-    await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // read-only: never creates sessions dir
+    await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
   it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
@@ -340,7 +340,7 @@ describe("cli papercuts", () => {
     expect(JSON.stringify(info.toolFailures)).toMatch(/broken\.ts/); // …it's surfaced as a per-file load failure
     expect(info.toolError).toBeNull(); // isolated, so NOT a whole-load abort
     expect(info.context.length).toBeGreaterThan(0); // the rest of the surface still shows
-    await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // still read-only
+    await expect(stat(join(dir, ".state"))).rejects.toThrow(); // still read-only
 
     // text mode: the tools line degrades and the reason goes to stderr as a warning
     const text = await run(["info", dir], undefined, env);
@@ -380,13 +380,13 @@ describe("cli papercuts", () => {
     expect(text.stderr).toMatch(/bad\.mjs/);
   });
 
-  it("an ambiguous layout (config at BOTH roots) fails as a one-line startup error, not a raw stack", async () => {
+  it("an ambiguous workspace (config at BOTH roots) fails as a one-line startup error, not a raw stack", async () => {
     // resolveWorkspace throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
     // the failStartupOn wrapper the refusal surfaced as an uncaught stack trace (found in acceptance).
     const dir = await mkdtemp(join(tmpdir(), "fa-ambiguous-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
-    await mkdir(join(dir, ".fastagent"), { recursive: true });
-    await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await mkdir(join(dir, "fastagent"), { recursive: true });
+    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
     const { code, stderr } = await run(["info", dir]);
     expect(code).toBe(1); // runtime failure, not a crash
     expect(stderr).toMatch(/^Error: .*ambiguous/); // the one-line failStartup presentation
@@ -428,18 +428,19 @@ describe("cli papercuts", () => {
     await expect(stat(join(home, ".fastagent", ".gitignore"))).rejects.toThrow(); // home left untouched
   });
 
-  it("login reads .env from the current directory (a FASTAGENT_AUTH_PATH set there takes effect)", async () => {
+  it("login reads the workspace .secrets/.env (a FASTAGENT_AUTH_PATH set there takes effect)", async () => {
     // Regression: login used to load .env from ./<provider> (the positional is the provider, not a dir).
-    // Put FASTAGENT_AUTH_PATH in cwd/.env pointing OUTSIDE the tree — if .env is honored, auth resolves
-    // there and the in-tree .fastagent is never self-ignored; if the bug returns (.env ignored), auth
-    // falls back to the in-tree default and .fastagent/.gitignore appears. So its ABSENCE is the proof.
+    // Put FASTAGENT_AUTH_PATH in .secrets/.env (the workspace .env home) pointing OUTSIDE the tree — if
+    // it is honored, auth resolves there and the secrets dir is never self-ignored; if the bug returns
+    // (.env ignored), auth falls back in-tree and .secrets/.gitignore appears. Its ABSENCE is the proof.
     const cwd = await mkdtemp(join(tmpdir(), "fa-login-env-"));
     const external = join(await mkdtemp(join(tmpdir(), "fa-ext-")), "auth.json");
-    await writeFile(join(cwd, ".env"), `FASTAGENT_AUTH_PATH=${external}\n`);
+    await mkdir(join(cwd, ".secrets"), { recursive: true });
+    await writeFile(join(cwd, ".secrets", ".env"), `FASTAGENT_AUTH_PATH=${external}\n`);
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.FASTAGENT_AUTH_PATH; // must come only from .env
     const { code } = await run(["login", "no-such-provider"], cwd, env);
     expect(code).not.toBe(0);
-    await expect(stat(join(cwd, ".fastagent", ".gitignore"))).rejects.toThrow(); // external path won → no in-tree self-ignore
+    await expect(stat(join(cwd, ".secrets", ".gitignore"))).rejects.toThrow(); // external path won → no in-tree self-ignore
   });
 });

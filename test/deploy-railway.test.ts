@@ -24,20 +24,20 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
   });
 
-  it("embedded: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
-    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], embedded: true });
+  it("nested: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
+    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], nested: true });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
-      ".fastagent/Dockerfile",
-      ".fastagent/Dockerfile.dockerignore",
-      ".fastagent/railway.json",
+      "fastagent/Dockerfile",
+      "fastagent/Dockerfile.dockerignore",
+      "fastagent/railway.json",
     ]);
-    const cfg = JSON.parse(p.artifacts.find((a) => a.path === ".fastagent/railway.json")?.content ?? "{}");
-    expect(cfg.build.dockerfilePath).toBe(".fastagent/Dockerfile"); // relative to the workbench upload context
+    const cfg = JSON.parse(p.artifacts.find((a) => a.path === "fastagent/railway.json")?.content ?? "{}");
+    expect(cfg.build.dockerfilePath).toBe("fastagent/Dockerfile"); // relative to the workbench upload context
     // The BUILD entry is a scriptable service variable (pointing Railway at the namespaced config file
     // is dashboard-only) — set in the same variables step as the machinery knobs, before the first up.
     expect(runbook(p)).toMatch(
-      /railway variables set FASTAGENT_STATE_DIR=\/data\/\.state FASTAGENT_SECRETS_DIR=\/data\/\.secrets RAILWAY_DOCKERFILE_PATH=\/\.fastagent\/Dockerfile/,
+      /railway variables set FASTAGENT_STATE_DIR=\/data\/\.state FASTAGENT_SECRETS_DIR=\/data\/\.secrets RAILWAY_DOCKERFILE_PATH=\/fastagent\/Dockerfile/,
     );
     // The dashboard config-as-code pointer is stated as OPTIONAL (adds the /health gate only).
     expect(runbook(p)).toMatch(/OPTIONAL[\s\S]*Config-as-code/);

@@ -14,7 +14,6 @@ import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
   type LoadedConfig,
-  type WorkspaceLayout,
   defaultSessionsDir,
   loadConfig,
   resolveAuthPath,
@@ -73,7 +72,7 @@ export interface CreatePiAgentFromWorkspaceOptions {
 /**
  * The workspace assembly FRONT HALF — everything that is independent of how pi consumes the
  * definition (transient harness for serving vs resident AgentSession for chat / session control):
- * layout resolution → config → model spec → the full tool surface ({@link resolveWorkspaceTools} — the
+ * workspace resolution → config → model spec → the full tool surface ({@link resolveWorkspaceTools} — the
  * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
  * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two
  * consumption shapes. (Definition loading and prompt assembly stay per-consumer: serving re-reads
@@ -86,9 +85,9 @@ export interface WorkspaceAssembly {
   modelSpec: string;
   /** Absolute workspace root — definition + config + machinery live here (resolveWorkspace().root). */
   root: string;
-  /** Absolute workbench — the agent's cwd / ②-context walk start (= root when flat; the parent when embedded). */
+  /** Absolute workbench — the agent's cwd / ②-context walk start (= root when flat; the parent when
+   *  the root is a nested `fastagent/`). `root !== workbench` is the only placement discriminant. */
   workbench: string;
-  layout: WorkspaceLayout;
   /** Absolute state root (FASTAGENT_STATE_DIR > <root>/.state). */
   stateRoot: string;
   /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <root>/.secrets/auth.json). */
@@ -105,10 +104,10 @@ export async function resolveWorkspaceAssembly(
   dir: string,
   options: { model?: string; authPath?: string } = {},
 ): Promise<WorkspaceAssembly> {
-  // Layout is structural (resolveWorkspace): the ROOT carries definition + config + machinery; the
-  // WORKBENCH (= root when flat, the parent when embedded) is what the agent works on — its cwd and
-  // the start of the ②-context walk (an embedded agent reads the host repo's AGENTS.md from there).
-  const { root, workbench, layout } = resolveWorkspace(dir);
+  // Placement is structural (resolveWorkspace): the ROOT carries definition + config + machinery; the
+  // WORKBENCH (= root when flat, the parent when nested) is what the agent works on — its cwd and
+  // the start of the ②-context walk (a nested agent reads the host repo's AGENTS.md from there).
+  const { root, workbench } = resolveWorkspace(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(root);
   const modelSpec = resolveModelSpec(options.model, config);
   if (!modelSpec) {
@@ -138,7 +137,6 @@ export async function resolveWorkspaceAssembly(
     modelSpec,
     root,
     workbench,
-    layout,
     stateRoot,
     authPath,
     tools,
@@ -168,7 +166,6 @@ export async function createPiAgentFromWorkspace(
   root: string;
   /** Absolute workbench in use — the agent's cwd (= root when flat). */
   workbench: string;
-  layout: WorkspaceLayout;
   /** Absolute state root in use (FASTAGENT_STATE_DIR > <root>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
@@ -194,7 +191,6 @@ export async function createPiAgentFromWorkspace(
     modelSpec,
     root,
     workbench,
-    layout,
     stateRoot,
     authPath,
     tools,
@@ -261,7 +257,6 @@ export async function createPiAgentFromWorkspace(
     sessionControl: hub?.control,
     root,
     workbench,
-    layout,
     config,
     configPath,
     modelSpec,

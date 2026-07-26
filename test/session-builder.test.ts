@@ -215,11 +215,11 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("resolves the embedded layout: persona/tools from .fastagent/, ② context walked from the workbench", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-embedded-"));
+  it("resolves the nested placement: persona/tools from fastagent/, ② context walked from the workbench", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-nested-"));
     try {
       await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workbench
-      const root = join(dir, ".fastagent");
+      const root = join(dir, "fastagent");
       await mkdir(join(root, "tools"), { recursive: true });
       await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
       await writeFile(join(root, "persona.md"), "You are PERSONA_MARKER bot.\n"); // ① in the workspace root

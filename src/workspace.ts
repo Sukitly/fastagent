@@ -12,8 +12,17 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import ignore, { type Ignore } from "ignore";
 
-/** The fixed name of an embedded workspace directory (and of the user-global machinery home `~/.fastagent`). */
-export const EMBEDDED_DIR = ".fastagent";
+/**
+ * The fixed name of a nested workspace directory: `<host>/fastagent/`. Visible on purpose — the
+ * workspace is the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it
+ * follows the repo convention for code (a plain directory), while fastagent's own machinery inside it
+ * (`.secrets/`, `.state/`) keeps the dot prefix.
+ */
+export const WORKSPACE_DIR = "fastagent";
+
+/** The user-global machinery home under `$HOME` — hidden, per the dotfile convention for per-user
+ *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link WORKSPACE_DIR}, which names workspaces. */
+export const GLOBAL_HOME_DIR = ".fastagent";
 
 /**
  * Resolve a user-supplied path override (a CLI flag or an env var) to an absolute path, expanding a
@@ -43,7 +52,7 @@ function machineryHome(dir: string): string {
       return resolve(p);
     }
   };
-  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), EMBEDDED_DIR) : resolve(dir);
+  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), GLOBAL_HOME_DIR) : resolve(dir);
 }
 
 /**

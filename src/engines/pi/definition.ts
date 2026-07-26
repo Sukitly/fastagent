@@ -112,7 +112,7 @@ export async function loadAgentDefinition(
 /**
  * Whether `targetPath` lives inside `baseDir` (same path counts). The self-ignore guard uses it to ask
  * "does the resolved state root land inside the workspace tree?" — an in-tree root (the default
- * `.fastagent`, or a custom `FASTAGENT_STATE_DIR` pointed inside the agent dir) is ours to self-ignore;
+ * `.state`, or a custom `FASTAGENT_STATE_DIR` pointed inside the agent dir) is ours to self-ignore;
  * a root on an external volume resolves outside and must not be (we never write a `.gitignore` outside
  * the tree). Whether a relative override lands in-tree is a cwd question — see `resolveStateRoot`.
  */
@@ -175,7 +175,7 @@ const SECRETS_GITIGNORE = "*\n!.gitignore\n!.env.example\n";
  *
  * ROOT-based, not path-based: everything derives from the state root (config.ts), so protecting the
  * root protects all of it — INCLUDING a custom in-tree root (a `FASTAGENT_STATE_DIR` inside the agent
- * dir), the case a path-based (`.fastagent`-only) guard would leak. A per-path override
+ * dir), the case a path-based (`.state`-only) guard would leak. A per-path override
  * (`--sessions-dir`/`--auth-path`) is operator-owned: pointed at an external volume it is out-of-tree
  * (correctly not ours to ignore); pointed at a custom in-tree dir WE DON'T OWN, we do not write a
  * `.gitignore` into it (it may be a directory the operator deliberately tracks).

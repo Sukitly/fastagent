@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace } from "../src/index.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
-import { detectHostSignals, scaffoldWorkspace } from "../src/scaffold/init.ts";
+import { scaffoldWorkspace } from "../src/scaffold/init.ts";
 import { nextStepCd } from "../src/scaffold/init.ts";
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 
@@ -39,7 +39,7 @@ describe("init: scaffoldWorkspace", () => {
 
   it("default scaffolds a COMPLETE agent (persona + the example skill + a code tool + package.json)", async () => {
     const dir = await freshDir();
-    const { complete, created, patched, warnings, root } = await scaffoldWorkspace(dir);
+    const { complete, created, patched, warnings, root } = await scaffoldWorkspace(dir, { flat: true });
     expect(complete).toBe(true);
     expect(root).toBe("."); // flat
     expect(patched).toEqual([]); // fresh .gitignore is ours — nothing to patch
@@ -99,7 +99,7 @@ describe("init: scaffoldWorkspace", () => {
 
   it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
     const dir = await freshDir();
-    const { complete, created } = await scaffoldWorkspace(dir, { minimal: true });
+    const { complete, created } = await scaffoldWorkspace(dir, { minimal: true, flat: true });
     expect(complete).toBe(false);
     expect(created.sort()).toEqual(
       [
@@ -129,7 +129,7 @@ describe("init: scaffoldWorkspace", () => {
   it("creates a non-existent target dir (counts as empty, no non-empty note)", async () => {
     const base = await freshDir();
     const target = join(base, "nested", "agent");
-    const { intoNonEmpty } = await scaffoldWorkspace(target);
+    const { intoNonEmpty } = await scaffoldWorkspace(target, { flat: true });
     expect(await exists(join(target, "persona.md"))).toBe(true);
     expect(intoNonEmpty).toBe(false);
   });
@@ -137,23 +137,25 @@ describe("init: scaffoldWorkspace", () => {
   it("preflights blocking parent paths: a file named `tools` or `skills` fails BEFORE writing persona.md (retryable)", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "tools"), "i am a file, not a dir\n"); // blocks tools/
-    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"tools" exists and is not a directory/);
+    await expect(scaffoldWorkspace(dir, { flat: true })).rejects.toThrow(/"tools" exists and is not a directory/);
     // no half-scaffold: persona.md was never written, so a retry starts clean
     expect(await exists(join(dir, "persona.md"))).toBe(false);
 
     // `skills` blocks too — the scaffold writes the example skill there, in default AND --minimal.
     const dir2 = await freshDir();
     await writeFile(join(dir2, "skills"), "i am a file, not a dir\n");
-    await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/"skills" exists and is not a directory/);
+    await expect(scaffoldWorkspace(dir2, { flat: true })).rejects.toThrow(/"skills" exists and is not a directory/);
     expect(await exists(join(dir2, "persona.md"))).toBe(false);
-    await expect(scaffoldWorkspace(dir2, { minimal: true })).rejects.toThrow(/"skills" exists and is not a directory/);
+    await expect(scaffoldWorkspace(dir2, { minimal: true, flat: true })).rejects.toThrow(
+      /"skills" exists and is not a directory/,
+    );
   });
 
   it("rejects a symlinked scaffold parent (does not follow it and write outside the workspace)", async () => {
     const external = await freshDir(); // a dir OUTSIDE the workspace
     const dir = await freshDir();
     await symlink(external, join(dir, "tools")); // `tools` is a symlink → must be rejected, not followed
-    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"tools" exists and is not a directory/);
+    await expect(scaffoldWorkspace(dir, { flat: true })).rejects.toThrow(/"tools" exists and is not a directory/);
     expect(await exists(join(dir, "persona.md"))).toBe(false); // nothing written in the workspace
     expect(await readdir(external)).toEqual([]); // and nothing escaped into the symlink target
   });
@@ -162,7 +164,7 @@ describe("init: scaffoldWorkspace", () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "custom\n"); // kept → the patch path reads the ignore matcher
     await mkdir(join(dir, ".fastagentignore")); // a dir where a file is expected → loadRootIgnore throws
-    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/cannot read .*\.fastagentignore/);
+    await expect(scaffoldWorkspace(dir, { flat: true })).rejects.toThrow(/cannot read .*\.fastagentignore/);
     // the hygiene read sits inside the rollback scope → the scaffolded persona.md was removed,
     // so a retry starts clean
     expect(await exists(join(dir, "persona.md"))).toBe(false);
@@ -171,7 +173,7 @@ describe("init: scaffoldWorkspace", () => {
   it("keeps an existing AGENTS.md (project context, not an ownership marker); refuses only an existing config", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# My real agent\n");
-    const { created } = await scaffoldWorkspace(dir);
+    const { created } = await scaffoldWorkspace(dir, { flat: true });
     expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# My real agent\n"); // untouched, adopted as ②
     expect(created).toContain("persona.md"); // identity added around it
     expect(created).not.toContain("AGENTS.md"); // never scaffolded
@@ -180,148 +182,91 @@ describe("init: scaffoldWorkspace", () => {
     await writeFile(join(dir2, "fastagent.config.ts"), "export default {};\n");
     await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/already has fastagent\.config\.ts/);
 
-    // A config inside ./.fastagent/ is the SAME marker — an embedded workspace already lives here.
+    // A config inside ./fastagent/ is the SAME marker — a nested workspace already lives here.
     const dir3 = await freshDir();
-    await mkdir(join(dir3, ".fastagent"), { recursive: true });
-    await writeFile(join(dir3, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await mkdir(join(dir3, "fastagent"), { recursive: true });
+    await writeFile(join(dir3, "fastagent", "fastagent.config.mjs"), "export default {};\n");
     await expect(scaffoldWorkspace(dir3)).rejects.toThrow(/already a fastagent workspace/);
   });
 
-  it("detectHostSignals: toolchain/deploy configs and occupied convention dirs signal; md + loose files don't", async () => {
-    // A markdown-and-scripts directory: nothing claims it → no signals → flat.
-    const notes = await freshDir();
-    await writeFile(join(notes, "AGENTS.md"), "# notes\n");
-    await writeFile(join(notes, "README.md"), "# readme\n");
-    await writeFile(join(notes, "package.json"), `{"name":"x"}`); // a manifest alone is NOT a claim
-    await writeFile(join(notes, "helper.js"), "// loose script\n");
-    expect(await detectHostSignals(notes)).toEqual([]);
-
-    // A deployable host project: toolchain + deploy manifests claim the tree.
-    const host = await freshDir();
-    await writeFile(join(host, "tsconfig.json"), "{}");
-    await writeFile(join(host, "next.config.ts"), "export default {};\n");
-    await writeFile(join(host, "Dockerfile"), "FROM node\n");
-    expect(await detectHostSignals(host)).toEqual(["Dockerfile", "next.config.ts", "tsconfig.json"]);
-
-    // Non-JS ecosystems claim their tree the same way — an AGENTS.md-carrying Go/Python repo must not
-    // get a flat kit (with a package.json) in its root.
-    const goRepo = await freshDir();
-    await writeFile(join(goRepo, "AGENTS.md"), "# conventions\n");
-    await writeFile(join(goRepo, "go.mod"), "module x\n");
-    expect(await detectHostSignals(goRepo)).toEqual(["go.mod"]);
-    const pyRepo = await freshDir();
-    await writeFile(join(pyRepo, "pyproject.toml"), "[project]\n");
-    expect(await detectHostSignals(pyRepo)).toEqual(["pyproject.toml"]);
-
-    // Occupied convention names count (fastagent would scan them as agent surface); empty dirs and
-    // dotfile-only dirs (.DS_Store) don't.
-    const occupied = await freshDir();
-    await mkdir(join(occupied, "tools"), { recursive: true });
-    await writeFile(join(occupied, "tools", "build.js"), "// the host's own script\n");
-    await mkdir(join(occupied, "skills"), { recursive: true }); // empty → not a signal
-    await mkdir(join(occupied, "channels"), { recursive: true });
-    await writeFile(join(occupied, "channels", ".DS_Store"), ""); // dotfiles are not agent surface
-    expect(await detectHostSignals(occupied)).toEqual(["tools/"]);
-  });
-
-  it("detectHostSignals surfaces real IO errors instead of silently deciding the layout (EACCES ≠ absent)", async () => {
+  it("refuses a non-empty ./fastagent/ target (an unfinished workspace or something unrelated); refusal is side-effect-free", async () => {
     const dir = await freshDir();
-    await mkdir(join(dir, "tools"), { recursive: true });
-    await writeFile(join(dir, "tools", "x.js"), "//\n");
-    await chmod(join(dir, "tools"), 0o000); // unreadable — a REAL failure, not "nothing there"
-    try {
-      await expect(detectHostSignals(dir)).rejects.toThrow();
-    } finally {
-      await chmod(join(dir, "tools"), 0o755); // restore so tmp cleanup works
-    }
-  });
-
-  it("refuses a non-empty ./.fastagent/ target (old state or something unrelated); refusal is side-effect-free", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, ".fastagent"), { recursive: true });
-    await writeFile(join(dir, ".fastagent", "auth.json"), "{}\n"); // e.g. an older fastagent's state dir
-    await expect(scaffoldWorkspace(dir, { embedded: true })).rejects.toThrow(/not empty.*--flat/s);
-    expect(await exists(join(dir, ".fastagent", "persona.md"))).toBe(false); // nothing mixed in
+    await mkdir(join(dir, "fastagent"), { recursive: true });
+    await writeFile(join(dir, "fastagent", "auth.json"), "{}\n"); // e.g. an older fastagent's state dir
+    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/not empty.*--flat/s);
+    expect(await exists(join(dir, "fastagent", "persona.md"))).toBe(false); // nothing mixed in
 
     const dir2 = await freshDir();
-    await mkdir(join(dir2, ".fastagent"), { recursive: true });
-    await writeFile(join(dir2, ".fastagent", ".DS_Store"), ""); // Finder noise ≠ occupied
-    const r = await scaffoldWorkspace(dir2, { embedded: true });
-    expect(r.root).toBe(".fastagent");
+    await mkdir(join(dir2, "fastagent"), { recursive: true });
+    await writeFile(join(dir2, "fastagent", ".DS_Store"), ""); // Finder noise ≠ occupied
+    const r = await scaffoldWorkspace(dir2);
+    expect(r.root).toBe("fastagent");
   });
 
-  it("embedded: the WHOLE workspace lands in ./.fastagent/, ZERO files at the host root", async () => {
+  it("default: the WHOLE workspace lands in ./fastagent/, ZERO files at the host root", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# Host repo spec\n");
     await writeFile(join(dir, "tsconfig.json"), "{}");
     const before = (await readdir(dir)).sort();
-    const { created, embedded, root } = await scaffoldWorkspace(dir, { embedded: true });
-    expect(embedded).toBe(true);
-    expect(root).toBe(".fastagent");
+    const { created, root } = await scaffoldWorkspace(dir);
+    expect(root).toBe("fastagent");
     expect(created).toEqual(
       expect.arrayContaining([
-        join(".fastagent", "persona.md"),
-        join(".fastagent", "skills", "writing-great-skills", "SKILL.md"),
-        join(".fastagent", "tools", "fetch-url.ts"),
-        join(".fastagent", "package.json"),
-        join(".fastagent", ".gitignore"),
-        join(".fastagent", "fastagent.config.mjs"),
-        join(".fastagent", ".secrets", ".env.example"),
-        join(".fastagent", ".secrets", ".gitignore"),
+        join("fastagent", "persona.md"),
+        join("fastagent", "skills", "writing-great-skills", "SKILL.md"),
+        join("fastagent", "tools", "fetch-url.ts"),
+        join("fastagent", "package.json"),
+        join("fastagent", ".gitignore"),
+        join("fastagent", "fastagent.config.mjs"),
+        join("fastagent", ".secrets", ".env.example"),
+        join("fastagent", ".secrets", ".gitignore"),
       ]),
     );
-    // THE point of the layout: the host root gained exactly one entry — `.fastagent/` — and nothing else.
-    expect((await readdir(dir)).sort()).toEqual([...before, ".fastagent"].sort());
+    // THE point of the layout: the host root gained exactly one entry — `fastagent/` — and nothing else.
+    expect((await readdir(dir)).sort()).toEqual([...before, "fastagent"].sort());
     expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# Host repo spec\n"); // ②, untouched
     // The workspace self-contains its deps + ignores (they travel with the directory).
     expect(await exists(join(dir, "package.json"))).toBe(false);
-    expect(await readFile(join(dir, ".fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
-    // The scaffolded workspace ASSEMBLES: persona from .fastagent/, ② context walked from the host root.
+    expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
+    // The scaffolded workspace ASSEMBLES: persona from fastagent/, ② context walked from the host root.
     const a = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.5" });
-    expect(a.root).toBe(join(dir, ".fastagent"));
+    expect(a.root).toBe(join(dir, "fastagent"));
     expect(a.workbench).toBe(dir);
-    expect(a.layout).toBe("embedded");
     expect(a.definition.persona).toContain("Persona");
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
   });
 
-  it("embedded: ONE workspace shape — the .fastagent/ interior equals a flat scaffold", async () => {
+  it("ONE workspace shape — the fastagent/ interior equals a flat scaffold", async () => {
     const flat = await freshDir();
-    const embedded = await freshDir();
-    const a = await scaffoldWorkspace(flat);
-    const b = await scaffoldWorkspace(embedded, { embedded: true });
-    // Same files, same relative layout — embedded is the flat shape nested one level down.
-    const stripped = b.created.map((p) => p.replace(/^\.fastagent[/\\]/, "")).sort();
+    const nestedDir = await freshDir();
+    const a = await scaffoldWorkspace(flat, { flat: true });
+    const b = await scaffoldWorkspace(nestedDir);
+    // Same files, same relative layout — the default is the flat shape nested one level down.
+    const stripped = b.created.map((p) => p.replace(/^fastagent[/\\]/, "")).sort();
     expect(stripped).toEqual(a.created.sort());
   });
 
-  it("`init` decides the layout by jurisdiction signals and prints the reason (no prompt)", async () => {
-    // A claimed tree (tsconfig) → the whole workspace into ./.fastagent/, reason printed.
+  it("`init` nests by default — no detection, no prompt; --flat lands the shape at the root", async () => {
+    // An existing toolchain changes NOTHING: there is no jurisdiction heuristic anymore.
     const host = await freshDir();
     await writeFile(join(host, "tsconfig.json"), "{}");
     const out = await cliInit(["init", "--no-install"], host);
-    expect(out).toMatch(/found tsconfig\.json/);
-    expect(out).toMatch(/workspace in \.\/\.fastagent\//);
-    expect(await exists(join(host, ".fastagent", "persona.md"))).toBe(true);
+    expect(out).toMatch(/workspace in \.\/fastagent\//);
+    expect(out).not.toMatch(/found tsconfig/); // no detection chatter
+    expect(await exists(join(host, "fastagent", "persona.md"))).toBe(true);
     expect(await exists(join(host, "fastagent.config.mjs"))).toBe(false); // zero host-root writes
 
-    // --flat overrides the detection.
+    // --flat: the directory IS the agent.
     const flat = await freshDir();
-    await writeFile(join(flat, "tsconfig.json"), "{}");
     const out2 = await cliInit(["init", "--no-install", "--flat"], flat);
-    expect(out2).not.toMatch(/\(embedded\)/);
+    expect(out2).toMatch(/initialized/);
     expect(await exists(join(flat, "persona.md"))).toBe(true);
+    expect(await exists(join(flat, "fastagent"))).toBe(false); // no nested dir in the flat variant
 
-    // --embedded forces the layout without any signal.
-    const forced = await freshDir();
-    const out3 = await cliInit(["init", "--no-install", "--embedded"], forced);
-    expect(out3).toMatch(/workspace in \.\/\.fastagent\//);
-    expect(await exists(join(forced, ".fastagent", "persona.md"))).toBe(true);
-
-    // Conflicting flags are refused (by the parser — a usage error, nothing written).
-    const both = await freshDir();
-    expect(await cliInit(["init", "--flat", "--embedded"], both)).toMatch(/cannot be used with/);
-    expect(await exists(join(both, "persona.md"))).toBe(false);
+    // --embedded is gone (nesting IS the default) — the parser refuses it, nothing is written.
+    const gone = await freshDir();
+    expect(await cliInit(["init", "--embedded"], gone)).toMatch(/unknown option/);
+    expect(await exists(join(gone, "fastagent"))).toBe(false);
 
     // A config → already a workspace → refuse.
     const done = await freshDir();
@@ -329,10 +274,10 @@ describe("init: scaffoldWorkspace", () => {
     expect(await cliInit(["init"], done)).toMatch(/already a fastagent workspace/);
   });
 
-  it("createPiAgentFromWorkspace wires the embedded layout end-to-end: persona/tools from the root, ② context from the workbench", async () => {
-    const host = await mkdtemp(join(tmpdir(), "fa-embedded-ws-"));
+  it("createPiAgentFromWorkspace wires the nested placement end-to-end: persona/tools from the root, ② context from the workbench", async () => {
+    const host = await mkdtemp(join(tmpdir(), "fa-nested-ws-"));
     await writeFile(join(host, "AGENTS.md"), "# Host repo context\n"); // ② at the workbench
-    const root = join(host, ".fastagent");
+    const root = join(host, "fastagent");
     await mkdir(join(root, "tools"), { recursive: true });
     await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
     await writeFile(join(root, "persona.md"), "You are the Repo Bot.\n"); // ① in the workspace root
@@ -353,17 +298,17 @@ describe("init: scaffoldWorkspace", () => {
     const base = await freshDir();
     // init into a subdir from `base` as cwd: the next steps must lead with `cd my-agent`.
     const named = await cliInit(["init", "my-agent", "--no-install"], base);
-    expect(named).toMatch(/cd my-agent/);
+    expect(named).toMatch(/^ {4}cd my-agent$/m);
     // init into cwd (default .): no cd step, bare `fastagent dev` is already correct.
     const cwd = await cliInit(["init", "--no-install"], await freshDir());
-    expect(cwd).not.toMatch(/cd /);
+    expect(cwd).not.toMatch(/^ {4}cd /m); // the parenthesized install hint is not a cd step
     expect(cwd).toMatch(/fastagent dev/);
   });
 
   it("keeps a pre-existing .gitignore's content and APPENDS the missing dependency exclude", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "custom\n"); // no fastagent rules
-    const { created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);
+    const { created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, { flat: true });
     expect(skipped).toEqual([".gitignore"]);
     expect(patched).toEqual([".gitignore"]);
     expect(created).toContain("persona.md");
@@ -379,7 +324,7 @@ describe("init: scaffoldWorkspace", () => {
   it("appends only what's missing; a covered .gitignore is left alone (secrets need no root entry)", async () => {
     const covered = await freshDir();
     await writeFile(join(covered, ".gitignore"), "node_modules/\n");
-    const r = await scaffoldWorkspace(covered);
+    const r = await scaffoldWorkspace(covered, { flat: true });
     expect(r.patched).toEqual([]); // no duplicate lines
     expect((await readFile(join(covered, ".gitignore"), "utf8")).match(/^node_modules\/$/gm)).toHaveLength(1);
     // The secret hygiene lives WITH the secrets: git's nested-ignore precedence makes it authoritative.
@@ -399,9 +344,9 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     return dir;
   }
 
-  it("routes into the embedded workspace: channel + companion tool + secrets all land under .fastagent/", async () => {
+  it("routes into the nested workspace: channel + companion tool + secrets all land under fastagent/", async () => {
     const dir = await freshDir();
-    const root = join(dir, ".fastagent");
+    const root = join(dir, "fastagent");
     await mkdir(join(root, ".secrets"), { recursive: true });
     await writeFile(join(root, "fastagent.config.mjs"), "export default {};\n");
     await writeFile(join(root, ".secrets", ".env.example"), "# env\n");
@@ -647,7 +592,7 @@ describe("add: fastagent add skill (vendor)", () => {
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
   });
 
-  it("`add skill` routes into the embedded workspace (symmetric with `add <channel>`) — a host skills/ is never scanned", async () => {
+  it("`add skill` routes into the nested workspace (symmetric with `add <channel>`) — a host skills/ is never scanned", async () => {
     const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
     await mkdir(join(srcRoot, "greeter"), { recursive: true });
     await writeFile(
@@ -655,12 +600,12 @@ describe("add: fastagent add skill (vendor)", () => {
       "---\nname: greeter\ndescription: Greet the user warmly and by name.\n---\nSay hello.\n",
     );
     const dir = await freshDir();
-    await mkdir(join(dir, ".fastagent"), { recursive: true });
-    await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await mkdir(join(dir, "fastagent"), { recursive: true });
+    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
 
     const out = await cliInit(["add", "skill", join(srcRoot, "greeter")], dir);
     expect(out).toMatch(/vendored skill "greeter"/);
-    expect(await exists(join(dir, ".fastagent", "skills", "greeter", "SKILL.md"))).toBe(true); // in the workspace…
+    expect(await exists(join(dir, "fastagent", "skills", "greeter", "SKILL.md"))).toBe(true); // in the workspace…
     expect(await exists(join(dir, "skills"))).toBe(false); // …NOT at the host root (it would never be scanned)
   });
 
