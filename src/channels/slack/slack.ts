@@ -113,9 +113,11 @@ export interface SlackChannelOptions {
   /** `context` (default) admits bare replies in managed group threads and buffers unsummoned group
    * discussion. `mentions` answers only app_mention plus DMs for an explicit least-privilege setup. */
   groupBehavior?: "context" | "mentions";
-  /** `native` (default) uses Slack Agent streams for threaded replies. `classic` retains the
-   * compatibility renderer based on one rate-limited edited message. A top-level target selected by an
-   * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
+  /** `native` (default) uses Slack Agent streams for threaded replies. Its inline tool traces carry a
+   * bounded summary of each call's first argument and cannot be retracted, so they stay in the
+   * delivered message beside the answer. `classic` retains the compatibility renderer based on one
+   * rate-limited edited message, which settles into the answer alone. A top-level target selected by
+   * an explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
    * require a parent user message. */
   rendering?: SlackRendering;
   /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
