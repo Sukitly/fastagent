@@ -236,10 +236,6 @@ explicit `slack-send` tool. Successful replies omit repetitive disclaimers by de
 `aiDisclaimer` string only when workspace policy requires a per-message footer. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in
 the Agent prompt when Slack supplies them.
 
-**Removed in 0.16:** `taskDisplay`. It laid out Slack Task Cards, which the native renderer no longer
-emits; tool activity is inline Markdown in the same stream and has no layout knob. Delete the option —
-`slackChannel` refuses a supplied value rather than ignoring it.
-
 Standard Markdown—not Slack-specific `mrkdwn`—is the output contract. Each API write stays below Slack's
 12,000-character Markdown limit. Link unfurls remain disabled. Very long answers continue in additional
 Markdown messages.
