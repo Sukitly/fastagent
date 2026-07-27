@@ -146,6 +146,29 @@ describe("native Slack tool traces", () => {
     expect(written).toBe("Checking.\n\n**Read** — `AGENTS.md`\n\nDone.");
   });
 
+  it("keeps an untrusted name or argument from breaking the surrounding Markdown", async () => {
+    const api = fakeApi();
+    const events = (async function* (): AsyncIterable<AgentEvent> {
+      yield { type: "tool_started", id: "tool-1", name: "_", args: { command: "echo **b** _c_" } };
+      yield { type: "tool_started", id: "tool-2", name: "bash", args: { command: "`x`" } };
+      yield { type: "completed" };
+    })();
+
+    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+      rendering: "native",
+      disclaimer: false,
+    });
+
+    const written = [
+      vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "",
+      ...vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? ""),
+    ].join("");
+    // Emphasis in the label is escaped, and a code span is fenced longer than any backtick run inside
+    // it (padded when the value's own edges are backticks) — the literal text is never rewritten.
+    expect(written).toContain("**\\_** — `echo **b** _c_`");
+    expect(written).toContain("**Bash** — `` `x` ``");
+  });
+
   it("shows the first primitive argument whatever it holds — the disclosed boundary, not a filter", async () => {
     const api = fakeApi();
     // A channel knows no tool schemas, so the summary cannot tell a query from a credential. This is

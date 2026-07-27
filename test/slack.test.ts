@@ -293,6 +293,10 @@ describe("Slack signed ingress", () => {
         rendering: "invalid" as "native",
       }),
     ).toThrow(/rendering/);
+    // A published option that is gone: an accepted no-op would be a worse migration than a loud stop.
+    expect(() =>
+      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, taskDisplay: "timeline" } as SlackChannelOptions),
+    ).toThrow(/taskDisplay/);
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",

@@ -161,24 +161,35 @@ function messageRefOf(turnId: string): { channelId: string; ts: string } | undef
   return parts.length === 3 && parts[1] && parts[2] ? { channelId: parts[1], ts: parts[2] } : undefined;
 }
 
-export function slackChannel({
-  botToken,
-  signingSecret,
-  botRefreshToken,
-  clientId,
-  clientSecret,
-  botTokenExpiresAt,
-  directMessageSession = "threaded",
-  groupMessageSession = "threaded",
-  groupBehavior = "context",
-  rendering = "native",
-  aiDisclaimer,
-  welcome = DEFAULT_WELCOME,
-  reactionAck = {},
-  route,
-  onError,
-  apiBaseUrl = "https://slack.com/api",
-}: SlackChannelOptions): ChannelModule {
+export function slackChannel(options: SlackChannelOptions): ChannelModule {
+  const {
+    botToken,
+    signingSecret,
+    botRefreshToken,
+    clientId,
+    clientSecret,
+    botTokenExpiresAt,
+    directMessageSession = "threaded",
+    groupMessageSession = "threaded",
+    groupBehavior = "context",
+    rendering = "native",
+    aiDisclaimer,
+    welcome = DEFAULT_WELCOME,
+    reactionAck = {},
+    route,
+    onError,
+    apiBaseUrl = "https://slack.com/api",
+  } = options;
+
+  // `taskDisplay` was a published 0.15.0 option that only laid out Slack Task Cards. Silently
+  // ignoring it would turn a rejected illegal value into an accepted no-op for any config TS does not
+  // check (plain JS, an older scaffold copy).
+  if ("taskDisplay" in options) {
+    throw new Error(
+      "slackChannel no longer accepts taskDisplay: tool activity streams as inline Markdown traces, " +
+        "not Slack Task Cards — remove the option",
+    );
+  }
   if (!(["continuous", "threaded"] as const).includes(directMessageSession)) {
     throw new Error('slackChannel directMessageSession must be "continuous" or "threaded"');
   }
