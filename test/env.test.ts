@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,5 +95,25 @@ describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () =>
     // A directory AT the .env path makes readFileSync throw EISDIR — a non-ENOENT error that must surface.
     await mkdir(join(dir, ".secrets", ".env"), { recursive: true });
     expect(() => loadDotEnv(dir)).toThrow(expect.objectContaining({ code: "EISDIR" }));
+  });
+
+  it("names the pre-0.16 root .env when it exists and the new one does not (never a silent skip)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-legacy-"));
+    await writeFile(join(dir, ".env"), "LEGACY_ONLY=1\n");
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    loadDotEnv(dir);
+    expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/is not read.*\.secrets/s);
+    expect(process.env.LEGACY_ONLY).toBeUndefined(); // named, NOT loaded — the new path is the only one read
+    warn.mockRestore();
+
+    // Once the file moved, the warning stops (the new location is what gets loaded).
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "LEGACY_ONLY=2\n");
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    loadDotEnv(dir);
+    expect(quiet).not.toHaveBeenCalled();
+    expect(process.env.LEGACY_ONLY).toBe("2");
+    quiet.mockRestore();
+    delete process.env.LEGACY_ONLY;
   });
 });

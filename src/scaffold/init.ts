@@ -12,7 +12,7 @@
  * configured. `--flat` is the variant: the same shape lands directly in `dir` ("the directory IS the
  * agent" — a standalone agent dir or a monorepo package). There is deliberately NO heuristic choosing
  * between them — init either creates, or refuses with the reason (a non-empty `fastagent/`, an
- * existing config).
+ * existing config, or `--flat` into the reserved `fastagent` name).
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites existing files,
  * preflights non-directory scaffold parents, and rolls back a partial write (one exception: the
@@ -86,7 +86,8 @@ export async function exists(p: string): Promise<boolean> {
  * Scaffold a runnable workspace into {@link dir} (created if missing). Default is a complete agent
  * (persona.md + the writing-great-skills skill + a code tool + package.json); `--minimal` drops the
  * code tool and package.json. ONE workspace shape either way: the default nests it into
- * `<dir>/fastagent/` (zero host-tree writes), `--flat` lands the identical shape in `dir`. Refuses an
+ * `<dir>/fastagent/` (zero host-tree writes), `--flat` lands the identical shape in `dir` (refused when
+ * `dir` is itself named `fastagent` — the reserved nested name). Refuses an
  * existing fastagent.config.* at either root (the ownership marker — already a workspace); every
  * other pre-existing file (AGENTS.md, .gitignore, package.json) is kept, never overwritten — an
  * existing AGENTS.md is the project's context, adopted as-is.
@@ -124,6 +125,18 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
         rel: join(root, "package.json"),
         content: packageJson(nested ? `${toPackageName(dir)}-agent` : toPackageName(dir), await fastagentVersion()),
       },
+    );
+  }
+
+  // `fastagent` is the RESERVED nested-workspace name: resolveWorkspace reads any directory with that
+  // basename as a nested root, so a --flat workspace landing there would resolve with workbench = the
+  // PARENT — the agent's cwd, its ② context, and (worse) deploy's build context would all silently
+  // climb one level out. Refuse with the reason instead of scaffolding the trap.
+  if (!nested && basename(dir) === WORKSPACE_DIR) {
+    throw new Error(
+      `"${dir}": "${WORKSPACE_DIR}" is the reserved name of a nested workspace — --flat here would resolve ` +
+        `with the PARENT directory as the workbench (the agent's cwd and deploy's build context). Rename the ` +
+        `directory, or drop --flat to nest a workspace inside it.`,
     );
   }
 

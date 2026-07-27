@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -103,6 +103,20 @@ describe("config: resolveWorkspace (structural placement resolution)", () => {
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "notes.txt"), "unrelated\n");
     expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir });
+  });
+
+  it("a package.json alone does NOT make a fastagent/ read as a workspace (an unrelated clone/package)", async () => {
+    // The config-less guard keys on the DEFINITION's names only: `package.json` says nothing about
+    // fastagent, so an unrelated `fastagent/` (a vendored clone, a monorepo package) must not
+    // hard-block every command run in its parent.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-pkgonly-"));
+    await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "package.json"), "{}\n");
+    expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir });
+    expect(resolveWorkspace(join(dir, "fastagent"))).toEqual({
+      root: join(dir, "fastagent"),
+      workbench: join(dir, "fastagent"),
+    });
   });
 });
 
@@ -418,6 +432,24 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     await createPiAgentFromWorkspace(dir, { sessionsDir: vol });
     const { readFile } = await import("node:fs/promises");
     expect(await readFile(join(dir, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
+  });
+
+  it("names an orphaned pre-0.16 .fastagent/ state dir before the new state root is created", async () => {
+    // The silent failure this replaces: conversations start empty and a channel replays deliveries its
+    // dedup state no longer knows, with the old directory sitting right there unread.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-legacy-state-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await mkdir(join(dir, ".fastagent", "sessions"), { recursive: true });
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    await createPiAgentFromWorkspace(dir);
+    expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/\.fastagent is not read.*\.state/s);
+    warn.mockRestore();
+
+    // Second boot: the new state root now exists, so the workspace is past the move — stay quiet.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    await createPiAgentFromWorkspace(dir);
+    expect(quiet.mock.calls.map((c) => String(c[0])).join("\n")).not.toMatch(/\.fastagent is not read/);
+    quiet.mockRestore();
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {

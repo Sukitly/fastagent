@@ -279,7 +279,7 @@ export interface CreatePiAgentOptions {
    */
   providers?: Provider[];
   /**
-   * Credentials file for stored OAuth/API-key auth. Defaults to `~/.fastagent/auth.json`; the
+   * Credentials file for stored OAuth/API-key auth. Defaults to `~/.fastagent/.secrets/auth.json`; the
    * directory opener passes the project-level `<root>/.secrets/auth.json` instead. Env vars are still
    * consulted when a provider is absent from the file (resolution order is upstream-owned).
    */

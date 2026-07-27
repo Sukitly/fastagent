@@ -17,6 +17,7 @@
  * documented floor. State on the /data volume survives stop/suspend on the same machine.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { WORKSPACE_DIR } from "../../workspace.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -117,7 +118,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   // fastagent/Dockerfile) so the host repo's own deploy files are never touched; the runbook passes
   // explicit -c/--dockerfile flags (unambiguous across flyctl versions — no reliance on
   // config-relative path resolution).
-  const flyTomlPath = nested ? "fastagent/fly.toml" : "fly.toml";
+  const flyTomlPath = nested ? `${WORKSPACE_DIR}/fly.toml` : "fly.toml";
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
@@ -143,7 +144,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
   const deployCmd = nested
-    ? `fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile --app ${appName}`
+    ? `fly deploy . --config ${flyTomlPath} --dockerfile ${WORKSPACE_DIR}/Dockerfile --app ${appName}`
     : `fly deploy --app ${appName}`;
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
@@ -210,7 +211,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     runbook.push(
       ``,
       modelAuth === undefined
-        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/auth.json), or \`--run\` carries it automatically.`
+        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/.secrets/auth.json), or \`--run\` carries it automatically.`
         : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a secret.`,
       `#   Set your provider API key as a Fly secret (fly secrets set KEY=...), OR place auth.json at /data/.secrets/ on the volume.`,
     );

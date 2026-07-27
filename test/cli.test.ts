@@ -375,7 +375,7 @@ describe("cli papercuts", () => {
     // text mode: next instant on the schedules line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);
     expect(text.code).toBe(0);
-    expect(text.stdout).toMatch(/schedules: good \(next .*T09:00:00\.000Z\)/);
+    expect(text.stdout).toMatch(/schedules:\s+good \(next .*T09:00:00\.000Z\)/);
     expect(text.stdout).toMatch(/selfSchedule: off/);
     expect(text.stderr).toMatch(/bad\.mjs/);
   });

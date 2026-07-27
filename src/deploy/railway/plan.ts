@@ -22,6 +22,7 @@
  * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { WORKSPACE_DIR } from "../../workspace.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -57,11 +58,11 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. `/data` matches the Fly recipe. */
 const MOUNT = "/data";
 
-/** The `RAILWAY_DOCKERFILE_PATH` value for an nested workspace — repo-root-anchored with a leading
+/** The `RAILWAY_DOCKERFILE_PATH` value for a nested workspace — repo-root-anchored with a leading
  *  slash, the form Railway's builds/dockerfiles docs use for a Dockerfile in another directory. The
  *  config file's `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own
  *  convention); two mechanisms, two documented spellings, one exported fact each. */
-export const NESTED_DOCKERFILE_PATH_VAR = "/fastagent/Dockerfile";
+export const NESTED_DOCKERFILE_PATH_VAR = `/${WORKSPACE_DIR}/Dockerfile`;
 
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
@@ -70,7 +71,7 @@ function railwayJson(nested?: boolean): string {
     {
       $schema: "https://railway.com/railway.schema.json",
       // dockerfilePath is relative to the workbench root (`railway up`'s upload context) in BOTH layouts.
-      build: { builder: "DOCKERFILE", dockerfilePath: nested ? "fastagent/Dockerfile" : "Dockerfile" },
+      build: { builder: "DOCKERFILE", dockerfilePath: nested ? `${WORKSPACE_DIR}/Dockerfile` : "Dockerfile" },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -87,7 +88,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   // RAILWAY_DOCKERFILE_PATH service variable instead (Railway's documented non-root-Dockerfile route),
   // and the config-as-code pointer degrades to an OPTIONAL enhancement: the /health gate (Railway's
   // default restart policy already matches the file's ON_FAILURE).
-  const configPath = input.nested ? "fastagent/railway.json" : "railway.json";
+  const configPath = input.nested ? `${WORKSPACE_DIR}/railway.json` : "railway.json";
   const artifacts: Artifact[] = [
     { path: configPath, content: railwayJson(input.nested) },
     ...containerArtifacts(input),
@@ -153,7 +154,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   if (!isEnvKey(modelAuth)) {
     runbook.push(
       modelAuth === undefined
-        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/auth.json), or \`--run\` carries it automatically.`
+        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/.secrets/auth.json), or \`--run\` carries it automatically.`
         : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a variable.`,
       `#   Set your provider API key as a variable (railway variables set KEY=...), OR place auth.json on the ${MOUNT} volume.`,
     );

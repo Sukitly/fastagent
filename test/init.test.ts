@@ -203,6 +203,19 @@ describe("init: scaffoldWorkspace", () => {
     expect(r.root).toBe("fastagent");
   });
 
+  it("refuses --flat into a directory named `fastagent` (the reserved nested name would move the workbench)", async () => {
+    // resolveWorkspace reads ANY directory named `fastagent` as a nested root, so a flat workspace there
+    // would serve with workbench = the PARENT (the agent's cwd, its ② context, deploy's build context).
+    const host = await freshDir();
+    const reserved = join(host, "fastagent");
+    await mkdir(reserved, { recursive: true });
+    await expect(scaffoldWorkspace(reserved, { flat: true })).rejects.toThrow(/reserved name.*--flat/s);
+    expect(await exists(join(reserved, "persona.md"))).toBe(false); // side-effect-free refusal
+    // Nesting into it is fine — `<host>/fastagent/fastagent/` is an ordinary nested workspace.
+    const nested = await scaffoldWorkspace(reserved);
+    expect(nested.root).toBe("fastagent");
+  });
+
   it("default: the WHOLE workspace lands in ./fastagent/, ZERO files at the host root", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# Host repo spec\n");

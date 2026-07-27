@@ -209,7 +209,7 @@ export async function preflightDeploy(input: {
   }
   // A KEPT workbench-root .dockerignore silently replaces the generated one's protections — read it
   // and check SPECIFICALLY (the generic "kept" line suggests --force, which never clobbers the host's
-  // file). The critical ones: (a) a rule matching `fastagent` on an nested deploy — the packer
+  // file). The critical ones: (a) a rule matching `fastagent` on a nested deploy — the packer
   // would drop the WHOLE workspace from the context (the box boots with no agent and crash-loops);
   // (b) `.secrets`/`.env` excludes — without them the packer BAKES SECRETS INTO THE IMAGE. Both GATE
   // under --run (a full deploy must not push a broken or secret-laden image; same discipline as the

@@ -535,7 +535,7 @@ async function runDeployRailway(params: {
   longConnectionChannels: string[];
   extraSecrets: string[];
   intoLinked: boolean;
-  /** RAILWAY_DOCKERFILE_PATH for an nested workspace; undefined for flat (root Dockerfile auto-detected). */
+  /** RAILWAY_DOCKERFILE_PATH for a nested workspace; undefined for flat (root Dockerfile auto-detected). */
   dockerfilePath?: string;
 }): Promise<void> {
   const {

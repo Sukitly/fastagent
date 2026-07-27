@@ -77,7 +77,7 @@ The default directory is the current directory. `init`:
 - keeps an existing `AGENTS.md` as project context;
 - refuses a directory that already has `fastagent.config.*` (at either root) or a non-empty `./fastagent/`.
 
-`--flat` lands the workspace directly in the directory instead — use it only when the directory is ITSELF the agent (a standalone agent dir, a monorepo package). The placement is structural (the `fastagent/` directory name is the marker, never configured); to change it later, move the workspace files between the root and `./fastagent/`.
+`--flat` lands the workspace directly in the directory instead — use it only when the directory is ITSELF the agent (a standalone agent dir, a monorepo package). The placement is structural (the `fastagent/` directory name is the marker, never configured); to change it later, move the workspace files between the root and `./fastagent/`. Because that name is the marker, `--flat` into a directory named `fastagent` is refused — it would resolve as nested and serve with the parent as the workbench.
 
 Then run:
 

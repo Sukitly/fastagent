@@ -104,22 +104,25 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     );
     return;
   }
-  console.log(`workspace: ${root}`);
-  console.log(`workbench: ${workbench}`);
-  console.log(`config:   ${configPath ?? "(none)"}`);
-  console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
-  if (config.thinkingLevel) console.log(`thinking: ${config.thinkingLevel}`);
-  console.log(`context:  ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
-  console.log(`persona:  ${definition.persona ? "persona.md" : "(none)"}`);
-  console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
-  console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
-  if (tools.deferred.length > 0) console.log(`deferred: ${tools.deferred.join(", ")} (activated via search_tools)`);
-  console.log(`channels: ${channels.join(", ") || "(none)"}`);
-  console.log(`schedules: ${schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)"}`);
-  console.log(`selfSchedule: ${config.selfSchedule ? "on (mounts the wake tool when serving)" : "off"}`);
-  console.log(`state:    ${stateRoot}`);
-  console.log(`sessions: ${sessionsDir}`);
-  console.log(`auth:     ${authPath}`);
+  // One padded label writer: hand-spaced labels drifted out of alignment the moment a longer one
+  // (workspace/workbench/selfSchedule) joined the report.
+  const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
+  line("workspace", root);
+  line("workbench", workbench);
+  line("config", configPath ?? "(none)");
+  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
+  if (config.thinkingLevel) line("thinking", config.thinkingLevel);
+  line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
+  line("persona", definition.persona ? "persona.md" : "(none)");
+  line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");
+  line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
+  if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
+  line("channels", channels.join(", ") || "(none)");
+  line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");
+  line("selfSchedule", config.selfSchedule ? "on (mounts the wake tool when serving)" : "off");
+  line("state", stateRoot);
+  line("sessions", sessionsDir);
+  line("auth", authPath);
   reportToolCollisions(tools.collisions);
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);

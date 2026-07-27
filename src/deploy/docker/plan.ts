@@ -5,6 +5,7 @@
  * `--tunnel` can add an ephemeral Cloudflare Quick Tunnel service; durable ingress remains operator-owned.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { WORKSPACE_DIR } from "../../workspace.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -91,7 +92,7 @@ function composeYaml(input: DockerPlanInput): string {
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
   const context = buildContext(input.nested);
-  const dockerfile = input.nested ? "fastagent/Dockerfile" : "Dockerfile";
+  const dockerfile = input.nested ? `${WORKSPACE_DIR}/Dockerfile` : "Dockerfile";
   const tunnelService = input.tunnel
     ? `
   # Cloudflare Quick Tunnel: ephemeral URL, generated only with \`deploy docker --tunnel\`.
@@ -142,7 +143,7 @@ volumes:
 
 /** Compute local-Docker artifacts + the runbook; no Docker process is touched here. */
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
-  const composePath = input.nested ? `fastagent/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
+  const composePath = input.nested ? `${WORKSPACE_DIR}/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
   const compose = `docker compose -f ${composePath}`;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);

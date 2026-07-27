@@ -225,10 +225,13 @@ export interface ResolvedWorkspace {
 export function resolveWorkspace(dir: string): ResolvedWorkspace {
   const base = resolve(dir);
   const hasConfig = (d: string): boolean => WORKSPACE_CONFIG_NAMES.some((name) => existsSync(join(d, name)));
-  // What makes a config-less dir READ as a workspace: any of the definition's convention names. Broad
-  // on purpose — a false hit fails loudly with a two-way remedy, a miss loses authored content silently.
+  // What makes a config-less dir READ as a workspace: the definition's own convention names. Broad
+  // on purpose — a false hit fails loudly with a two-way remedy, a miss loses authored content
+  // silently. NOT `package.json`: it is the one name here that says nothing about fastagent, so an
+  // unrelated `fastagent/` (a vendored clone, a monorepo package) would hard-block every command in
+  // its parent — while a real workspace that lost its config still trips one of these five.
   const looksLikeWorkspace = (d: string): boolean =>
-    ["persona.md", "skills", "tools", "channels", "schedules", "package.json"].some((n) => existsSync(join(d, n)));
+    ["persona.md", "skills", "tools", "channels", "schedules"].some((n) => existsSync(join(d, n)));
   const ambiguity = (host: string): Error =>
     new Error(
       `${host} has a fastagent config at BOTH the directory root and ./${WORKSPACE_DIR}/ — ambiguous; keep exactly one workspace`,
@@ -336,10 +339,10 @@ export function resolveSessionsDirOverride(
 
 /**
  * The auth-file override: `--auth-path` flag > `FASTAGENT_AUTH_PATH` env > undefined (the opener then
- * falls back to {@link defaultAuthPath} under the {@link resolveStateRoot} root). Resolved to absolute
+ * falls back to {@link defaultAuthPath} under the {@link resolveSecretsDir} dir). Resolved to absolute
  * so the store and the startup report agree regardless of cwd. No implicit project↔global fallback (isolation
  * + fail-visibly; see auth.ts); to share one account across projects, point this at the global
- * `~/.fastagent/auth.json` — sharing ONE file is safe under the store's cross-process refresh lock.
+ * `~/.fastagent/.secrets/auth.json` — sharing ONE file is safe under the store's cross-process refresh lock.
  */
 export function resolveAuthPathOverride(
   flag: string | undefined,

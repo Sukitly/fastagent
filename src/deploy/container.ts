@@ -11,6 +11,7 @@
  * `/app/fastagent`) and where the Dockerfile itself lives (namespaced under `fastagent/` so it never
  * collides with the host repo's own).
  */
+import { WORKSPACE_DIR } from "../workspace.ts";
 
 export interface Artifact {
   path: string;
@@ -68,7 +69,7 @@ function aptLayer(packages?: string[]): string {
 function dockerfile(input: ContainerInput): string {
   // The workspace prefix inside the image: deps install (and the local bin lives) here. undefined =
   // flat (the workspace IS /app) — the emitted lines then carry no noisy "./." segments.
-  const ws = input.nested ? "fastagent" : undefined;
+  const ws = input.nested ? WORKSPACE_DIR : undefined;
   const layoutNote = input.nested
     ? `Nested: the whole directory is the agent's workbench; the workspace lives in fastagent/.`
     : `The directory IS the agent — no build step.`;
@@ -185,9 +186,9 @@ const DOCKERIGNORE = `**/node_modules
 export function containerArtifacts(input: ContainerInput): Artifact[] {
   if (input.nested) {
     return [
-      { path: "fastagent/Dockerfile", content: dockerfile(input) },
+      { path: `${WORKSPACE_DIR}/Dockerfile`, content: dockerfile(input) },
       { path: ".dockerignore", content: DOCKERIGNORE },
-      { path: "fastagent/Dockerfile.dockerignore", content: DOCKERIGNORE },
+      { path: `${WORKSPACE_DIR}/Dockerfile.dockerignore`, content: DOCKERIGNORE },
     ];
   }
   return [
