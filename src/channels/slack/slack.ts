@@ -184,7 +184,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   // `taskDisplay` was a published 0.15.0 option that only laid out Slack Task Cards. Silently
   // ignoring it would turn a rejected illegal value into an accepted no-op for any config TS does not
   // check (plain JS, an older scaffold copy).
-  if ("taskDisplay" in options) {
+  if ((options as unknown as Record<string, unknown>).taskDisplay !== undefined) {
     throw new Error(
       "slackChannel no longer accepts taskDisplay: tool activity streams as inline Markdown traces, " +
         "not Slack Task Cards — remove the option",

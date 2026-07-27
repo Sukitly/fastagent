@@ -111,12 +111,12 @@ describe("native Slack tool traces", () => {
       disclaimer: false,
     });
 
-    const invocation = vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "";
+    const invocation = vi.mocked(api.startStream).mock.calls[0]?.[1] ?? "";
     expect(invocation).toContain("**Bash** — `npm test &lt;!channel>");
     expect(invocation).not.toContain("<!channel>");
     expect(invocation).toContain("…"); // the shared 48-code-point argument bound
 
-    const appended = vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? "");
+    const appended = vi.mocked(api.appendStream).mock.calls.map(([, , markdown]) => markdown);
     const failure = appended.find((text) => text.includes("failed")) ?? "";
     expect(failure).toContain("**Bash** failed — `npm test"); // the operation, so repeated calls stay apart
     expect(appended.join("\n")).not.toContain("/etc/shadow");
@@ -139,8 +139,8 @@ describe("native Slack tool traces", () => {
     });
 
     const written = [
-      vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "",
-      ...vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? ""),
+      vi.mocked(api.startStream).mock.calls[0]?.[1] ?? "",
+      ...vi.mocked(api.appendStream).mock.calls.map(([, , markdown]) => markdown),
     ].join("");
     // A trace after text opens its own block, and the text resuming after it is not glued to the trace.
     expect(written).toBe("Checking.\n\n**Read** — `AGENTS.md`\n\nDone.");
@@ -160,8 +160,8 @@ describe("native Slack tool traces", () => {
     });
 
     const written = [
-      vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "",
-      ...vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? ""),
+      vi.mocked(api.startStream).mock.calls[0]?.[1] ?? "",
+      ...vi.mocked(api.appendStream).mock.calls.map(([, , markdown]) => markdown),
     ].join("");
     // Emphasis in the label is escaped, and a code span is fenced longer than any backtick run inside
     // it (padded when the value's own edges are backticks) — the literal text is never rewritten.
@@ -183,7 +183,7 @@ describe("native Slack tool traces", () => {
       disclaimer: false,
     });
 
-    expect(vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText).toContain("**Deploy** — `sk-live-secret`");
+    expect(vi.mocked(api.startStream).mock.calls[0]?.[1]).toContain("**Deploy** — `sk-live-secret`");
   });
 });
 

@@ -23,10 +23,6 @@ export interface SlackTarget {
   recipientTeamId?: string;
 }
 
-interface SlackStreamContent {
-  markdownText?: string;
-}
-
 export interface DownloadedSlackFile {
   path: string;
   name: string;
@@ -89,9 +85,9 @@ export interface SlackApi {
   updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   sendMarkdown(target: SlackTarget, markdown: string): Promise<string | undefined>;
-  startStream(target: SlackTarget, content?: SlackStreamContent): Promise<string>;
-  appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
-  stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
+  startStream(target: SlackTarget, markdown?: string): Promise<string>;
+  appendStream(channelId: string, ts: string, markdown: string): Promise<void>;
+  stopStream(channelId: string, ts: string, markdown?: string): Promise<void>;
   setThreadStatus(target: SlackTarget, status: string): Promise<void>;
   setThreadTitle(target: SlackTarget, title: string): Promise<void>;
   addReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
@@ -358,7 +354,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       return first;
     },
-    async startStream(target, content = {}) {
+    async startStream(target, markdown) {
       if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
       const channelRecipient = target.channelId.startsWith("D")
         ? {}
@@ -373,23 +369,19 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         channel: target.channelId,
         thread_ts: target.threadTs,
         ...channelRecipient,
-        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
+        ...(markdown ? { markdown_text: markdown } : {}),
       });
       if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
       return data.ts;
     },
-    async appendStream(channelId, ts, content) {
-      await call("chat.appendStream", {
-        channel: channelId,
-        ts,
-        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
-      });
+    async appendStream(channelId, ts, markdown) {
+      await call("chat.appendStream", { channel: channelId, ts, markdown_text: markdown });
     },
-    async stopStream(channelId, ts, content = {}) {
+    async stopStream(channelId, ts, markdown) {
       await call("chat.stopStream", {
         channel: channelId,
         ts,
-        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
+        ...(markdown ? { markdown_text: markdown } : {}),
       });
     },
     async setThreadStatus(target, status) {

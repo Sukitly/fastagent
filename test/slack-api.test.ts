@@ -64,8 +64,8 @@ describe("Slack Web API transport", () => {
     };
 
     await expect(api.postMarkdown(target, "**bold**")).resolves.toBe("1.0");
-    const streamTs = await api.startStream(target, { markdownText: "# Answer" });
-    await api.appendStream("C1", streamTs, { markdownText: "**Search** — `public docs`" });
+    const streamTs = await api.startStream(target, "# Answer");
+    await api.appendStream("C1", streamTs, "**Search** — `public docs`");
     await api.stopStream("C1", streamTs);
     await api.setThreadStatus(target, "is working…");
     await api.setThreadTitle(target, "A useful title");

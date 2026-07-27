@@ -314,18 +314,18 @@ async function streamNativeSlackReply(
       }
     });
   };
-  const sendContent = async (content: { markdownText?: string }): Promise<void> => {
+  const sendContent = async (markdown: string): Promise<void> => {
     if (streamTs) {
-      await api.appendStream(target.channelId, streamTs, content);
+      await api.appendStream(target.channelId, streamTs, markdown);
     } else {
-      streamTs = await api.startStream(target, content);
+      streamTs = await api.startStream(target, markdown);
     }
   };
-  const queueMarkdown = (markdownText: string): void => {
-    if (!markdownText) return;
+  const queueMarkdown = (markdown: string): void => {
+    if (!markdown) return;
     streamHasContent = true;
-    streamEndsWithBlankLine = markdownText.endsWith("\n\n");
-    enqueue(() => sendContent({ markdownText }));
+    streamEndsWithBlankLine = markdown.endsWith("\n\n");
+    enqueue(() => sendContent(markdown));
   };
   const flushText = (final = false): void => {
     if (textTimer) {
@@ -375,11 +375,11 @@ async function streamNativeSlackReply(
         return;
       }
       if (streamTs) {
-        await api.stopStream(target.channelId, streamTs, { markdownText: `\n\n${GENERIC_FAILURE}` }).catch(() => {});
+        await api.stopStream(target.channelId, streamTs, `\n\n${GENERIC_FAILURE}`).catch(() => {});
       }
       throw renderError;
     }
-    if (!streamTs) streamTs = await api.startStream(target, { markdownText: safeTerminal });
+    if (!streamTs) streamTs = await api.startStream(target, safeTerminal);
     await api.stopStream(target.channelId, streamTs);
   };
 
