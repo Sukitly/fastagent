@@ -87,7 +87,7 @@ describe("Slack reply rendering", () => {
 });
 
 describe("native Slack tool traces", () => {
-  it("shows the invoked operation and a bounded failed result as inline Markdown", async () => {
+  it("shows the bounded invoked operation and states a failure without its output", async () => {
     const api = fakeApi();
     const events = (async function* (): AsyncIterable<AgentEvent> {
       yield {
@@ -100,9 +100,7 @@ describe("native Slack tool traces", () => {
         type: "tool_ended",
         id: "tool-1",
         isError: true,
-        content: {
-          content: [{ type: "text", text: `permission denied <!here> ${"💥".repeat(300)}` }],
-        },
+        content: { content: [{ type: "text", text: "permission denied: /etc/shadow" }] },
       };
       yield { type: "text", delta: "Recovered." };
       yield { type: "completed" };
@@ -116,13 +114,12 @@ describe("native Slack tool traces", () => {
     const invocation = vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "";
     expect(invocation).toContain("**Bash** — `npm test &lt;!channel>");
     expect(invocation).not.toContain("<!channel>");
+    expect(invocation).toContain("…"); // the shared 48-code-point argument bound
 
     const appended = vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? "");
     const failure = appended.find((text) => text.includes("failed")) ?? "";
-    expect(failure).toContain("**Bash** failed — `permission denied &lt;!here>");
-    expect(failure).not.toContain("<!here>");
-    expect(failure).toContain("…");
-    expect(Array.from(failure).length).toBeLessThanOrEqual(300);
+    expect(failure).toContain("**Bash** failed");
+    expect(appended.join("\n")).not.toContain("/etc/shadow");
     expect(appended.join("\n")).toContain("Recovered.");
   });
 });

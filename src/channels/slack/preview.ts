@@ -14,7 +14,6 @@ import {
   summarizeToolArgs,
   toolLines,
 } from "../preview-kit.ts";
-import { truncateCodePointPrefix } from "../text.ts";
 import {
   type SlackApi,
   type SlackTarget,
@@ -31,9 +30,6 @@ const CLASSIC_UPDATE_INTERVAL_MS = 3_000;
 const NATIVE_APPEND_INTERVAL_MS = 750;
 const WORKING_STATUS = "is working on your request…";
 const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please try again.";
-/** Keep factual tool traces compact while leaving enough room for useful commands and paths. */
-const TOOL_TRACE_ARG_MAX = 96;
-const TOOL_TRACE_ERROR_MAX = 256;
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -62,13 +58,15 @@ function inlineCode(value: string): string {
 }
 
 function nativeToolTrace(name: string, args: Json): NativeToolTrace {
-  const operation = sanitizeSlackMarkdown(summarizeToolArgs(args, TOOL_TRACE_ARG_MAX));
+  const operation = sanitizeSlackMarkdown(summarizeToolArgs(args));
   return {
     label: sanitizeSlackMarkdown(humanizeToolName(name)),
     ...(operation ? { operation } : {}),
   };
 }
 
+/** Bold a factual label. The escape set is `\` and `*` only because `humanizeToolName` already
+ * normalizes `_`/`-`/`.` separators to spaces, so no underscore emphasis can reach here. */
 function boldText(value: string): string {
   return `**${value.replace(/[\\*]/g, "\\$&")}**`;
 }
@@ -77,34 +75,11 @@ function nativeToolInvocation(trace: NativeToolTrace): string {
   return `${boldText(trace.label)}${trace.operation ? ` — ${inlineCode(trace.operation)}` : ""}`;
 }
 
-/** Prefer pi's AgentToolResult text blocks, then common custom-tool error fields, then compact JSON. */
-function toolResultText(value: Json): string {
-  if (typeof value === "string") return value;
-  if (value === null) return "";
-  if (typeof value !== "object" || Array.isArray(value)) return JSON.stringify(value);
-
-  const blocks = value.content;
-  if (Array.isArray(blocks)) {
-    const text = blocks
-      .map((block) =>
-        block && typeof block === "object" && !Array.isArray(block) && typeof block.text === "string" ? block.text : "",
-      )
-      .filter(Boolean)
-      .join("\n");
-    if (text) return text;
-  }
-  for (const key of ["error", "message", "result"] as const) {
-    const field = value[key];
-    if (typeof field === "string" && field.trim()) return field;
-  }
-  return JSON.stringify(value);
-}
-
-/** Successful tool output stays private. A failed call gets one bounded, sanitized factual line. */
-function nativeToolFailure(content: Json, trace: NativeToolTrace): string {
-  const raw = toolResultText(content).replace(/\s+/g, " ").trim() || "Tool failed without an error message.";
-  const error = truncateCodePointPrefix(sanitizeSlackMarkdown(raw), TOOL_TRACE_ERROR_MAX);
-  return `${boldText(trace.label)} failed — ${inlineCode(error)}`;
+/** Tool OUTPUT never leaves the process, failed or not: the channel would have to guess the engine's
+ * result shape to read it, and the agent already explains a failure it recovered from in its answer.
+ * The trace states the fact only — which call failed. Operators get the detail from the logs. */
+function nativeToolFailure(trace: NativeToolTrace): string {
+  return `${boldText(trace.label)} failed`;
 }
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {
@@ -429,7 +404,7 @@ async function streamNativeSlackReply(
       } else if (event.type === "tool_ended") {
         const trace = toolTraces.get(event.id) ?? { label: "Tool" };
         toolTraces.delete(event.id);
-        if (event.isError) sendToolTrace(nativeToolFailure(event.content, trace));
+        if (event.isError) sendToolTrace(nativeToolFailure(trace));
       } else if (event.type === "completed") {
         finalized = true;
         const finalAnswer = withDisclaimer(fullAnswer, disclaimer);

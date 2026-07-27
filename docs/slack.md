@@ -219,12 +219,16 @@ usable only when Slack exposes authenticated downloadable bytes.
 3. appends standard Markdown with `chat.appendStream`;
 4. maps each `tool_started` to a compact inline Markdown trace containing the humanized tool identifier
    (`mcp__github__create_issue` → `Github: create issue`) and a bounded single-line argument summary
-   (normally the command, path, or query); an errored `tool_ended` appends one bounded failure line;
+   (normally the command, path, or query); an errored `tool_ended` appends one line naming the failed
+   call, never its output;
 5. closes the stream with `chat.stopStream`.
 
-Raw model `thinking` and successful tool output are not customer-facing. The former is represented by
-Slack's loading state; tool arguments and failed output are whitespace-collapsed, Unicode-safe truncated,
-and notification-control sanitized. Agent replies also
+Raw model `thinking` and tool output are not customer-facing. The former is represented by Slack's
+loading state; argument summaries are whitespace-collapsed, Unicode-safe truncated, and
+notification-control sanitized. A native stream cannot be retracted, so unlike every other renderer
+these traces stay in the delivered message next to the answer — including that argument summary, which
+is the tool call's first string field and may name whatever the agent passed there. Choose
+`rendering: "classic"` for a message that settles into the answer alone. Agent replies also
 neutralize Slack notification controls such as `<!channel>`; deliberate outbound mentions belong in the
 explicit `slack-send` tool. Successful replies omit repetitive disclaimers by default; configure an
 `aiDisclaimer` string only when workspace policy requires a per-message footer. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in

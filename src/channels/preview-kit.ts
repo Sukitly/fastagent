@@ -218,23 +218,22 @@ const TOOL_NAME_MAX = 80;
 
 /** One-line, truncated at code-point boundaries: collapse whitespace so a multi-line command/arg
  *  stays on one line, and never tear a surrogate pair mid-emoji. */
-function clip(s: string, maxPoints: number): string {
+function clip(s: string): string {
   const one = s.replace(/\s+/g, " ").trim();
-  return truncateCodePointPrefix(one, maxPoints);
+  return truncateCodePointPrefix(one, TOOL_ARG_MAX);
 }
 
 /**
  * A compact, human-readable preview of a tool call's args so the live view reads `🔧 read AGENTS.md`
  * rather than just `🔧 read`. Generic (a channel knows no tool schemas): show the salient value — the
  * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
- * Messaging previews use the compact default; a transport with more room may pass a larger bound.
  */
-export function summarizeToolArgs(args: Json, maxPoints = TOOL_ARG_MAX): string {
-  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args), maxPoints);
+export function summarizeToolArgs(args: Json): string {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
   const values = Object.values(args);
   const primary = values.find((v) => typeof v === "string" || typeof v === "number");
-  if (primary !== undefined) return clip(String(primary), maxPoints);
-  return values.length > 0 ? clip(JSON.stringify(args), maxPoints) : "";
+  if (primary !== undefined) return clip(String(primary));
+  return values.length > 0 ? clip(JSON.stringify(args)) : "";
 }
 
 /**
