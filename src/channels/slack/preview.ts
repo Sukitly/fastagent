@@ -65,21 +65,24 @@ function nativeToolTrace(name: string, args: Json): NativeToolTrace {
   };
 }
 
-/** Bold a factual label. The escape set is `\` and `*` only because `humanizeToolName` already
- * normalizes `_`/`-`/`.` separators to spaces, so no underscore emphasis can reach here. */
+/** Bold a factual label. `humanizeToolName` normalizes `_` away for every ordinary identifier, but it
+ * falls back to the raw name when normalization empties it (a tool literally named `_`), so emphasis
+ * characters are escaped rather than assumed absent. */
 function boldText(value: string): string {
-  return `**${value.replace(/[\\*]/g, "\\$&")}**`;
+  return `**${value.replace(/[\\*_]/g, "\\$&")}**`;
 }
 
-function nativeToolInvocation(trace: NativeToolTrace): string {
-  return `${boldText(trace.label)}${trace.operation ? ` — ${inlineCode(trace.operation)}` : ""}`;
-}
-
-/** Tool OUTPUT never leaves the process, failed or not: the channel would have to guess the engine's
+/**
+ * One trace line: the tool, what it was called on, and — on the failure line — that it failed.
+ *
+ * Tool OUTPUT never leaves the process, failed or not: the channel would have to guess the engine's
  * result shape to read it, and the agent already explains a failure it recovered from in its answer.
- * The trace states the fact only — which call failed. Operators get the detail from the logs. */
-function nativeToolFailure(trace: NativeToolTrace): string {
-  return `${boldText(trace.label)} failed`;
+ * The failure line therefore repeats the operation instead of adding one: it states WHICH call failed
+ * (six `Bash` calls in a turn are otherwise indistinguishable) without exposing anything the start
+ * line did not already show. Operators get the detail from the logs.
+ */
+function nativeToolLine(trace: NativeToolTrace, outcome = ""): string {
+  return `${boldText(trace.label)}${outcome}${trace.operation ? ` — ${inlineCode(trace.operation)}` : ""}`;
 }
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {
@@ -352,6 +355,10 @@ async function streamNativeSlackReply(
       flushText();
     }, delay);
   };
+  // ponytail: a trace appended while the answer has an unclosed ``` fence lands inside it, and the
+  // trace's own backticks can close it early. Tracking fence parity across chunk boundaries (the job
+  // chunkSlackMarkdown does for the classic renderer) is the fix if a model is ever seen calling a
+  // tool mid-fence; the trace's blank-line framing keeps every other case well-formed.
   const sendToolTrace = (line: string): void => {
     flushText();
     const separator = streamHasContent && !streamEndsWithBlankLine ? "\n\n" : "";
@@ -400,11 +407,11 @@ async function streamNativeSlackReply(
       } else if (event.type === "tool_started") {
         const trace = nativeToolTrace(event.name, event.args);
         toolTraces.set(event.id, trace);
-        sendToolTrace(nativeToolInvocation(trace));
+        sendToolTrace(nativeToolLine(trace));
       } else if (event.type === "tool_ended") {
         const trace = toolTraces.get(event.id) ?? { label: "Tool" };
         toolTraces.delete(event.id);
-        if (event.isError) sendToolTrace(nativeToolFailure(trace));
+        if (event.isError) sendToolTrace(nativeToolLine(trace, " failed"));
       } else if (event.type === "completed") {
         finalized = true;
         const finalAnswer = withDisclaimer(fullAnswer, disclaimer);

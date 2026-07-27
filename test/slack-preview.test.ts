@@ -118,9 +118,49 @@ describe("native Slack tool traces", () => {
 
     const appended = vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? "");
     const failure = appended.find((text) => text.includes("failed")) ?? "";
-    expect(failure).toContain("**Bash** failed");
+    expect(failure).toContain("**Bash** failed — `npm test"); // the operation, so repeated calls stay apart
     expect(appended.join("\n")).not.toContain("/etc/shadow");
     expect(appended.join("\n")).toContain("Recovered.");
+  });
+
+  it("separates a trace from the text around it without splitting the answer", async () => {
+    const api = fakeApi();
+    const events = (async function* (): AsyncIterable<AgentEvent> {
+      yield { type: "text", delta: "Checking." };
+      yield { type: "tool_started", id: "tool-1", name: "read", args: { path: "AGENTS.md" } };
+      yield { type: "tool_ended", id: "tool-1", isError: false, content: "ok" };
+      yield { type: "text", delta: "Done." };
+      yield { type: "completed" };
+    })();
+
+    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+      rendering: "native",
+      disclaimer: false,
+    });
+
+    const written = [
+      vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "",
+      ...vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? ""),
+    ].join("");
+    // A trace after text opens its own block, and the text resuming after it is not glued to the trace.
+    expect(written).toBe("Checking.\n\n**Read** — `AGENTS.md`\n\nDone.");
+  });
+
+  it("shows the first primitive argument whatever it holds — the disclosed boundary, not a filter", async () => {
+    const api = fakeApi();
+    // A channel knows no tool schemas, so the summary cannot tell a query from a credential. This is
+    // the boundary docs/slack.md discloses; changing WHICH field is picked has to break a test.
+    const events = (async function* (): AsyncIterable<AgentEvent> {
+      yield { type: "tool_started", id: "tool-1", name: "deploy", args: { token: "sk-live-secret", env: "prod" } };
+      yield { type: "completed" };
+    })();
+
+    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+      rendering: "native",
+      disclaimer: false,
+    });
+
+    expect(vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText).toContain("**Deploy** — `sk-live-secret`");
   });
 });
 

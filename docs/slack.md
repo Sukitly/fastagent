@@ -227,8 +227,9 @@ Raw model `thinking` and tool output are not customer-facing. The former is repr
 loading state; argument summaries are whitespace-collapsed, Unicode-safe truncated, and
 notification-control sanitized. A native stream cannot be retracted, so unlike every other renderer
 these traces stay in the delivered message next to the answer — including that argument summary, which
-is the tool call's first string field and may name whatever the agent passed there. Choose
-`rendering: "classic"` for a message that settles into the answer alone. Agent replies also
+is the tool call's first string field and may name whatever the agent passed there. There is no
+answer-only native stream: `rendering: "classic"` does settle into the answer alone, but it also gives
+up native streaming — process visibility and transport are one choice here, not two. Agent replies also
 neutralize Slack notification controls such as `<!channel>`; deliberate outbound mentions belong in the
 explicit `slack-send` tool. Successful replies omit repetitive disclaimers by default; configure an
 `aiDisclaimer` string only when workspace policy requires a per-message footer. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in
