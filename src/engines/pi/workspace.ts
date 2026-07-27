@@ -8,9 +8,7 @@
  * differ only at the CLI — dev watches and uses the in-tree sessions default, start runs without
  * watch and can point sessions at a mounted volume.
  */
-import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Agent } from "../../agent.ts";
 import {
@@ -31,14 +29,7 @@ import { type PiBoundaryWiring, createPiSessionControl } from "./session-control
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import {
-  type LoadedDefinition,
-  ensureSecretsDirSelfIgnored,
-  ensureStateRootSelfIgnored,
-  isUnderDir,
-} from "./definition.ts";
-import { GLOBAL_HOME_DIR } from "../../workspace.ts";
-import { log } from "../../log.ts";
+import { type LoadedDefinition, ensureSecretsDirSelfIgnored, ensureStateRootSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
@@ -132,18 +123,6 @@ export async function resolveWorkspaceAssembly(
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
   // in one knob — a container points it at its volume); the finer overrides below still win.
   const stateRoot = resolveStateRoot(root);
-  // A pre-0.16 workspace kept machine state at `<root>/.fastagent/`. Nothing reads it anymore, and the
-  // symptom (conversations start empty, a channel replays deliveries its dedup state no longer knows)
-  // never points at the directory causing it — so say it BEFORE the ensure below creates the new root
-  // (its existence is what marks the workspace as already migrated / already started). Skipped when the state
-  // root lives INSIDE that path: `$HOME` as the workspace root puts machinery under `~/.fastagent/`.
-  const legacyState = join(root, GLOBAL_HOME_DIR);
-  if (!isUnderDir(stateRoot, legacyState) && !existsSync(stateRoot) && existsSync(legacyState)) {
-    log.warn(
-      `[fastagent] ${legacyState} is not read — machine state now lives at ${stateRoot} (sessions, channel, ` +
-        `schedule) and credentials at <root>/.secrets; move its contents over, or start fresh and delete it`,
-    );
-  }
   // The credentials file: project-level by default (under `<root>/.secrets`); only resolved here, never
   // created (a missing file reads as not-configured — `fastagent login` creates it).
   const authPath = resolveAuthPath(root, options.authPath);

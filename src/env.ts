@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { log } from "./log.ts";
 import { resolveSecretsDir } from "./workspace.ts";
 
 /**
@@ -65,20 +64,11 @@ export function envExamplePath(root: string): string {
  * MISSING file as normal (no .env) — the workspace-facing entry every command + the tunnel use. `root`
  * is the workspace ROOT (resolveWorkspace().root). Only ENOENT is swallowed; any other read error (a
  * corrupt/unreadable file) propagates, so a real problem surfaces instead of silently skipping.
- *
- * The one MISSING-file case that still speaks up: a pre-0.16 workspace kept its `.env` at the root.
- * That file is no longer read, and the failure it causes (a missing key, a missing model) surfaces
- * nowhere near it — so when the old location has a file and the new one does not, name both paths.
  */
 export function loadDotEnv(root: string): void {
-  const path = dotEnvPath(root);
   try {
-    loadEnvFile(path);
+    loadEnvFile(dotEnvPath(root));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const legacy = join(root, ".env");
-    if (legacy !== path && existsSync(legacy)) {
-      log.warn(`[fastagent] ${legacy} is not read — the workspace .env lives at ${path}; move it there`);
-    }
   }
 }
