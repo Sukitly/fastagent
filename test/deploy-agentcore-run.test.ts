@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
+import { ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
@@ -78,6 +79,10 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
+      // The redeploy-immediacy step: a live ingress session would keep serving the OLD image.
+      "bedrock-agentcore stop-runtime-session " +
+        "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
+        `--runtime-session-id ${ingressSessionId("my-agent")}`,
     ]);
     expect(dockerCmds()).toEqual([
       "version",
@@ -191,6 +196,25 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     );
     const out = await run(plan({ channels: ["telegram"] }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
+  });
+
+  it("a failed ingress-session stop is advisory — never a gate (first deploy has no session)", async () => {
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session" ? { code: 254 } : happyAws(a),
+    );
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true });
+  });
+
+  it("a pure-invoke deployment (no ForwarderUrl output) stops no session", async () => {
+    const { cli: aws, cmds } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
+        ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+        : happyAws(a),
+    );
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true, runtimeArn: "arn:x" });
+    expect(cmds().some((c) => c.includes("stop-runtime-session"))).toBe(false);
   });
 
   it("a failed telegram registration gates AFTER the deploy (the app itself deployed)", async () => {

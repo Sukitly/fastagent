@@ -565,6 +565,18 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn <RuntimeArn> \\`,
     `  --runtime-session-id "my-conversation-000000000000000000" \\`,
     `  --payload '{"kind":"invoke","session":"cli","text":"hello"}' --cli-binary-format raw-in-base64-out /dev/stdout`,
+  );
+  if (needsForwarder) {
+    runbook.push(
+      ``,
+      `# After a REDEPLOY, stop the ingress session so the new image serves immediately — a live session`,
+      `# keeps its old compute (and the OLD image) until 15 min idle / the 8 h compute ceiling`,
+      `# (\`--run\` does this automatically):`,
+      `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
+      `  --runtime-session-id "${ingressSessionId(name)}"`,
+    );
+  }
+  runbook.push(
     ``,
     `# Redeploy = step 2 with a NEW tag + step 3 with the new ImageUri. State (${MOUNT}: auth, sessions,`,
     `# channel state) persists across redeploys and compute recycling — but it is tied to this Runtime`,

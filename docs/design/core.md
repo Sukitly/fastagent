@@ -462,9 +462,12 @@ into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn. All ing
 fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
 until the runtime is deleted — with state on the platform's SessionStorage mount (`/mnt/state`; tied to
 the runtime resource — the EFS/VPC mount is the named upgrade path when state must outlive it).
-Structural limits, gated/warned at deploy time: long-connection channels cannot run (the connection IS
-the ingress; nothing wakes a reclaimed session), and wake-ups are degraded (no resident poller — they
-fire only while a session is awake).
+A live session keeps its
+old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
+successful deploy, making the new image serve immediately (an in-flight turn is cut; channels with
+replay re-run it). Structural limits, gated/warned at deploy time: long-connection channels cannot run
+(the connection IS the ingress; nothing wakes a reclaimed session), and wake-ups are degraded (no
+resident poller — they fire only while a session is awake).
 
 ## 10. Current boundaries
 

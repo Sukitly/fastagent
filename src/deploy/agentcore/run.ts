@@ -18,7 +18,7 @@ import type { RegistrationOutcome } from "../../channels/registration.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { registrationGate } from "../registration-gate.ts";
 import type { CliRunner } from "../runner.ts";
-import { AUTH_SEED_CHUNK_SIZE, AUTH_SEED_MAX_CHUNKS, cfnParamName } from "./plan.ts";
+import { AUTH_SEED_CHUNK_SIZE, AUTH_SEED_MAX_CHUNKS, cfnParamName, ingressSessionId } from "./plan.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -247,6 +247,35 @@ export async function deployAgentcoreRun(
   const runtimeArn = outputs.RuntimeArn;
   if (!runtimeArn) return gate("stack has no RuntimeArn output — was the template edited? Regenerate with --force");
   const url = outputs.ForwarderUrl?.replace(/\/$/, ""); // registrars append /<path>; no double slash
+
+  // 8b. Restart the ingress session so the new image serves IMMEDIATELY. A live session keeps its
+  //     old compute until idle timeout (15 min) or max compute lifetime (8 h) — without this, a
+  //     redeploy "succeeds" while an actively-chatting session keeps answering from the PREVIOUS
+  //     image (the exact silent trap the first real deploy hit). Failure is advisory, never a gate:
+  //     on a first deploy the session does not exist yet, and the stop is an immediacy optimization
+  //     — the platform's reclaim gets there eventually. An in-flight turn on the old compute is cut;
+  //     channels with replay (telegram) re-run it on the new compute. Only when a forwarder exists
+  //     (the ingress session is the forwarder's session; pure-invoke deployments have none).
+  if (url) {
+    log("stopping the ingress session so the new image serves immediately…");
+    const stopped = await aws(
+      [
+        "bedrock-agentcore",
+        "stop-runtime-session",
+        "--agent-runtime-arn",
+        runtimeArn,
+        "--runtime-session-id",
+        ingressSessionId(plan.name),
+      ],
+      { capture: true },
+    );
+    if (stopped.code !== 0) {
+      log(
+        "note: no ingress session to stop (first deploy, or already reclaimed) — had one been active, " +
+          "it would have kept serving the previous image until reclaimed",
+      );
+    }
+  }
 
   // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the
   //    forwarder's Function URL. Gate policy is the shared registration-gate kernel.

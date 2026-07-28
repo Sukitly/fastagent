@@ -100,6 +100,7 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(plan.untranslatableSchedules).toEqual([]);
+    expect(plan.runbook.join("\n")).not.toContain("stop-runtime-session"); // no forwarder → no ingress session
   });
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
@@ -121,6 +122,8 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("TelegramBotToken:");
     expect(template).toContain("TELEGRAM_BOT_TOKEN: !Ref TelegramBotToken");
     expect(plan.runbook.join("\n")).toContain("setWebhook");
+    // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
+    expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
     // The forwarder artifact and the template's inline ZipFile come from the ONE source.
     const forwarder = plan.artifacts.find((a) => a.path === "lambda/forwarder.js")!;
     expect(forwarder.content).toBe(forwarderSource());
