@@ -74,6 +74,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "sts get-caller-identity --output json",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       "ecr get-login-password",
+      "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
@@ -147,6 +148,35 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(absent.cmds()).toContain("ecr create-repository --repository-name fastagent/my-agent");
   });
 
+  it("a ROLLBACK_COMPLETE stack (failed first create) is deleted + awaited before re-creating", async () => {
+    const { cli: aws, cmds } = fakeCli((a) => {
+      if (a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")) {
+        return { stdout: "ROLLBACK_COMPLETE\n" };
+      }
+      return happyAws(a);
+    });
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true });
+    expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
+    expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
+  });
+
+  it("gates an auth seed beyond the chunk ceiling and any other >2048-char secret", async () => {
+    const tooBigSeed = await run(
+      plan({ secrets: { FASTAGENT_AUTH_SEED: "x".repeat(8001) } }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+    );
+    expect(tooBigSeed).toMatchObject({ ok: false, gate: expect.stringContaining("auth.json is too large") });
+
+    const tooBigSecret = await run(
+      plan({ secrets: { SOME_BLOB: "x".repeat(2049) } }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+    );
+    expect(tooBigSecret).toMatchObject({ ok: false, gate: expect.stringContaining("SOME_BLOB") });
+  });
+
   it("a failed cfn deploy gates with the stack-events pointer", async () => {
     const { cli: aws } = fakeCli((a) => (a[0] === "cloudformation" && a[1] === "deploy" ? { code: 1 } : happyAws(a)));
     const out = await run(plan(), aws, fakeCli().cli);
@@ -183,5 +213,17 @@ describe("deploy/agentcore/run: helpers", () => {
     expect(paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64" })).toBe(
       `${JSON.stringify(["ImageUri=img:1", "OpenaiApiKey=sk", "FastagentAuthSeed=b64"])}\n`,
     );
+  });
+
+  it("paramsFileContent chunks a long auth seed across FastagentAuthSeed(2…), reassemblable in order", () => {
+    const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756); // a real OAuth-size seed (2756+)
+    const params = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed })) as string[];
+    expect(params).toEqual([
+      "ImageUri=img:1",
+      `FastagentAuthSeed=${"a".repeat(2000)}`,
+      `FastagentAuthSeed2=${"b".repeat(2000)}`,
+      `FastagentAuthSeed3=${"c".repeat(756)}`,
+    ]);
+    for (const p of params) expect(p.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
   });
 });

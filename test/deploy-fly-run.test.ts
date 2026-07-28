@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type FlyRunPlan, authSeedBytes, deployFlyRun } from "../src/deploy/fly/run.ts";
+import { type FlyRunPlan, authSeedBytes, collectAuthSeed, deployFlyRun } from "../src/deploy/fly/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { assembleSecrets } from "../src/deploy/secrets.ts";
@@ -403,5 +403,16 @@ describe("deploy/fly/run: authSeedBytes (the start-side seed guard)", () => {
     expect(authSeedBytes(undefined, false)).toBeUndefined(); // no seed → no-op
     expect(authSeedBytes(Buffer.from("hi").toString("base64"), true)).toBeUndefined(); // file present → never clobber
     expect(authSeedBytes(Buffer.from("hi").toString("base64"), false)?.toString()).toBe("hi"); // absent → materialize
+  });
+
+  it("collectAuthSeed reassembles a chunked seed in order and stops at the first gap", () => {
+    expect(collectAuthSeed({})).toBeUndefined();
+    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "abc" })).toBe("abc");
+    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "a", FASTAGENT_AUTH_SEED_2: "b", FASTAGENT_AUTH_SEED_3: "c" })).toBe(
+      "abc",
+    );
+    // A gap ends collection (the writer fills contiguously); an empty continuation reads as absent.
+    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "a", FASTAGENT_AUTH_SEED_3: "c" })).toBe("a");
+    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "a", FASTAGENT_AUTH_SEED_2: "" })).toBe("a");
   });
 });

@@ -31,6 +31,25 @@ export function authSeedBytes(seed: string | undefined, fileExists: boolean): Bu
   return !seed || fileExists ? undefined : Buffer.from(seed, "base64");
 }
 
+/**
+ * Collect the (possibly CHUNKED) auth seed from the environment: `FASTAGENT_AUTH_SEED` plus numbered
+ * continuations (`_2`, `_3`, …) concatenated in order. Hosts whose env values carry a small max
+ * length (AgentCore: 2048 chars — a real OAuth auth.json's base64 exceeds it) split the seed across
+ * them at deploy time; single-var hosts (Fly/Railway) never set a continuation and are unchanged.
+ * Collection stops at the first absent/empty continuation — the writer fills them contiguously.
+ */
+export function collectAuthSeed(env: NodeJS.ProcessEnv): string | undefined {
+  const first = env.FASTAGENT_AUTH_SEED;
+  if (!first) return undefined;
+  let seed = first;
+  for (let i = 2; ; i++) {
+    const part = env[`FASTAGENT_AUTH_SEED_${i}`];
+    if (!part) break;
+    seed += part;
+  }
+  return seed;
+}
+
 export interface FlyRunPlan {
   appName: string;
   region: string;

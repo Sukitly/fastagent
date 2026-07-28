@@ -4,7 +4,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { authSeedBytes } from "../../deploy/fly/run.ts";
+import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
@@ -136,7 +136,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
  * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
  */
 async function maybeSeedAuth(authPath: string): Promise<void> {
-  const bytes = authSeedBytes(process.env.FASTAGENT_AUTH_SEED, await exists(authPath));
+  // collectAuthSeed: the seed may arrive CHUNKED (FASTAGENT_AUTH_SEED + _2…) on hosts with a small
+  // env-value max length (AgentCore); single-var hosts are unchanged.
+  const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
   await mkdir(dirname(authPath), { recursive: true });
   await writeFile(authPath, bytes);

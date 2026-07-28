@@ -18,7 +18,7 @@ import type { RegistrationOutcome } from "../../channels/registration.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { registrationGate } from "../registration-gate.ts";
 import type { CliRunner } from "../runner.ts";
-import { cfnParamName } from "./plan.ts";
+import { AUTH_SEED_CHUNK_SIZE, AUTH_SEED_MAX_CHUNKS, cfnParamName } from "./plan.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -58,9 +58,21 @@ export function parseStackOutputs(stdout: string): Record<string, string> {
   }
 }
 
-/** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
+/** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. The auth seed
+ *  is CHUNKED across FastagentAuthSeed(2…) — AgentCore env values cap at 2048 chars and a real OAuth
+ *  auth.json's base64 exceeds it; `start` reassembles (collectAuthSeed). Other values pass through. */
 export function paramsFileContent(imageUri: string, secrets: Record<string, string>): string {
-  const params = [`ImageUri=${imageUri}`, ...Object.entries(secrets).map(([k, v]) => `${cfnParamName(k)}=${v}`)];
+  const params = [`ImageUri=${imageUri}`];
+  for (const [k, v] of Object.entries(secrets)) {
+    if (k !== "FASTAGENT_AUTH_SEED") {
+      params.push(`${cfnParamName(k)}=${v}`);
+      continue;
+    }
+    for (let i = 0; i * AUTH_SEED_CHUNK_SIZE < v.length; i++) {
+      const param = i === 0 ? "FastagentAuthSeed" : `FastagentAuthSeed${i + 1}`;
+      params.push(`${param}=${v.slice(i * AUTH_SEED_CHUNK_SIZE, (i + 1) * AUTH_SEED_CHUNK_SIZE)}`);
+    }
+  }
   return `${JSON.stringify(params)}\n`;
 }
 
@@ -126,6 +138,21 @@ export async function deployAgentcoreRun(
       `no local value for: ${plan.missingSecrets.join(", ")} — set them in .env (or the environment) and re-run`,
     );
   }
+  // 3b. AgentCore env values cap at 2048 chars. The auth seed is chunked (paramsFileContent) up to
+  //     its ceiling; any OTHER oversized value has no chunk lane — gate it instead of a cryptic
+  //     CloudFormation "maxLength" failure mid-deploy.
+  const seed = plan.secrets.FASTAGENT_AUTH_SEED;
+  if (seed && seed.length > AUTH_SEED_CHUNK_SIZE * AUTH_SEED_MAX_CHUNKS) {
+    return gate(
+      `your auth.json is too large to carry (${seed.length} chars base64 > ${AUTH_SEED_CHUNK_SIZE * AUTH_SEED_MAX_CHUNKS}) — ` +
+        `slim it (keep only the model's credential), or set a provider API key in .env instead`,
+    );
+  }
+  for (const [k, v] of Object.entries(plan.secrets)) {
+    if (k !== "FASTAGENT_AUTH_SEED" && v.length > 2048) {
+      return gate(`secret ${k} is ${v.length} chars — AgentCore environment values cap at 2048; shorten it`);
+    }
+  }
 
   // 4. ECR repository — check-then-act. A FAILED describe that isn't "not found" would misreport the
   //    create, but ECR's not-found also exits non-zero — so try describe, and on failure attempt the
@@ -162,6 +189,32 @@ export async function deployAgentcoreRun(
 
   // 7. Deploy the stack. Secret values ride the temp params file (file://), never argv.
   //    --no-fail-on-empty-changeset: a re-run whose only change already applied must not gate.
+  //    Self-heal the one un-resumable state first: a FAILED first create leaves the stack in
+  //    ROLLBACK_COMPLETE, which CloudFormation refuses to update — without this, "fix and re-run"
+  //    (our own gate advice) would dead-end on a different error. Nothing real is lost by deleting:
+  //    a ROLLBACK_COMPLETE stack holds no live resources.
+  const status = await aws(
+    [
+      "cloudformation",
+      "describe-stacks",
+      "--stack-name",
+      stack,
+      "--query",
+      "Stacks[0].StackStatus",
+      "--output",
+      "text",
+    ],
+    { capture: true },
+  );
+  if (status.code === 0 && status.stdout.trim() === "ROLLBACK_COMPLETE") {
+    log(`stack ${stack} is ROLLBACK_COMPLETE (a failed first create) — deleting it before re-creating…`);
+    if ((await aws(["cloudformation", "delete-stack", "--stack-name", stack])).code !== 0) {
+      return gate("`aws cloudformation delete-stack` failed — see the output above");
+    }
+    if ((await aws(["cloudformation", "wait", "stack-delete-complete", "--stack-name", stack])).code !== 0) {
+      return gate("waiting for the stack delete failed — see the output above; re-run once it is gone");
+    }
+  }
   log(`deploying stack ${stack}…`);
   const paramsPath = await writeParamsFile(paramsFileContent(image, plan.secrets));
   const deployed = await aws([

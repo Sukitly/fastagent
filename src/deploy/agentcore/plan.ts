@@ -66,6 +66,10 @@ export interface AgentcorePlan {
 
 /** SessionStorage mount = FASTAGENT_STATE_DIR (AgentCore requires exactly `/mnt/<one-level>`). */
 export const MOUNT = "/mnt/state";
+/** AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so the seed is
+ *  CHUNKED across FASTAGENT_AUTH_SEED + _2… (collectAuthSeed reassembles at boot). 2000 keeps margin. */
+export const AUTH_SEED_CHUNK_SIZE = 2000;
+export const AUTH_SEED_MAX_CHUNKS = 4;
 /** The generated template's filename (namespaced under the kit in the agentDir layout). */
 export const TEMPLATE_FILE = "agentcore.template.yaml";
 
@@ -212,18 +216,26 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     `  ImageUri:`,
     `    Type: String`,
     `    Description: ECR image URI (linux/arm64) — <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`,
-    `  FastagentAuthSeed:`,
-    `    Type: String`,
-    `    Default: ""`,
-    `    NoEcho: true`,
-    `    Description: base64 auth.json carried by --run (OAuth/stored model credential); empty = unused`,
   ];
   const envLines: string[] = [
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
     `        FASTAGENT_STATE_DIR: ${MOUNT}`,
-    `        FASTAGENT_AUTH_SEED: !Ref FastagentAuthSeed`,
   ];
+  // The auth seed is chunked (env values max 2048 chars — see AUTH_SEED_CHUNK_SIZE): N parameters,
+  // each riding its own env var; `start` reassembles them (collectAuthSeed). Empty defaults = unused.
+  for (let i = 1; i <= AUTH_SEED_MAX_CHUNKS; i++) {
+    const param = i === 1 ? "FastagentAuthSeed" : `FastagentAuthSeed${i}`;
+    const envName = i === 1 ? "FASTAGENT_AUTH_SEED" : `FASTAGENT_AUTH_SEED_${i}`;
+    params.push(
+      `  ${param}:`,
+      `    Type: String`,
+      `    Default: ""`,
+      `    NoEcho: true`,
+      `    Description: base64 auth.json carried by --run, chunk ${i}/${AUTH_SEED_MAX_CHUNKS} (env values cap at 2048 chars); empty = unused`,
+    );
+    envLines.push(`        ${envName}: !Ref ${param}`);
+  }
   for (const s of secrets) {
     const p = cfnParamName(s.name);
     params.push(`  ${p}:`, `    Type: String`);
