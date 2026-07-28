@@ -22,6 +22,7 @@
  * wasted wake-up of the box, traded for never needing list/delete choreography.
  */
 import { readFileSync } from "node:fs";
+import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { scheduleFile, writeScheduleFile } from "./state.ts";
 import type { Wakeup } from "./wakeups.ts";
@@ -65,9 +66,22 @@ export function readWakeAlarmUrl(stateRoot: string): string | undefined {
   }
 }
 
-/** Pending wake-ups → the desired alarm set. */
-export function toAlarms(pending: Wakeup[]): WakeAlarm[] {
-  return pending.map((w) => ({ id: w.id, at: w.fireAt }));
+/** How many times one alarm sync is retried before giving up (each store mutation and every boot
+ *  restart the cycle, and the pending store is the durable desired state — so "give up" means "until
+ *  the next mirror", never "lost"). */
+export const MAX_SYNC_ATTEMPTS = 5;
+const RETRY_BASE_MS = 2_000;
+const SYNC_TIMEOUT_MS = 10_000;
+/** Alarms due within this margin are NOT mirrored: the box is awake handling them right now (that is
+ *  how their fireAt got written/claimed), and a past `at()` would only fail at the Scheduler API —
+ *  filtering them client-side keeps every forwarder failure a REAL one worth retrying. */
+const DUE_MARGIN_MS = 5_000;
+
+/** Pending wake-ups → the desired alarm set, minus already-due entries (see {@link DUE_MARGIN_MS}). */
+export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
+  return pending
+    .filter((w) => Date.parse(w.fireAt) > now.getTime() + DUE_MARGIN_MS)
+    .map((w) => ({ id: w.id, at: w.fireAt }));
 }
 
 /**
@@ -79,8 +93,47 @@ export function toAlarms(pending: Wakeup[]): WakeAlarm[] {
 export function createWakeAlarmSink(options: {
   secret: string;
   fetchImpl?: typeof fetch;
+  /** Injectable clock (tests); defaults to the wall clock. */
+  now?: () => Date;
+  /** Injectable retry pause (tests); defaults to exponential-ish backoff off RETRY_BASE_MS. */
+  delay?: (ms: number) => Promise<void>;
 }): (stateRoot: string, pending: Wakeup[]) => void {
-  const { secret, fetchImpl = fetch } = options;
+  const { secret, fetchImpl = fetch, now = () => new Date() } = options;
+  const delay = options.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  // Supersession token: a newer mutation's sync REPLACES an older one still retrying — without it,
+  // an old in-flight set could win the race and mirror stale state.
+  let latest: symbol | undefined;
+
+  async function sync(url: string, body: WakeAlarmRequest, token: symbol): Promise<void> {
+    // Counted as in-flight work: the retry loop is exactly the window where the box must not be
+    // reclaimed — idle away mid-retry and a pending wake has no alarm until the next boot.
+    const workDone = beginWork();
+    try {
+      for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
+        if (latest !== token) return; // superseded by a newer set — that sync owns correctness now
+        try {
+          const res = await fetchImpl(`${url.replace(/\/$/, "")}${WAKE_ALARM_PATH}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+          });
+          if (res.ok) return;
+          log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: HTTP ${res.status}`);
+        } catch (e) {
+          log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: ${String(e)}`);
+        }
+        await delay(RETRY_BASE_MS * attempt);
+      }
+      log.error(
+        `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
+          `external alarm until the next store change or boot re-mirrors them`,
+      );
+    } finally {
+      workDone();
+    }
+  }
+
   return (stateRoot, pending) => {
     const url = readWakeAlarmUrl(stateRoot);
     if (!url) {
@@ -89,17 +142,11 @@ export function createWakeAlarmSink(options: {
       log.warn("[schedule] wake alarm skipped — forwarder URL not seen yet (it arrives with the first envelope)");
       return;
     }
-    const body: WakeAlarmRequest = { secret, alarms: toAlarms(pending) };
-    void fetchImpl(`${url.replace(/\/$/, "")}${WAKE_ALARM_PATH}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(
-      (res) => {
-        if (!res.ok) log.error(`[schedule] wake alarm sync failed: HTTP ${res.status}`);
-      },
-      (e) => log.error(`[schedule] wake alarm sync failed: ${String(e)}`),
-    );
+    const alarms = toAlarms(pending, now());
+    if (alarms.length === 0) return; // nothing future to mirror (deletion is lazy by design)
+    const token = Symbol("wake-alarm-sync");
+    latest = token;
+    void sync(url, { secret, alarms }, token);
   };
 }
 

@@ -7,9 +7,11 @@ import { spawn } from "node:child_process";
 
 interface RunResult {
   code: number;
-  /** Captured stdout (for `--json` queries); empty when the command streamed to the terminal. The CLI's
-   *  stderr is always inherited straight to the terminal, so it is not a field here. */
+  /** Captured stdout (for `--json` queries); empty when the command streamed to the terminal. */
   stdout: string;
+  /** Captured stderr — ONLY when `captureStderr` was set (a caller that must CLASSIFY a failure, e.g.
+   *  "not found" vs "denied"); otherwise undefined and stderr streams to the terminal as always. */
+  stderr?: string;
 }
 
 /** Run `bin args`: `capture` collects stdout (for `--json` queries), else the command streams to the
@@ -18,7 +20,7 @@ interface RunResult {
  *  values in argv or mutating the long-lived CLI process. */
 export type CliRunner = (
   args: string[],
-  opts?: { capture?: boolean; input?: string; env?: NodeJS.ProcessEnv },
+  opts?: { capture?: boolean; captureStderr?: boolean; input?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<RunResult>;
 
 /**
@@ -32,12 +34,18 @@ export function spawnRunner(bin: string, cwd: string): CliRunner {
       const child = spawn(bin, args, {
         cwd,
         env: opts?.env ? { ...process.env, ...opts.env } : process.env,
-        stdio: [opts?.input ? "pipe" : "inherit", opts?.capture ? "pipe" : "inherit", "inherit"],
+        stdio: [
+          opts?.input ? "pipe" : "inherit",
+          opts?.capture ? "pipe" : "inherit",
+          opts?.captureStderr ? "pipe" : "inherit",
+        ],
       });
       let out = "";
+      let err = "";
       child.stdout?.on("data", (d) => (out += String(d)));
+      child.stderr?.on("data", (d) => (err += String(d)));
       if (opts?.input) child.stdin?.end(opts.input);
-      child.on("close", (code) => res({ code: code ?? 1, stdout: out }));
-      child.on("error", () => res({ code: 127, stdout: "" })); // ENOENT: bin not on PATH
+      child.on("close", (code) => res({ code: code ?? 1, stdout: out, stderr: opts?.captureStderr ? err : undefined }));
+      child.on("error", () => res({ code: 127, stdout: "", stderr: opts?.captureStderr ? "" : undefined })); // ENOENT
     });
 }

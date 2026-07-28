@@ -1,6 +1,6 @@
 ---
 title: Deploy
-description: "Ship the directory: local Docker Compose, Fly.io, Railway, portable containers, secrets, persistent state, and scale-to-zero behavior."
+description: "Ship the directory: local Docker Compose, Fly.io, Railway, AWS Bedrock AgentCore, portable containers, secrets, persistent state, and scale-to-zero behavior."
 status: current
 ---
 
@@ -17,6 +17,8 @@ fastagent deploy fly           # Dockerfile + fly.toml + runbook
 fastagent deploy fly --run
 fastagent deploy railway
 fastagent deploy railway --run
+fastagent deploy agentcore       # CloudFormation stack for AWS Bedrock AgentCore + runbook
+fastagent deploy agentcore --run
 ```
 
 FastAgent generates only what it can know from the definition: image shape, state root, exact secret names, channel paths, and target-specific runtime settings. Local Docker can opt into an ephemeral Cloudflare Quick Tunnel; durable ingress, reverse proxies, DNS, and TLS remain operator-owned. Generation and execution stay separate: `--tunnel` shapes Compose, while `--run` is the only flag that starts Docker.
@@ -29,7 +31,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 |---|---|---|
 | **Model is in `fastagent.config.*`** | A `--model` flag, `FASTAGENT_MODEL`, or `.env` value is builder-local and does **not** travel (`.env` is dockerignored). Only the config file ships. | `model: "provider/id"` in `fastagent.config.mjs`. `deploy` warns (or, under `--run`, gates) if it's missing. |
 | **Secrets are declared** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). |
-| **State goes on a volume** | Sessions, `auth.json`, and channel state live under one root; a redeploy that replaces the directory wipes them otherwise. | Every generated target mounts a volume at `/data` and sets `FASTAGENT_STATE_DIR=/data`. |
+| **State goes on persistent storage** | Sessions, `auth.json`, and channel state live under one root; a redeploy that replaces the directory wipes them otherwise. | Docker/Fly/Railway mount a volume at `/data`; AgentCore mounts platform SessionStorage at `/mnt/state`. Each sets `FASTAGENT_STATE_DIR` to match. |
 
 Model auth: if your local auth is an **env key** (e.g. `OPENAI_API_KEY`), `deploy` lists it as a host secret automatically. In a runbook-only deploy, an OAuth/stored login still needs a provider API key or an `auth.json` placed on the volume. Under `--run`, FastAgent carries the local auth file as an absent-only `FASTAGENT_AUTH_SEED`, so a credential already refreshed on the volume is never overwritten.
 
@@ -140,6 +142,31 @@ fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries yo
 
 `--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, time triggers, or a long-connection channel; a sleeping service cannot hold an outbound connection.
 
+## AWS Bedrock AgentCore
+
+Prereqs: AWS CLI v2 with working credentials in a [region where AgentCore is available](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html), and Docker with buildx — this is the one target whose image builds **on your machine** (the platform requires a linux/arm64 image in your account's ECR and has no remote builder).
+
+```bash
+fastagent deploy agentcore
+```
+
+Generates `agentcore.template.yaml` (one CloudFormation stack = the whole topology), `lambda/forwarder.js`, `Dockerfile`, `.dockerignore`, then prints the runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a **unique tag per deploy**, `aws cloudformation deploy` with the secret parameters, read the stack outputs, register webhooks. `--run` drives all of it (aws + docker CLIs) and carries your local model credential.
+
+AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed after ~15 min idle). The stack therefore carries:
+
+- the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
+- a **forwarder Lambda** with a public Function URL fronting the webhooks (channels verify signatures exactly as on every host);
+- **EventBridge Scheduler rules** delivering each `schedules/*.ts` cron slot (the container arms no resident timers; delivery is slot-idempotent). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
+- with `selfSchedule: true`, the **wake-alarm wiring**: pending wake-ups are mirrored (via the forwarder, authenticated by a minted shared secret) into self-deleting one-shot EventBridge schedules that wake the container at the right instant.
+
+What to know before choosing it:
+
+- **State lives on platform SessionStorage** (`/mnt/state`) — it survives redeploys and compute recycling, but is **tied to the Runtime resource**: deleting the stack or renaming the runtime starts blank. (The template comments name the EFS/VPC upgrade path when state must outlive the runtime.)
+- **Redeploys take effect immediately**: `--run` stops the ingress session after a successful stack update (a live session would otherwise keep serving the previous image until reclaimed). An in-flight turn is cut; channels with replay re-run it.
+- **Long-connection channels cannot run here** — the connection is the ingress and nothing wakes a reclaimed session; switch the channel to webhook mode (`--run` gates on this).
+- **Programmatic invokes** call `InvokeAgentRuntime` directly (any session id ≥ 33 chars, SSE response) and get per-session microVM isolation. A wake-up set inside such a direct session has no alarm — it fires only while that session is awake.
+- **The template is the topology.** If a kept `agentcore.template.yaml` no longer matches the definition (you added a schedule, a channel, or `selfSchedule`), `--run` stops until you regenerate with `--force` (hand-written templates — marker removed — are always kept and never gated).
+
 ## Serving an existing repo (agentDir layout)
 
 When the workspace uses `config.agentDir` (a coding agent living in `./agent` whose cwd is the host repo — see [Configuration](configuration.md)), `deploy` generates a **repo-as-workspace** recipe instead:
@@ -148,7 +175,7 @@ When the workspace uses `config.agentDir` (a coding agent living in `./agent` wh
 - **The image bakes the whole repo as the agent's cwd.** Only the **kit's** dependencies (`agent/package.json`) are installed — the host repo's own deps are the agent's runtime concern (it can install them in its workspace when a task needs them).
 - **Write-back mechanics ship in the image**: `git` is baked in and the generated ignore files do **not** exclude `.git`; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
 - **The workspace is a snapshot.** The image is the repo at deploy time; un-pushed changes on the box do **not** survive a redeploy — durability lives in git, not on the machine.
-- **Status: experimental** — this layout has not been verified end-to-end yet (the preflight note says so). `--run` remains gated for Docker, Fly, and Railway; generate the artifacts without `--run` and follow/review the printed runbook.
+- **Status: experimental** — this layout has not been verified end-to-end yet (the preflight note says so). `--run` remains gated for every target; generate the artifacts without `--run` and follow/review the printed runbook.
 
 ## Other Docker hosts
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_SYNC_ATTEMPTS,
   WAKE_ALARM_PATH,
   type WakeAlarmRequest,
   createWakeAlarmSink,
@@ -42,11 +43,15 @@ describe("schedule/wake-alarm: the URL store", () => {
 });
 
 describe("schedule/wake-alarm: the sink", () => {
-  it("POSTs the full pending set (declarative reconcile) to the reserved path with the secret", async () => {
+  it("POSTs the pending set (declarative reconcile) to the reserved path with the secret", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws/");
     const { impl, calls } = fakeFetch();
-    const sink = createWakeAlarmSink({ secret: "s3cret", fetchImpl: impl });
+    const sink = createWakeAlarmSink({
+      secret: "s3cret",
+      fetchImpl: impl,
+      now: () => new Date("2026-07-28T09:00:00Z"),
+    });
     const pending: Wakeup[] = [
       { id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" },
       { id: "b", session: "s", prompt: "q", fireAt: "2026-07-28T11:00:00.000Z", cron: "0 * * * *" },
@@ -63,6 +68,46 @@ describe("schedule/wake-alarm: the sink", () => {
     });
   });
 
+  it("filters already-due alarms (the awake box handles those) and skips an all-due/empty set", async () => {
+    const root = await freshRoot();
+    rememberWakeAlarmUrl(root, "https://fn.on.aws");
+    const { impl, calls } = fakeFetch();
+    const sink = createWakeAlarmSink({ secret: "x", fetchImpl: impl, now: () => new Date("2026-07-28T10:00:00Z") });
+    sink(root, [
+      { id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T09:59:00.000Z" }, // past — filtered
+      { id: "future", session: "s", prompt: "p", fireAt: "2026-07-28T10:30:00.000Z" },
+    ]);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]!.body.alarms).toEqual([{ id: "future", at: "2026-07-28T10:30:00.000Z" }]);
+    sink(root, [{ id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T09:59:00.000Z" }]); // nothing future
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toHaveLength(1); // no empty POST — deletion is lazy by design
+  });
+
+  it("retries a failed sync with backoff (counted as in-flight work), then gives up loudly", async () => {
+    const { activeWork } = await import("../src/channels/busy.ts");
+    const root = await freshRoot();
+    rememberWakeAlarmUrl(root, "https://fn.on.aws");
+    const base = activeWork();
+    let sawBusy = false;
+    const attempts: number[] = [];
+    const failing = vi.fn(async () => {
+      attempts.push(Date.now());
+      sawBusy = sawBusy || activeWork() > base; // the retry window counts as in-flight work
+      return new Response("boom", { status: 500 });
+    });
+    const sink = createWakeAlarmSink({
+      secret: "x",
+      fetchImpl: failing as unknown as typeof fetch,
+      now: () => new Date("2026-07-28T09:00:00Z"),
+      delay: async () => {}, // no real waiting in tests
+    });
+    sink(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" }]);
+    await vi.waitFor(() => expect(attempts.length).toBe(MAX_SYNC_ATTEMPTS));
+    expect(sawBusy).toBe(true);
+    await vi.waitFor(() => expect(activeWork()).toBe(base)); // released after giving up
+  });
+
   it("is a no-op (warned, not thrown) before the first envelope delivered the URL", async () => {
     const root = await freshRoot();
     const { impl, calls } = fakeFetch();
@@ -75,9 +120,9 @@ describe("schedule/wake-alarm: the sink", () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
     const { impl, calls } = fakeFetch();
-    setWakeupsSink(createWakeAlarmSink({ secret: "x", fetchImpl: impl }));
-
     const now = new Date("2026-07-28T10:00:00Z");
+    setWakeupsSink(createWakeAlarmSink({ secret: "x", fetchImpl: impl, now: () => now }));
+
     // The one-shot fires LATER than the recurring's first slot, so the claim below takes the recurring.
     const added = addWakeup(root, { session: "s", prompt: "p", fireAt: new Date("2026-07-28T13:00:00Z") }, now);
     expect(added.ok).toBe(true);
@@ -119,8 +164,8 @@ describe("schedule/wake-alarm: boot reconcile", () => {
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
     addWakeup(
       root,
-      { session: "s", prompt: "p", fireAt: new Date("2026-07-28T10:30:00Z") },
-      new Date("2026-07-28T10:00:00Z"),
+      { session: "s", prompt: "p", fireAt: new Date("2099-07-28T10:30:00Z") }, // far future — survives the due filter under the real clock
+      new Date("2099-07-28T10:00:00Z"),
     );
     const { impl, calls } = fakeFetch();
     reconcileWakeAlarms(root, createWakeAlarmSink({ secret: "x", fetchImpl: impl }));
@@ -135,7 +180,12 @@ describe("schedule/wake-alarm: boot reconcile", () => {
 });
 
 describe("schedule/wake-alarm: helpers", () => {
-  it("toAlarms mirrors id + fireAt", () => {
-    expect(toAlarms([{ id: "i", session: "s", prompt: "p", fireAt: "T" } as Wakeup])).toEqual([{ id: "i", at: "T" }]);
+  it("toAlarms mirrors id + fireAt for FUTURE entries only", () => {
+    const now = new Date("2026-07-28T10:00:00Z");
+    const entries: Wakeup[] = [
+      { id: "future", session: "s", prompt: "p", fireAt: "2026-07-28T11:00:00.000Z" },
+      { id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:01.000Z" }, // inside the due margin
+    ];
+    expect(toAlarms(entries, now)).toEqual([{ id: "future", at: "2026-07-28T11:00:00.000Z" }]);
   });
 });

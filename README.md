@@ -40,7 +40,7 @@ FastAgent is the missing bridge from local agent directory to live service.
 - **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, a Feishu or Lark bot, an HTTP/SSE endpoint, or your own adapter: verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler, or call `invoke` like any function from your own code — your auth, your database, your infra. FastAgent composes with your app, never owns it.
-- **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; optional `--tunnel` adds an ephemeral Quick Tunnel service for webhook channels. Durable ingress remains yours.
+- **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway|agentcore` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; optional `--tunnel` adds an ephemeral Quick Tunnel service for webhook channels; AWS Bedrock AgentCore gets a one-stack CloudFormation topology (webhooks via a forwarder Lambda, schedules via EventBridge). Durable ingress remains yours.
 
 ## Design philosophy
 
@@ -199,7 +199,7 @@ The neutral contract leaves room for capabilities that are not complete product 
 - **Sandboxed execution** — `ExecutionEnv` is an assembly seam, but the pi coding tools and project-context loader are still local; a complete sandbox adapter is future work.
 - **Observability export** — leveled logs and per-turn traces exist today; an OpenTelemetry exporter does not.
 - **More harness bindings and channels** — pi is the built-in harness; another harness can implement the Agent contract, and community channels can use the channel kit.
-- **More deploy targets** — local Docker, Fly, and Railway ship today; the generated container is the portable path for other hosts.
+- **More deploy targets** — local Docker, Fly, Railway, and AWS Bedrock AgentCore ship today; the generated container is the portable path for other hosts.
 
 See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) if one of these is the problem you want to work on.
 

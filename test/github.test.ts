@@ -44,6 +44,29 @@ const githubChannel = (agent: Agent, opts: GithubChannelOptions) =>
   buildGithubChannel(opts)({ agent, stateRoot: "/unused-in-tests" })["POST /webhook"]!;
 
 describe("github channel", () => {
+  it("a post-ACK turn counts as process-wide in-flight work (the AgentCore /ping depends on it)", async () => {
+    const { activeWork } = await import("../src/channels/busy.ts");
+    const base = activeWork();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    // An agent whose turn BLOCKS until released — the 202 returns while the turn is still running.
+    const agent: Agent = {
+      async *invoke() {
+        await gate;
+        yield { type: "completed" as const };
+      },
+    };
+    const ch = githubChannel(agent, { secret: SECRET, on: (e) => [{ session: "s", text: e.event }] });
+    const res = await ch(signed(PR_OPENED.body, PR_OPENED.headers));
+    expect(res.status).toBe(202);
+    // github turns have NO replay — without this signal an idle reclaim mid-review loses it.
+    expect(activeWork()).toBe(base + 1);
+    release();
+    await vi.waitFor(() => expect(activeWork()).toBe(base));
+  });
+
   it("rejects non-POST with 405", async () => {
     const { agent } = recordingAgent();
     const ch = githubChannel(agent, { secret: SECRET, on: () => [] });

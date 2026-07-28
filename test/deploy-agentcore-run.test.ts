@@ -10,12 +10,12 @@ import {
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 /** A fake CLI: records every call, returns per-command scripted results (default code 0, empty out). */
-function fakeCli(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
+function fakeCli(script: (args: string[]) => { code?: number; stdout?: string; stderr?: string } = () => ({})) {
   const calls: { args: string[]; input?: string }[] = [];
   const cli: CliRunner = async (args, opts) => {
     calls.push({ args, input: opts?.input });
     const r = script(args);
-    return { code: r.code ?? 0, stdout: r.stdout ?? "" };
+    return { code: r.code ?? 0, stdout: r.stdout ?? "", stderr: opts?.captureStderr ? (r.stderr ?? "") : undefined };
   };
   return { cli, calls, cmds: () => calls.map((c) => c.args.join(" ")) };
 }
@@ -103,7 +103,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     );
   });
 
-  it("gates on: no aws CLI / no credentials / no region / no docker / no buildx", async () => {
+  it("gates on: no aws CLI / no credentials / no region / no docker / daemon down / no buildx", async () => {
     const { cli: docker } = fakeCli();
     const noCli = await run(plan(), fakeCli(() => ({ code: 127 })).cli, docker);
     expect(noCli).toMatchObject({ ok: false, gate: expect.stringContaining("aws CLI not found") });
@@ -120,6 +120,13 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
 
     const noDocker = await run(plan(), fakeCli(happyAws).cli, fakeCli(() => ({ code: 127 })).cli);
     expect(noDocker).toMatchObject({ ok: false, gate: expect.stringContaining("docker not found") });
+
+    // Docker CLI present but the daemon is down: `docker version` exits non-zero non-127. Must gate
+    // BEFORE any AWS side effect — not stumble into a generic build failure after creating ECR.
+    const daemonDown = fakeCli(happyAws);
+    const noDaemon = await run(plan(), daemonDown.cli, fakeCli((a) => (a[0] === "version" ? { code: 1 } : {})).cli);
+    expect(noDaemon).toMatchObject({ ok: false, gate: expect.stringContaining("daemon not reachable") });
+    expect(daemonDown.cmds().some((c) => c.startsWith("ecr"))).toBe(false);
 
     const noBuildx = await run(
       plan(),
@@ -198,12 +205,46 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
   });
 
-  it("a failed ingress-session stop is advisory — never a gate (first deploy has no session)", async () => {
+  it("a stop failing with NotFound is a quiet advisory (first deploy has no session)", async () => {
+    const logs: string[] = [];
     const { cli: aws } = fakeCli((a) =>
-      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session" ? { code: 254 } : happyAws(a),
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
+        ? { code: 254, stderr: "An error occurred (ResourceNotFoundException): session does not exist" }
+        : happyAws(a),
     );
-    const out = await run(plan(), aws, fakeCli().cli);
+    const out = await deployAgentcoreRun(
+      plan(),
+      aws,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      async () => "registered",
+    );
     expect(out).toMatchObject({ ok: true });
+    expect(logs.join("\n")).toContain("no ingress session to stop");
+    expect(logs.join("\n")).not.toContain("PREVIOUS");
+  });
+
+  it("any OTHER stop failure warns loudly with the manual command — the old image may keep serving", async () => {
+    const logs: string[] = [];
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
+        ? { code: 254, stderr: "An error occurred (AccessDeniedException): not authorized" }
+        : happyAws(a),
+    );
+    const out = await deployAgentcoreRun(
+      plan(),
+      aws,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      async () => "registered",
+    );
+    expect(out).toMatchObject({ ok: true }); // still not a gate — the deploy itself succeeded
+    const joined = logs.join("\n");
+    expect(joined).toContain("PREVIOUS");
+    expect(joined).toContain("stop-runtime-session");
+    expect(joined).toContain("AccessDeniedException");
   });
 
   it("a pure-invoke deployment (no ForwarderUrl output) stops no session", async () => {

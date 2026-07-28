@@ -14,7 +14,7 @@ import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
-import { TEMPLATE_FILE, planAgentcoreDeploy } from "../../deploy/agentcore/plan.ts";
+import { TEMPLATE_FILE, isGeneratedAgentcoreTemplate, planAgentcoreDeploy } from "../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun } from "../../deploy/agentcore/run.ts";
 import { isGeneratedDockerfile } from "../../deploy/container.ts";
 import {
@@ -255,6 +255,17 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
+    // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name
+    // (`fastagent-<name>-forwarder` ≤ 64 chars). Gate the base instead of silently truncating —
+    // truncation would break the redeploy identity (a renamed stack starts blank state).
+    if (acName.length > 40) {
+      failStartup(
+        new Error(
+          `deploy stopped: the directory name maps to "${acName}" (${acName.length} chars) — AWS resource ` +
+            `names derived from it exceed their limits past 40 chars. Deploy from a shorter directory name.`,
+        ),
+      );
+    }
     const plan = planAgentcoreDeploy({
       name: acName,
       modelAuth,
@@ -271,6 +282,23 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       const msg = `schedule "${u.name}" cannot be expressed as an EventBridge rule — ${u.reason}`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg} — it will NOT fire on this deployment`);
+    }
+    // The template IS the topology (EventBridge rules, wake wiring, secrets) — a kept generated
+    // template that no longer matches the definition would deploy a stack silently missing the
+    // difference (a new schedule with no rule never fires: the exact miss the gate above stops).
+    // A hand-written template (marker removed) is the operator's own — kept, never gated.
+    const templateArtifact = plan.artifacts.find((a) => a.path.endsWith(TEMPLATE_FILE));
+    const templateHome = join(target, templateArtifact?.path ?? TEMPLATE_FILE);
+    if (!opts.force && templateArtifact && (await exists(templateHome))) {
+      const existing = await readFile(templateHome, "utf8");
+      if (isGeneratedAgentcoreTemplate(existing) && existing !== templateArtifact.content) {
+        const msg =
+          `${templateArtifact.path} no longer matches this definition (channels/schedules/selfSchedule changed) — ` +
+          `the kept template would silently drop the difference. Pass --force to regenerate (hand edits are lost), ` +
+          `or delete the file.`;
+        if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+        console.error(`[fastagent] warn: ${msg}`);
+      }
     }
     await writeArtifacts(target, plan.artifacts, {
       force: !!opts.force,

@@ -26,6 +26,7 @@
  */
 import { Buffer } from "node:buffer";
 import type { Agent } from "../agent.ts";
+import { beginWork } from "./busy.ts";
 import type { Routes } from "../host/node.ts";
 import { router } from "../host/node.ts";
 import { log } from "../log.ts";
@@ -48,6 +49,9 @@ export type AgentcoreEnvelope = { wake?: { url: string } } & (
       /** Original webhook request line, verbatim. `path` must be absolute ("/telegram"). */
       method: string;
       path: string;
+      /** Original raw query string (no leading `?`) — "verbatim" includes it; a channel reading
+       *  `request.url.searchParams` must see what the webhook sender sent. */
+      query?: string;
       /** Original headers — signature material (secret tokens, Feishu signatures) rides here. */
       headers?: Record<string, string>;
       /** Original body, base64 (webhook bodies are JSON but the tunnel must be byte-exact). */
@@ -126,18 +130,21 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
 
     switch (envelope.kind) {
       case "webhook": {
-        const { method, path, headers, bodyB64 } = envelope;
+        const { method, path, query, headers, bodyB64 } = envelope;
         if (typeof method !== "string" || typeof path !== "string" || !path.startsWith("/")) {
           return text('webhook envelope needs { "method": string, "path": "/..." }\n', 400);
         }
-        const inner = new Request(`http://agentcore.local${path}`, {
-          method,
-          headers: headers ?? {},
-          body:
-            typeof bodyB64 === "string" && method !== "GET" && method !== "HEAD"
-              ? Buffer.from(bodyB64, "base64")
-              : undefined,
-        });
+        const inner = new Request(
+          `http://agentcore.local${path}${typeof query === "string" && query !== "" ? `?${query}` : ""}`,
+          {
+            method,
+            headers: headers ?? {},
+            body:
+              typeof bodyB64 === "string" && method !== "GET" && method !== "HEAD"
+                ? Buffer.from(bodyB64, "base64")
+                : undefined,
+          },
+        );
         const response = await dispatch(inner);
         // Buffer the channel's ACK (webhook ACKs are small by design — the turn itself runs
         // fire-and-forget) and ride it inside the transport reply, byte-exact.
@@ -162,6 +169,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         // an external clock rule outliving the schedule it fired for. 404 keeps it VISIBLE in the
         // clock's logs (a 200 would silently absorb every future fire).
         if (!fire) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
+        // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may
+        // time out and drop the connection while the turn keeps running server-side. Count it as
+        // in-flight work so /ping holds the session (HealthyBusy) for the remainder.
+        const workDone = beginWork();
         try {
           const outcome = await fire(name, new Date(slot));
           return json(outcome, 200);
@@ -171,6 +182,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
           // failure so the external clock's logs carry it (fail visibly, never a silent absorb).
           log.error(`[agentcore] schedule-fire ${name} failed: ${String(e)}`);
           return text(`schedule-fire failed: ${String(e)}\n`, 500);
+        } finally {
+          workDone();
         }
       }
       case "wake-poke": {

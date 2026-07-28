@@ -4,9 +4,11 @@ import {
   MOUNT,
   type ScheduleFact,
   TEMPLATE_FILE,
+  GENERATED_TEMPLATE_MARKER,
   cfnParamName,
   forwarderInlineSource,
   forwarderSource,
+  isGeneratedAgentcoreTemplate,
   ingressSessionId,
   planAgentcoreDeploy,
   toEventBridgeCron,
@@ -81,6 +83,19 @@ describe("deploy agentcore: cron translation", () => {
     expect(expression("0 9 * * MON")).toBe("cron(0 9 ? * MON *)");
   });
 
+  it("steps are COUNTS, not weekdays — preserved verbatim while values/endpoints remap", () => {
+    expect(expression("0 9 * * */2")).toBe("cron(0 9 ? * */2 *)");
+    expect(expression("0 9 * * 1-5/2")).toBe("cron(0 9 ? * 2-6/2 *)");
+  });
+
+  it("lists remap per element; a range that wraps under renumbering is refused", () => {
+    expect(expression("0 9 * * 1,3,5")).toBe("cron(0 9 ? * 2,4,6 *)");
+    expect(expression("0 9 * * MON,3")).toBe("cron(0 9 ? * MON,4 *)");
+    expect(error("0 9 * * 5-7")).toMatch(/wraps across the week/); // Fri–Sun → 6-1: not a valid range
+    expect(error("0 9 * * 1-")).toMatch(/malformed/);
+    expect(error("0 9 * * 1/")).toMatch(/malformed/);
+  });
+
   it("refuses what EventBridge cannot express, with the reason", () => {
     expect(error("0 9 1 * 1")).toMatch(/BOTH day-of-month and day-of-week/);
     expect(error("0 0 9 * * 1")).toMatch(/5-field/);
@@ -151,6 +166,34 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("Type: AWS::Lambda::Function");
   });
 
+  it("identifier collisions fail the plan visibly (a silently wrong stack is worse)", () => {
+    expect(() =>
+      planAgentcoreDeploy(
+        baseInput({
+          schedules: [
+            { name: "foo-bar", cron: "0 * * * *" },
+            { name: "foobar", cron: "30 * * * *" },
+          ],
+        }),
+      ),
+    ).toThrow(/same CloudFormation logical id/);
+    expect(() => planAgentcoreDeploy(baseInput({ extraSecrets: ["FOO_BAR", "FOO__BAR"] }))).toThrow(
+      /same CloudFormation parameter/,
+    );
+  });
+
+  it("a schedule name with a quote cannot break the EventBridge Input YAML/JSON", () => {
+    const plan = planAgentcoreDeploy(baseInput({ schedules: [{ name: "it's-daily", cron: "0 9 * * *" }] }));
+    const template = plan.artifacts[0]!.content;
+    expect(template).toContain(`'{"scheduleFire":{"name":"it''s-daily","slot":"<aws.scheduler.scheduled-time>"}}'`);
+  });
+
+  it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {
+    const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
+      .artifacts[0]!.content;
+    expect(template).toContain("Timeout: 900");
+  });
+
   it("kit layout namespaces the template + forwarder under the kit", () => {
     const plan = planAgentcoreDeploy(
       baseInput({ kitDir: "agent", routeChannels: ["telegram"], channels: ["telegram"] }),
@@ -180,6 +223,13 @@ describe("deploy agentcore: the plan", () => {
     // The forwarder carries the alarm + poke machinery.
     expect(forwarderSource()).toContain("wake-alarm");
     expect(forwarderSource()).toContain("wakePoke");
+  });
+
+  it("the template opens with the generated marker (the drift gate's predicate)", () => {
+    const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
+    expect(template.startsWith(GENERATED_TEMPLATE_MARKER)).toBe(true);
+    expect(isGeneratedAgentcoreTemplate(template)).toBe(true);
+    expect(isGeneratedAgentcoreTemplate("# my hand-written template\n")).toBe(false);
   });
 
   it("the inline forwarder form (comments stripped) stays under the 4096-byte cap and derives from the one source", () => {

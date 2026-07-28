@@ -122,9 +122,15 @@ export async function deployAgentcoreRun(
   }
 
   // 2. Docker + buildx — this host builds LOCALLY (linux/arm64 into the account's ECR; AgentCore has
-  //    no remote builder), so their absence is a first-class gate with the install pointer.
-  if ((await docker(["version"], { capture: true })).code === 127) {
+  //    no remote builder), so their absence is a first-class gate with the install pointer. ANY
+  //    non-zero gates BEFORE side effects: `docker version` with the daemon down exits non-127, and
+  //    letting it through would create the ECR repo and then fail the build with a generic error.
+  const dockerVersion = await docker(["version"], { capture: true });
+  if (dockerVersion.code === 127) {
     return gate("docker not found — install Docker (https://docs.docker.com/get-docker/), then re-run");
+  }
+  if (dockerVersion.code !== 0) {
+    return gate("docker daemon not reachable — start Docker Desktop (or fix your docker context), then re-run");
   }
   if ((await docker(["buildx", "version"], { capture: true })).code !== 0) {
     return gate(
@@ -258,22 +264,31 @@ export async function deployAgentcoreRun(
   //     (the ingress session is the forwarder's session; pure-invoke deployments have none).
   if (url) {
     log("stopping the ingress session so the new image serves immediately…");
-    const stopped = await aws(
-      [
-        "bedrock-agentcore",
-        "stop-runtime-session",
-        "--agent-runtime-arn",
-        runtimeArn,
-        "--runtime-session-id",
-        ingressSessionId(plan.name),
-      ],
-      { capture: true },
-    );
+    const stopCommand = [
+      "bedrock-agentcore",
+      "stop-runtime-session",
+      "--agent-runtime-arn",
+      runtimeArn,
+      "--runtime-session-id",
+      ingressSessionId(plan.name),
+    ];
+    const stopped = await aws(stopCommand, { capture: true, captureStderr: true });
     if (stopped.code !== 0) {
-      log(
-        "note: no ingress session to stop (first deploy, or already reclaimed) — had one been active, " +
-          "it would have kept serving the previous image until reclaimed",
-      );
+      // Classify, don't guess: "no session yet" (first deploy — expected, quiet note) vs a REAL stop
+      // failure (permissions/CLI/network — the old image may keep serving, say so loudly with the
+      // manual command). Not a gate: the deploy itself succeeded, and stop is an immediacy
+      // optimization — the platform's reclaim converges regardless.
+      const stderr = stopped.stderr ?? "";
+      if (/ResourceNotFound|not\s*found|does not exist/i.test(stderr)) {
+        log("note: no ingress session to stop (first deploy, or already reclaimed)");
+      } else {
+        log(
+          `warn: could not stop the ingress session — an ACTIVE session may keep serving the PREVIOUS ` +
+            `image until reclaimed (≤15 min idle / 8 h ceiling). Stop it manually: aws ${stopCommand.join(" ")}`,
+        );
+        const firstLine = stderr.trim().split("\n")[0];
+        if (firstLine) log(`warn: ${firstLine}`);
+      }
     }
   }
 

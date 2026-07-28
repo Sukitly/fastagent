@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Buffer } from "node:buffer";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -107,6 +107,20 @@ describe("agentcore adapter: webhook envelope", () => {
     const res = await postEnvelope(adapter(), { kind: "webhook", method: "POST", path: "telegram" });
     expect(res.status).toBe(400);
   });
+
+  it("the query string survives the round trip (a channel reading searchParams sees it)", async () => {
+    const seen: string[] = [];
+    const routes = adapter({
+      routes: {
+        "GET /hook": (req) => {
+          seen.push(new URL(req.url).searchParams.get("code") ?? "(none)");
+          return new Response("ok", { status: 200 });
+        },
+      },
+    });
+    await postEnvelope(routes, { kind: "webhook", method: "GET", path: "/hook", query: "code=abc&x=1" });
+    expect(seen).toEqual(["abc"]);
+  });
 });
 
 describe("agentcore adapter: schedule-fire envelope", () => {
@@ -151,6 +165,18 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     const res = await postEnvelope(routes, fireEnvelope);
     expect(res.status).toBe(500);
     expect(await res.text()).toContain("fires.json unreadable");
+  });
+
+  it("a running schedule turn counts as in-flight work (/ping must hold the session)", async () => {
+    const { activeWork } = await import("../src/channels/busy.ts");
+    const base = activeWork();
+    let release: (o: ScheduleFireOutcome) => void = () => {};
+    const routes = adapter({ fire: () => new Promise<ScheduleFireOutcome>((r) => (release = r)) });
+    const pending = postEnvelope(routes, fireEnvelope) as Promise<Response>;
+    await vi.waitFor(() => expect(activeWork()).toBe(base + 1));
+    release({ fired: true, ms: 1 });
+    await pending;
+    expect(activeWork()).toBe(base);
   });
 
   it("rejects a malformed slot", async () => {
