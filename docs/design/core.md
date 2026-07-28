@@ -72,16 +72,45 @@ repo/                       # the workspace — what the agent works ON, untouch
 agent": a standalone agent dir, a monorepo package): agentDir = workspace.
 
 Placement is STRUCTURAL, never configured — and deliberately not DETECTED either: `init` has no
-jurisdiction heuristic; it nests unless told `--flat`. `resolvePlacement(dir)` finds a
-`fastagent.config.*` at the dir root (flat) or under `<dir>/fastagent/` (nested); both at once is a
-refused ambiguity, and `agentDir !== workspace` is the only in-code discriminant (`ResolvedPlacement` has
-no mode field). The machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's
+jurisdiction heuristic; it nests unless told `--flat`. `agentDir !== workspace` is the only in-code
+discriminant (`ResolvedPlacement` has no mode field). `resolvePlacement(dir)` is the ONE owner of the
+rule, and its state space is closed:
+
+| On disk | Result |
+|---|---|
+| `<dir>/fastagent.config.*` | `{ agentDir: dir, workspace: dir }` (flat) |
+| `<dir>/fastagent/fastagent.config.*` | `{ agentDir: <dir>/fastagent, workspace: dir }` (nested) |
+| invoked from INSIDE `<dir>/fastagent/` | identical to the row above — entry point never changes the answer |
+| a config at BOTH | throws (ambiguous; the SAME error from either entry point) |
+| neither | `{ agentDir: dir, workspace: dir }` — zero-config flat, "a directory is an agent" |
+| neither, but `fastagent/` holds `persona.md`/`skills`/`tools`/`channels`/`schedules` | throws — the config is the structural marker; degrading to flat would make the authored definition vanish silently |
+
+The config-less probe keys on those five DEFINITION names only, never `package.json`: it is the one
+name carrying no fastagent meaning, so an unrelated `fastagent/` (a vendored clone, a monorepo
+package) would otherwise hard-block every command run in its parent.
+
+`init` mirrors the same discipline — it either creates, or refuses with the reason: an existing
+config at either level, a non-empty `./fastagent/`, or `--flat` into a directory named `fastagent`
+(the reserved name — it would resolve as nested and serve with the PARENT as the workspace, moving
+both the agent's cwd and deploy's build context up a level).
+
+The machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's
 secret store (never an image), `.state/` through a volume
 (`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it in a container), `.cache/` is
 re-derivable.
 
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
 see docs/embedding.md. The nested agent placement is not a mode and has no name.)
+
+**Known boundary (accepted, documented):** `workspace` is always either `agentDir` itself or its
+immediate parent — never further. Since `fastagent/` is a fixed name, a workspace therefore holds at
+most one agent, and "two agents that both work ON this repo" is not expressible: `init reviewer` +
+`init releaser` gives two fully independent agents, but each one's cwd is its own directory (the
+`AGENTS.md` ancestor walk still reaches the repo; tools reach it through `../`). Removing that one
+level would require making `workspace` configurable — the mirror image of the deleted
+`config.agentDir`, which would turn config validation, dev's watch scope and deploy's build context
+back into variables. If the need becomes real, it deserves an explicit new concept, not a heuristic
+inside `resolvePlacement`.
 
 The pi reference prompt has four segments:
 

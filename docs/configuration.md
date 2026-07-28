@@ -184,6 +184,24 @@ directory root itself. Within the agent, a broken tool is reported and skipped, 
 a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
 programmatic tools outside the agent, declare them with `config.tools`.
 
+### More than one agent
+
+`fastagent/` is a fixed name, so a directory holds at most one agent. Give each agent its own
+directory instead — that is what `init <name>` is for:
+
+```bash
+fastagent init reviewer     # reviewer/fastagent/
+fastagent init releaser     # releaser/fastagent/
+```
+
+Each is fully independent: its own persona, skills, tools, config, model, channels, schedules,
+`.state/` and `.secrets/`. Run them separately (`fastagent dev reviewer`), deploy them separately.
+
+One consequence to know: an agent's workspace is always the directory holding its `fastagent/`, so
+`reviewer`'s cwd is `reviewer/`, not the repo above it. Its `AGENTS.md` context still walks up to the
+repo root (the ancestor walk), and its tools can reach the repo through `../`; if that matters for
+your agent, say so in its `persona.md`.
+
 ## Channels
 
 Channels are not configured in `fastagent.config.*`. A channel needs glue code, so its file is the
