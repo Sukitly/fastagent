@@ -141,7 +141,7 @@ function channelBasenames(dir: string): string[] {
 }
 
 /**
- * Print the public URL and wire up first-party webhook channels found under `dir` (the workspace
+ * Print the public URL and wire up first-party webhook channels found under `dir` (the agent
  * ROOT): Telegram and Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config
  * token; GitHub and a manually scaffolded Slack app receive explicit console URLs.
  */

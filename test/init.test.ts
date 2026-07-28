@@ -39,9 +39,9 @@ describe("init: scaffoldWorkspace", () => {
 
   it("default scaffolds a COMPLETE agent (persona + the example skill + a code tool + package.json)", async () => {
     const dir = await freshDir();
-    const { complete, created, patched, warnings, root } = await scaffoldWorkspace(dir, { flat: true });
+    const { complete, created, patched, warnings, agentDir } = await scaffoldWorkspace(dir, { flat: true });
     expect(complete).toBe(true);
-    expect(root).toBe("."); // flat
+    expect(agentDir).toBe("."); // flat
     expect(patched).toEqual([]); // fresh .gitignore is ours — nothing to patch
     expect(created).toEqual(
       expect.arrayContaining([
@@ -186,7 +186,7 @@ describe("init: scaffoldWorkspace", () => {
     const dir3 = await freshDir();
     await mkdir(join(dir3, "fastagent"), { recursive: true });
     await writeFile(join(dir3, "fastagent", "fastagent.config.mjs"), "export default {};\n");
-    await expect(scaffoldWorkspace(dir3)).rejects.toThrow(/already a fastagent workspace/);
+    await expect(scaffoldWorkspace(dir3)).rejects.toThrow(/already a fastagent agent/);
   });
 
   it("refuses a non-empty ./fastagent/ target (an unfinished workspace or something unrelated); refusal is side-effect-free", async () => {
@@ -200,12 +200,12 @@ describe("init: scaffoldWorkspace", () => {
     await mkdir(join(dir2, "fastagent"), { recursive: true });
     await writeFile(join(dir2, "fastagent", ".DS_Store"), ""); // Finder noise ≠ occupied
     const r = await scaffoldWorkspace(dir2);
-    expect(r.root).toBe("fastagent");
+    expect(r.agentDir).toBe("fastagent");
   });
 
-  it("refuses --flat into a directory named `fastagent` (the reserved nested name would move the workbench)", async () => {
-    // resolveWorkspace reads ANY directory named `fastagent` as a nested root, so a flat workspace there
-    // would serve with workbench = the PARENT (the agent's cwd, its ② context, deploy's build context).
+  it("refuses --flat into a directory named `fastagent` (the reserved nested name would move the workspace)", async () => {
+    // resolvePlacement reads ANY directory named `fastagent` as a nested root, so a flat workspace there
+    // would serve with workspace = the PARENT (the agent's cwd, its ② context, deploy's build context).
     const host = await freshDir();
     const reserved = join(host, "fastagent");
     await mkdir(reserved, { recursive: true });
@@ -213,7 +213,7 @@ describe("init: scaffoldWorkspace", () => {
     expect(await exists(join(reserved, "persona.md"))).toBe(false); // side-effect-free refusal
     // Nesting into it is fine — `<host>/fastagent/fastagent/` is an ordinary nested workspace.
     const nested = await scaffoldWorkspace(reserved);
-    expect(nested.root).toBe("fastagent");
+    expect(nested.agentDir).toBe("fastagent");
   });
 
   it("default: the WHOLE workspace lands in ./fastagent/, ZERO files at the host root", async () => {
@@ -221,8 +221,8 @@ describe("init: scaffoldWorkspace", () => {
     await writeFile(join(dir, "AGENTS.md"), "# Host repo spec\n");
     await writeFile(join(dir, "tsconfig.json"), "{}");
     const before = (await readdir(dir)).sort();
-    const { created, root } = await scaffoldWorkspace(dir);
-    expect(root).toBe("fastagent");
+    const { created, agentDir } = await scaffoldWorkspace(dir);
+    expect(agentDir).toBe("fastagent");
     expect(created).toEqual(
       expect.arrayContaining([
         join("fastagent", "persona.md"),
@@ -243,8 +243,8 @@ describe("init: scaffoldWorkspace", () => {
     expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
     // The scaffolded workspace ASSEMBLES: persona from fastagent/, ② context walked from the host root.
     const a = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.5" });
-    expect(a.root).toBe(join(dir, "fastagent"));
-    expect(a.workbench).toBe(dir);
+    expect(a.agentDir).toBe(join(dir, "fastagent"));
+    expect(a.workspace).toBe(dir);
     expect(a.definition.persona).toContain("Persona");
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
   });
@@ -284,12 +284,12 @@ describe("init: scaffoldWorkspace", () => {
     // A config → already a workspace → refuse.
     const done = await freshDir();
     await writeFile(join(done, "fastagent.config.mjs"), "export default {};\n");
-    expect(await cliInit(["init"], done)).toMatch(/already a fastagent workspace/);
+    expect(await cliInit(["init"], done)).toMatch(/already a fastagent agent/);
   });
 
-  it("createPiAgentFromWorkspace wires the nested placement end-to-end: persona/tools from the root, ② context from the workbench", async () => {
+  it("createPiAgentFromWorkspace wires the nested placement end-to-end: persona/tools from the root, ② context from the workspace", async () => {
     const host = await mkdtemp(join(tmpdir(), "fa-nested-ws-"));
-    await writeFile(join(host, "AGENTS.md"), "# Host repo context\n"); // ② at the workbench
+    await writeFile(join(host, "AGENTS.md"), "# Host repo context\n"); // ② at the workspace
     const root = join(host, "fastagent");
     await mkdir(join(root, "tools"), { recursive: true });
     await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
@@ -300,11 +300,11 @@ describe("init: scaffoldWorkspace", () => {
     );
 
     const a = await createPiAgentFromWorkspace(host); // model from config; no invoke, so no auth/network
-    expect(a.root).toBe(root);
-    expect(a.workbench).toBe(host);
+    expect(a.agentDir).toBe(root);
+    expect(a.workspace).toBe(host);
     expect(a.definition.persona).toContain("Repo Bot"); // ① from the root
-    expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo context"); // ② walked from the workbench
-    expect(a.toolNames).toContain("foo"); // discovered from the root, not the workbench
+    expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo context"); // ② walked from the workspace
+    expect(a.toolNames).toContain("foo"); // discovered from the root, not the workspace
   });
 
   it("prints a `cd <dir>` step for a named target so the dev/.env/config steps are correct", async () => {
@@ -573,7 +573,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     await mkdir(join(ext, "ch"));
     await symlink(join(ext, "ch"), join(esc, "channels"));
     const out2 = await cliInit(["add", "github"], esc);
-    expect(out2).toMatch(/outside the workspace/);
+    expect(out2).toMatch(/outside the agent dir/);
     expect(await exists(join(ext, "ch", "github.ts"))).toBe(false); // not written outside
   });
 });
@@ -711,7 +711,7 @@ describe("add: fastagent add skill (vendor)", () => {
     const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
     await mkdir(join(srcRoot, "greeter"));
     await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: Hi.\n---\nHi.\n");
-    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/outside the workspace/);
+    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/outside the agent dir/);
     expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
   });
 

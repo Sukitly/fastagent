@@ -12,7 +12,7 @@ It is an ingress adapter only: it verifies and routes GitHub events, then starts
 
 ## Add the channel
 
-From an agent workspace:
+From an agent directory:
 
 ```bash
 fastagent add github

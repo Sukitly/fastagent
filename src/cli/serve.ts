@@ -34,12 +34,12 @@ export interface ServingSurface {
  * POST `/invoke` only when neither a route nor a long-connection channel was declared.
  */
 export async function routesFor(
-  workspaceDir: string,
+  agentDir: string,
   agent: Agent,
   stateRoot: string,
   control?: SessionControl,
 ): Promise<ServingSurface> {
-  const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(workspaceDir, {
+  const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
     stateRoot,
     control,
@@ -76,7 +76,7 @@ export async function routesFor(
 }
 
 /**
- * Mount the session control plane (`/control/*`) when the workspace enabled it
+ * Mount the session control plane (`/control/*`) when the agent enabled it
  * (`config.sessionControl`): merge the bearer-authenticated routes and return an announcer that
  * writes `<stateRoot>/control.json` — `{ url, token }`, 0600 — once the port is known. The file is
  * the LOCAL discovery channel (`fastagent attach`, a local desktop app); filesystem permissions are
@@ -262,7 +262,7 @@ export function serve(surface: ServingSurface, port: number, onListening?: (boun
 
 /** Start a Cloudflare tunnel for route channels only. */
 export function maybeTunnel(
-  workspaceDir: string,
+  agentDir: string,
   routeChannels: string[],
   boundPort: number,
   tunnel: boolean,
@@ -271,7 +271,7 @@ export function maybeTunnel(
   if (!tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((instance) => {
     if (!instance) return;
-    void announceWebhooks(workspaceDir, instance.url, { openUrl: openExternalUrl, routeChannels, stateRoot });
+    void announceWebhooks(agentDir, instance.url, { openUrl: openExternalUrl, routeChannels, stateRoot });
     const cleanup = (): void => instance.close();
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
@@ -279,16 +279,16 @@ export function maybeTunnel(
 }
 
 /**
- * Load and start the workspace's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
+ * Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
  * there are static schedules OR `selfSchedule` is on. Best-effort stop on process signals.
  */
 export async function startSchedules(
-  workspaceDir: string,
+  agentDir: string,
   agent: Agent,
   stateRoot: string,
   selfSchedule: boolean,
 ): Promise<void> {
-  const { schedules, failures } = await loadSchedules(workspaceDir).catch(failStartup);
+  const { schedules, failures } = await loadSchedules(agentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
   if (schedules.length === 0 && !selfSchedule) return;
   const scheduler = createScheduler({ agent, stateRoot, schedules });

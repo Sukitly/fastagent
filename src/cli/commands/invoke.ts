@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolveWorkspace } from "../../engines/pi/config.ts";
+import { resolvePlacement } from "../../engines/pi/config.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -18,15 +18,15 @@ export interface InvokeOptions {
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   const invokeDir = resolve(dirArg);
-  const ws = failStartupOn(() => resolveWorkspace(invokeDir));
-  loadDotEnv(ws.root);
+  const ws = failStartupOn(() => resolvePlacement(invokeDir));
+  loadDotEnv(ws.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(ws.root, opts);
+  await resolveFirstRunModel(ws.agentDir, opts);
   const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
-  console.error(`[fastagent] invoke: ${ws.workbench} (${modelSpec})`);
+  console.error(`[fastagent] invoke: ${ws.workspace} (${modelSpec})`);
   await reportAuth(modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).

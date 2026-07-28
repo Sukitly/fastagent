@@ -6,22 +6,22 @@ status: current
 
 # CLI reference
 
-The `fastagent` CLI is the file-first workflow for creating, inspecting, serving, and operating an agent workspace.
+The `fastagent` CLI is the file-first workflow for creating, inspecting, serving, and operating an agent.
 
 ```bash
 fastagent <command> [args] [options]
 ```
 
-Most commands take an optional workspace directory. When omitted, the current directory is used.
+Most commands take an optional workspace directory (the agent is there, or in its `./fastagent/`). When omitted, the current directory is used.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `init [dir]` | Scaffold a runnable agent workspace. |
-| `info [dir]` | Inspect what a workspace assembles into without serving. |
+| `init [dir]` | Scaffold a runnable agent. |
+| `info [dir]` | Inspect what an agent assembles into without serving. |
 | `models [search]` | List model specs. |
-| `login [provider]` | Store provider credentials in the project-level `<workspace>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`). |
+| `login [provider]` | Store provider credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`). |
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
@@ -43,9 +43,9 @@ Most commands take an optional workspace directory. When omitted, the current di
 fastagent init [dir] [--minimal] [--no-install] [--flat]
 ```
 
-Creates a self-iterating agent — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh workspace has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.secrets/.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore hygiene is self-contained: the machinery dirs (`.secrets/`, `.state/`) carry their own self-ignoring `.gitignore`, so the workspace-root `.gitignore` only needs `node_modules/`.
+Creates a self-iterating agent — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh agent has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.secrets/.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore hygiene is self-contained: the machinery dirs (`.secrets/`, `.state/`) carry their own self-ignoring `.gitignore`, so the agent-root `.gitignore` only needs `node_modules/`.
 
-**Placement** — ONE workspace shape, two placements, no detection. By default the WHOLE workspace — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`: zero files at the host root; the parent directory is the agent's workbench (its cwd, whose `AGENTS.md` is read as project context). The placement is structural — the directory name is the marker, nothing is configured and nothing is guessed. `--flat` lands the identical shape directly in the directory, for a directory that is ITSELF the agent (a standalone agent dir, a monorepo package). The workspace self-contains its `package.json`, so a host repo's manifest and lockfile are never touched. `init` never overwrites existing files and refuses a directory that already has a `fastagent.config.*` (at either root) or a non-empty `./fastagent/`. `fastagent` is a reserved directory name: since any directory called that resolves as a nested root, `--flat` into one is refused (it would serve with the PARENT as the workbench).
+**Placement** — ONE agent shape, two placements, no detection. By default the WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`: zero files at the host root; the parent directory is the agent's workspace (its cwd, whose `AGENTS.md` is read as project context). The placement is structural — the directory name is the marker, nothing is configured and nothing is guessed. `--flat` lands the identical shape directly in the directory, for a directory that is ITSELF the agent (a standalone agent dir, a monorepo package). The agent self-contains its `package.json`, so a host repo's manifest and lockfile are never touched. `init` never overwrites existing files and refuses a directory that already has a `fastagent.config.*` (at either root) or a non-empty `./fastagent/`. `fastagent` is a reserved directory name: since any directory called that resolves as a nested root, `--flat` into one is refused (it would serve with the PARENT as the workspace).
 
 Options:
 
@@ -53,7 +53,7 @@ Options:
 |---|---|
 | `--minimal` | persona.md + the example skill + config only — no code tool, package.json, or install. |
 | `--no-install` | Scaffold everything but skip `npm install`. |
-| `--flat` | Land the workspace directly in the directory (the directory IS the agent). |
+| `--flat` | Land the agent directly in the directory (the directory IS the agent). |
 
 ## `fastagent info`
 
@@ -91,7 +91,7 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
 fastagent login [provider] [--auth-path file] [--no-input]
 ```
 
-Authenticates a model provider and stores credentials in the **project-level** `<workspace>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it from `$HOME` to write the global `~/.fastagent/.secrets/auth.json`). There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
+Authenticates a model provider and stores credentials in the **project-level** `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it from `$HOME` to write the global `~/.fastagent/.secrets/auth.json`). There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
 
 An API-key login is verified immediately with one minimal request (OAuth needs no check — completing
 the flow proves the credential): a definitive rejection (HTTP 401) removes the bad key and prompts
@@ -107,7 +107,7 @@ prints the provider's message.
 fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel] [--no-input]
 ```
 
-Assembles the workspace and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
+Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
 live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
 `tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`.
 
@@ -123,7 +123,7 @@ Options:
 |---|---|
 | `--port N` | Override `http.port` / default `8787`. |
 | `--model spec` | Override model selection. |
-| `--auth-path file` | Override the credential file (default `<workspace>/.secrets/auth.json`). |
+| `--auth-path file` | Override the credential file (default `<agent dir>/.secrets/auth.json`). |
 | `--no-watch` | Serve once without the watch supervisor. |
 | `--tunnel` | Open a Cloudflare quick tunnel for webhook testing. |
 | `--no-input` | Never prompt (CI/scripts) — e.g. the first-run model pick becomes an actionable error instead of a question. |
@@ -154,10 +154,10 @@ Web panel or desktop app uses (`connectSessionControl`).
 fastagent chat [dir] [--model provider/modelId] [--auth-path file]
 ```
 
-Opens the same assembled workspace in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
 
 Auth is fastagent's, same as every other command: `--auth-path` > `FASTAGENT_AUTH_PATH` > the
-workspace `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
+agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
 to the same file). With no model set, `chat` runs the same first-run picker as the serving commands
 (credential-annotated catalog, inline login) and writes the choice back to the config.
 
@@ -167,7 +167,7 @@ to the same file). With no model set, `chat` runs the same first-run picker as t
 fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file] [--no-input]
 ```
 
-Runs one turn through the same workspace assembly and exits:
+Runs one turn through the same agent assembly and exits:
 
 - answer text streams to stdout,
 - tool and diagnostic lines go to stderr,
@@ -268,7 +268,7 @@ See:
 fastagent add skill <source> [dir] [--update]
 ```
 
-Vendors an Agent Skills skill into `skills/<name>/` at the workspace root (`./fastagent/skills/` in the default placement). Sources can be:
+Vendors an Agent Skills skill into `skills/<name>/` in the agent dir (`./fastagent/skills/` in the default placement). Sources can be:
 
 - a GitHub-style ref,
 - a local path,
@@ -282,7 +282,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel] [--no-input]
 ```
 
-Runs the workspace in production posture: no watch, same assembly as `dev`.
+Runs the agent in production posture: no watch, same assembly as `dev`.
 
 Port precedence:
 
@@ -293,8 +293,8 @@ Port precedence:
 Session directory precedence:
 
 ```txt
-FASTAGENT_STATE_DIR      > <workspace>/.state          (mutable machine state)
-FASTAGENT_SECRETS_DIR    > <workspace>/.secrets        (.env + auth.json)
+FASTAGENT_STATE_DIR      > <agent dir>/.state       (mutable machine state)
+FASTAGENT_SECRETS_DIR    > <agent dir>/.secrets        (.env + auth.json)
 --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions
 ```
 

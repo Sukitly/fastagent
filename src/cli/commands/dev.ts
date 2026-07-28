@@ -1,12 +1,12 @@
 /**
  * `fastagent dev`: a SUPERVISOR that spawns a worker (this command with FASTAGENT_DEV_WORKER set) to
- * assemble + serve, restarting it on workspace edits. A fresh process per reload means what is served
+ * assemble + serve, restarting it on agent edits. A fresh process per reload means what is served
  * is always the latest code, including modules a tool/config imports.
  */
 import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
-import { resolveWorkspace } from "../../engines/pi/config.ts";
+import { resolvePlacement } from "../../engines/pi/config.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { log, setLogLevel } from "../../log.ts";
@@ -29,7 +29,7 @@ export interface DevOptions {
 
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const ws = failStartupOn(() => resolveWorkspace(dir));
+  const ws = failStartupOn(() => resolvePlacement(dir));
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
   // Pick a model interactively once, in the parent (both watch and --no-watch have a TTY); a spawned
@@ -37,9 +37,9 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   // the proxy FIRST (as invoke/start do): the picker reads FASTAGENT_MODEL and provider keys from
   // .env, and getAuth's OAuth refresh must go through HTTPS_PROXY. The worker re-loads both in serveOnce.
   if (!isWorker) {
-    loadDotEnv(ws.root);
+    loadDotEnv(ws.agentDir);
     installProxyFetch();
-    await resolveFirstRunModel(ws.root, opts);
+    await resolveFirstRunModel(ws.agentDir, opts);
   }
   if (isWorker || opts.watch === false) {
     await serveOnce(dir, opts);
@@ -49,10 +49,10 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   await runDevSupervisor(dir, { tunnel: opts.tunnel ?? false });
 }
 
-/** Assemble the workspace agent and serve it once (the dev worker; also the --no-watch path). */
+/** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
 async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
-  loadDotEnv(failStartupOn(() => resolveWorkspace(dir)).root);
+  loadDotEnv(failStartupOn(() => resolvePlacement(dir)).agentDir);
   installProxyFetch();
 
   const a = await createPiAgentFromWorkspace(dir, {
@@ -60,8 +60,8 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
-  log.info(`[fastagent] workspace: ${a.root}`);
-  log.info(`[fastagent] workbench: ${a.workbench}`);
+  log.info(`[fastagent] agent:     ${a.agentDir}`);
+  log.info(`[fastagent] workspace: ${a.workspace}`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
   log.info(
     `[fastagent] model:  ${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`,
@@ -71,15 +71,15 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
-  const routed = await routesFor(a.root, traced, a.stateRoot, a.sessionControl).catch(failStartup);
+  const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl).catch(failStartup);
   const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent
   });
-  await startSchedules(a.root, traced, a.stateRoot, a.config.selfSchedule ?? false);
+  await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
   serve({ ...routed, routes: withControl.routes }, portFlag ?? a.config.http?.port ?? 8787, (p) => {
     withControl.announce(p);
-    maybeTunnel(a.root, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
+    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
   });
 }
 

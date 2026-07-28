@@ -77,24 +77,24 @@ export async function reportAuth(modelSpec: string, authPath: string): Promise<v
  * already set; on a non-TTY (CI, a piped stdin), with `--no-input`, on cancel, or on a failed login
  * it stays quiet and lets the caller raise its own clear error (`missing model`, or deploy's
  * model-travel gate). The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it,
- * and best-effort written back to the config so the next run is quiet. `workspaceDir` is the resolved
- * workspace ROOT (resolveWorkspace().root) — config and auth both live there.
+ * and best-effort written back to the config so the next run is quiet. `agentDir` is the resolved
+ * AGENT DIR (resolvePlacement().agentDir) — config and auth both live there.
  */
 export async function resolveFirstRunModel(
-  workspaceDir: string,
+  agentDir: string,
   options: { model?: string; authPath?: string; input?: boolean } = {},
 ): Promise<void> {
-  const { config, path: configPath } = await loadConfig(workspaceDir).catch(failStartup);
+  const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   if (resolveModelSpec(options.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
   if (options.input === false) return; // --no-input: never prompt (clig) — the opener raises the clear error
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
-  const authPath = resolveAuthPath(workspaceDir, options.authPath);
+  const authPath = resolveAuthPath(agentDir, options.authPath);
   const models = createPiModels({ authPath });
-  const chosen = await pickWithCredentials(workspaceDir, models, authPath);
+  const chosen = await pickWithCredentials(agentDir, models, authPath);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
-  await persistModelChoice(workspaceDir, configPath, chosen);
+  await persistModelChoice(agentDir, configPath, chosen);
 }
 
 /**
@@ -103,11 +103,7 @@ export async function resolveFirstRunModel(
  * independent of credentials), or the inline login for the rest. Returns the chosen spec, or
  * undefined when the pick should be discarded (picker cancel, login cancel, a failed auth probe).
  */
-async function pickWithCredentials(
-  workspaceDir: string,
-  models: Models,
-  authPath: string,
-): Promise<string | undefined> {
+async function pickWithCredentials(agentDir: string, models: Models, authPath: string): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
@@ -144,8 +140,8 @@ async function pickWithCredentials(
 
   // Inline login. Same leak guard as `login`: self-ignore the secrets dir BEFORE a credential
   // can land in-tree, so the secret is never untracked-but-committable.
-  const secretsDir = resolveSecretsDir(workspaceDir);
-  if (isUnderDir(authPath, secretsDir)) await ensureSecretsDirSelfIgnored(workspaceDir, secretsDir);
+  const secretsDir = resolveSecretsDir(agentDir);
+  if (isUnderDir(authPath, secretsDir)) await ensureSecretsDirSelfIgnored(agentDir, secretsDir);
   try {
     // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
     // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.
@@ -262,7 +258,7 @@ function terminalLoginIO(): LoginIO {
  * scaffold-shaped config (the hand-deleted-to-reset case); anything else (zero-config, a hand-shaped
  * config) is left untouched with a printed hint. Never throws — persistence is a convenience.
  */
-async function persistModelChoice(workspaceDir: string, configPath: string | undefined, spec: string): Promise<void> {
+async function persistModelChoice(agentDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>
     console.error(
       // No "using it for this run" promise: deploy's model-travel gate rightly ignores the un-persisted pick.
@@ -273,7 +269,7 @@ async function persistModelChoice(workspaceDir: string, configPath: string | und
     const replaced = rewriteConfigModel(await readFile(configPath, "utf8"), spec);
     if (!replaced) return hint();
     await writeFile(configPath, replaced);
-    console.error(`[fastagent] saved model ${JSON.stringify(spec)} to ${relative(workspaceDir, configPath)}`);
+    console.error(`[fastagent] saved model ${JSON.stringify(spec)} to ${relative(agentDir, configPath)}`);
   } catch {
     hint();
   }

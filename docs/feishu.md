@@ -24,14 +24,14 @@ Feishu and Lark international are **one protocol on two clouds**—and each rema
 **Feishu is the reference implementation.** Lark international reuses Feishu's event format, crypto,
 cards, and turn engine through a compatibility profile, while degrading control-plane capabilities
 that lag behind the primary cloud (currently app creation and application-config/webhook automation).
-A tenant lives on exactly one cloud — pick the matching kind. One workspace can mount **both** (two
+A tenant lives on exactly one cloud — pick the matching kind. One agent can mount **both** (two
 apps, two credential sets); they never share state.
 
 Both ingress modes feed the same request/reply engine: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (an interactive card), so code blocks, tables, and links render properly.
 
 ## Add the channel
 
-From an agent workspace, credentials land in `.secrets/.env` — the CLI makes the `.secrets/` dir self-gitignore before writing, so no ignore setup is needed; both
+From an agent directory, credentials land in `.secrets/.env` — the CLI makes the `.secrets/` dir self-gitignore before writing, so no ignore setup is needed; both
 commands refuse to write platform credentials into a committable file:
 
 ```bash
@@ -126,7 +126,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
    - **Webhook:** choose webhook, copy the Verification Token, and optionally set an Encrypt Key.
-4. Put the matching credentials in the workspace `.secrets/.env`:
+4. Put the matching credentials in the agent's `.secrets/.env`:
 
 ```bash
 # Both modes

@@ -13,7 +13,7 @@ import {
   type Routes,
 } from "../../host/node.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
-import { assertInsideWorkspace } from "../../workspace.ts";
+import { assertInsideAgentDir } from "../../paths.ts";
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
 export interface ChannelCollision {
@@ -48,7 +48,7 @@ export async function inspectChannels(dir: string): Promise<{
   longConnectionChannels: string[];
   failures: ModuleLoadFailure[];
 }> {
-  await assertInsideWorkspace(dir, "channels");
+  await assertInsideAgentDir(dir, "channels");
   const { modules, failures } = await loadModuleDir(join(dir, "channels"));
   const channels: string[] = [];
   const routeChannels: string[] = [];
@@ -79,7 +79,7 @@ export async function inspectChannels(dir: string): Promise<{
  * WITHOUT importing. A symlinked channels directory must remain inside the workspace.
  */
 export async function discoverChannelFiles(dir: string): Promise<string[]> {
-  await assertInsideWorkspace(dir, "channels");
+  await assertInsideAgentDir(dir, "channels");
   let names: string[];
   try {
     names = await readdir(join(dir, "channels"));
@@ -127,7 +127,7 @@ export async function loadChannels(
   if (!isAbsolute(ctx.stateRoot)) {
     throw new Error(`ChannelContext.stateRoot must be absolute, got "${ctx.stateRoot}"`);
   }
-  await assertInsideWorkspace(dir, "channels");
+  await assertInsideAgentDir(dir, "channels");
   const { modules, failures } = await loadModuleDir(join(dir, "channels"));
   const routes: Routes = {};
   const longConnections: LoadedLongConnectionChannel[] = [];

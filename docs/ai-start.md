@@ -16,7 +16,7 @@ Inspect the project first, preserve anything that already exists, and make the s
 
 Decide which job this is before touching anything:
 
-1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory) — the workspace lands in `./fastagent/`, the rest of the directory is the agent's workbench — then flesh out `persona.md`, skills, and tools from what the user wants.
+1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory) — the workspace lands in `./fastagent/`, the rest of the directory is the agent's workspace — then flesh out `persona.md`, skills, and tools from what the user wants.
 2. **An agent for an existing directory.** The directory holds what the agent works on or with: `AGENTS.md`, markdown context, a codebase — or just the projects the agent should manage (a parent directory of repos counts). Do not restructure it: run `fastagent init` in place; the whole workspace nests into `./fastagent/` and the host tree gets zero writes; an existing `AGENTS.md` is read as project context.
 3. **Embed an agent into an existing application (library path).** The project is an app that should serve the agent from its own route: initialize the same way, then mount the agent with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
 
@@ -25,23 +25,23 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 ## Mental model
 
 - The directory is the agent: optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, markdown context, and `AGENTS.md` for project context.
-- An `AGENTS.md` does not make a directory a FastAgent workspace. A `fastagent.config.*` file does.
+- An `AGENTS.md` does not make a directory a FastAgent agent. A `fastagent.config.*` file does.
 - FastAgent can run the directory locally, embed it in an app, connect it to GitHub, Telegram, or Slack, expose it over HTTP, or put it behind a custom channel.
 - Do not invent a new project layout unless the user asks. Prefer the existing directory.
 
 ## Inspect before changing anything
 
-1. Check whether `fastagent.config.*` exists at the directory root or under `./fastagent/`. If it does, the directory is already a workspace.
-2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the workspace root (`./fastagent/` by default; the directory itself for a `--flat` workspace).
-3. If code tools are present, check whether the workspace `package.json` sets `"type": "module"`.
-4. Ask before choosing a model provider, adding credentials, or moving an existing workspace.
+1. Check whether `fastagent.config.*` exists at the directory root or under `./fastagent/`. If it does, the directory is already an agent.
+2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` in the agent dir (`./fastagent/` by default; the directory itself for a `--flat` agent).
+3. If code tools are present, check whether the agent's `package.json` sets `"type": "module"`.
+4. Ask before choosing a model provider, adding credentials, or moving an existing agent.
 
 ## Handle authentication and models explicitly
 
 You are non-interactive, so do not rely on prompts you cannot answer.
 
 - A model must be explicit. Without one, `dev`, `start`, `invoke`, `fire`, and `chat` open a picker on a TTY and fail in a non-TTY with `missing model`. `deploy` also opens the picker on a TTY, but non-interactively it does NOT say `missing model`: plan mode warns, and `--run` stops at the model-travel gate ("no model in fastagent.config.ts").
-- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the workspace; it writes the project-level `.secrets/auth.json`, and credentials written in another directory are not visible here.
+- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the agent dir; it writes the project-level `.secrets/auth.json`, and credentials written in another directory are not visible here.
 - Alternatively, ask the user for a provider API key and put it in `.env` only with permission.
 - List available specifications with `fastagent models`.
 - Always pass `--model provider/id`, set `FASTAGENT_MODEL`, or write `model` in `fastagent.config.*`.
@@ -68,7 +68,7 @@ Run:
 fastagent init <dir>
 ```
 
-Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory (the workbench), project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. `init` itself nests the workspace into `./fastagent/`; the surrounding directory stays the agent's workbench.
+Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory (the workspace), project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. `init` itself nests the workspace into `./fastagent/`; the surrounding directory stays the agent's workspace.
 
 The default directory is the current directory. `init`:
 
@@ -77,7 +77,7 @@ The default directory is the current directory. `init`:
 - keeps an existing `AGENTS.md` as project context;
 - refuses a directory that already has `fastagent.config.*` (at either root) or a non-empty `./fastagent/`.
 
-`--flat` lands the workspace directly in the directory instead — use it only when the directory is ITSELF the agent (a standalone agent dir, a monorepo package). The placement is structural (the `fastagent/` directory name is the marker, never configured); to change it later, move the workspace files between the root and `./fastagent/`. Because that name is the marker, `--flat` into a directory named `fastagent` is refused — it would resolve as nested and serve with the parent as the workbench.
+`--flat` lands the agent directly in the directory instead — use it only when the directory is ITSELF the agent (a standalone agent dir, a monorepo package). The placement is structural (the `fastagent/` directory name is the marker, never configured); to change it later, move the workspace files between the root and `./fastagent/`. Because that name is the marker, `--flat` into a directory named `fastagent` is refused — it would resolve as nested and serve with the parent as the workspace.
 
 Then run:
 

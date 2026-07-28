@@ -18,7 +18,7 @@ export const baseTemplate = (name: string): string =>
 export function personaTemplate(nested = false): string {
   const base = baseTemplate("persona.md");
   if (!nested) return base;
-  return `${base}\nNote: your whole definition lives in \`fastagent/\` at the workbench root — this file is \`fastagent/persona.md\`, and a new skill goes to \`fastagent/skills/<name>/SKILL.md\` (a \`skills/\` outside \`fastagent/\` is not scanned). Everything OUTSIDE \`fastagent/\` is the project you work on, not your definition.\n`;
+  return `${base}\nNote: your whole definition lives in \`fastagent/\` at the root of your workspace — this file is \`fastagent/persona.md\`, and a new skill goes to \`fastagent/skills/<name>/SKILL.md\` (a \`skills/\` outside \`fastagent/\` is not scanned). Everything OUTSIDE \`fastagent/\` is the project you work on, not your definition.\n`;
 }
 
 const channelScaffoldDir = (kind: string): URL => new URL(`../channels/${kind}/scaffold/`, import.meta.url);

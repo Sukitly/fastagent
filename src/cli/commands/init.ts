@@ -1,6 +1,6 @@
 /**
  * `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. Placement is not a
- * decision: the workspace goes into `./fastagent/` (the host tree gets zero writes); `--flat` lands it
+ * decision: the agent goes into `./fastagent/` (the surrounding tree gets zero writes); `--flat` lands it
  * directly in the directory instead (for a directory that IS the agent — a standalone agent dir, a
  * monorepo package). Deliberately no detection and no prompt — non-interactive executors (coding
  * agents) get ONE deterministic behavior they can read and override.
@@ -19,13 +19,13 @@ export interface InitOptions {
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const { complete, root, created, skipped, patched, warnings } = await scaffoldWorkspace(dir, {
+  const { complete, agentDir, created, skipped, patched, warnings } = await scaffoldWorkspace(dir, {
     minimal: opts.minimal,
     flat: opts.flat,
   }).catch(failStartup);
-  const nested = root !== ".";
+  const nested = agentDir !== ".";
   console.error(
-    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}${nested ? ` — workspace in ./${root}/` : ""}`,
+    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}${nested ? ` — workspace in ./${agentDir}/` : ""}`,
   );
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
@@ -33,13 +33,13 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
 
   // Install deps only for a complete agent whose package.json we just wrote (a kept one is not ours).
-  // The manifest lives at the workspace root (./fastagent by default), so the install runs there —
+  // The manifest lives in the agent dir (./fastagent by default), so the install runs there —
   // never against a host repo's own package.json.
-  const rootDir = resolve(dir, root);
-  const willInstall = complete && opts.install && created.includes(join(root, "package.json"));
+  const rootDir = resolve(dir, agentDir);
+  const willInstall = complete && opts.install && created.includes(join(agentDir, "package.json"));
   let installFailed = false;
   if (willInstall) {
-    console.error(`[fastagent] installing dependencies (npm install${nested ? ` in ${root}` : ""})…`);
+    console.error(`[fastagent] installing dependencies (npm install${nested ? ` in ${agentDir}` : ""})…`);
     installFailed = (await npmInstall(rootDir)) !== 0;
     if (installFailed)
       console.error(`[fastagent] warn: npm install failed — run it manually in ${rootDir} before \`fastagent dev\``);
@@ -49,7 +49,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const cdTarget = nextStepCd(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (complete && (!opts.install || installFailed))
-    console.error(`    ${nested ? `(cd ${root} && npm install)` : "npm install"}`);
+    console.error(`    ${nested ? `(cd ${agentDir} && npm install)` : "npm install"}`);
   console.error(`    fastagent dev   # serve locally and iterate`);
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }

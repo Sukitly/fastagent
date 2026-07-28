@@ -215,10 +215,10 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("resolves the nested placement: persona/tools from fastagent/, ② context walked from the workbench", async () => {
+  it("resolves the nested placement: persona/tools from fastagent/, ② context walked from the workspace", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-chat-nested-"));
     try {
-      await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workbench
+      await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workspace
       const root = join(dir, "fastagent");
       await mkdir(join(root, "tools"), { recursive: true });
       await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
@@ -232,7 +232,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
       try {
         const sp = rt.session.agent.state.systemPrompt ?? "";
         expect(sp).toContain("PERSONA_MARKER"); // ① persona from the workspace root
-        expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from the workbench
+        expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from the workspace
         expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from the workspace root
       } finally {
         rt.session.dispose?.();

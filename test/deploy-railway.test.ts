@@ -33,7 +33,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
       "fastagent/railway.json",
     ]);
     const cfg = JSON.parse(p.artifacts.find((a) => a.path === "fastagent/railway.json")?.content ?? "{}");
-    expect(cfg.build.dockerfilePath).toBe("fastagent/Dockerfile"); // relative to the workbench upload context
+    expect(cfg.build.dockerfilePath).toBe("fastagent/Dockerfile"); // relative to the workspace upload context
     // The BUILD entry is a scriptable service variable (pointing Railway at the namespaced config file
     // is dashboard-only) — set in the same variables step as the machinery knobs, before the first up.
     expect(runbook(p)).toMatch(

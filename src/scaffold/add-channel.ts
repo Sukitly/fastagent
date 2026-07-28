@@ -7,7 +7,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { assertInsideWorkspace } from "../workspace.ts";
+import { assertInsideAgentDir } from "../paths.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
@@ -369,7 +369,7 @@ export async function scaffoldChannel(
 ): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
-  await assertInsideWorkspace(dir, "channels");
+  await assertInsideAgentDir(dir, "channels");
   const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);

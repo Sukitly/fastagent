@@ -14,7 +14,7 @@ import {
   resolveSecretsDir,
   resolveSessionsDirOverride,
   resolveStateRoot,
-  resolveWorkspace,
+  resolvePlacement,
 } from "../src/engines/pi/config.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
@@ -49,31 +49,31 @@ describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bu
   });
 });
 
-describe("config: resolveWorkspace (structural placement resolution)", () => {
-  it("flat: a config at the dir root → root = workbench = dir", async () => {
+describe("config: resolvePlacement (structural placement resolution)", () => {
+  it("flat: a config at the dir root → root = workspace = dir", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-flat-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
-    const ws = resolveWorkspace(dir);
-    expect(ws.root).toBe(dir);
-    expect(ws.workbench).toBe(dir);
+    const ws = resolvePlacement(dir);
+    expect(ws.agentDir).toBe(dir);
+    expect(ws.workspace).toBe(dir);
   });
 
-  it("nested: a config in ./fastagent/ → root = the nested dir, workbench = the host dir", async () => {
+  it("nested: a config in ./fastagent/ → root = the nested dir, workspace = the host dir", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-nested-"));
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
-    const ws = resolveWorkspace(dir);
-    expect(ws.root).toBe(join(dir, "fastagent"));
-    expect(ws.workbench).toBe(dir);
-    // Invoked from INSIDE the nested root: the SAME workspace resolves (workbench = the parent).
-    const inner = resolveWorkspace(join(dir, "fastagent"));
+    const ws = resolvePlacement(dir);
+    expect(ws.agentDir).toBe(join(dir, "fastagent"));
+    expect(ws.workspace).toBe(dir);
+    // Invoked from INSIDE the nested root: the SAME workspace resolves (workspace = the parent).
+    const inner = resolvePlacement(join(dir, "fastagent"));
     expect(inner).toEqual(ws);
   });
 
   it("zero-config: no config anywhere → flat (a directory is an agent)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-zero-"));
-    const ws = resolveWorkspace(dir);
-    expect(ws).toEqual({ root: dir, workbench: dir });
+    const ws = resolvePlacement(dir);
+    expect(ws).toEqual({ agentDir: dir, workspace: dir });
   });
 
   it("a config at BOTH roots is ambiguous → throws IDENTICALLY from both entry points", async () => {
@@ -81,10 +81,10 @@ describe("config: resolveWorkspace (structural placement resolution)", () => {
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
-    expect(() => resolveWorkspace(dir)).toThrow(/ambiguous/);
+    expect(() => resolvePlacement(dir)).toThrow(/ambiguous/);
     // Entry-point-invariant: invoked from INSIDE fastagent/, the same conflict must refuse the same
     // way — never silently resolve nested just because of where the command ran.
-    expect(() => resolveWorkspace(join(dir, "fastagent"))).toThrow(/ambiguous/);
+    expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/ambiguous/);
   });
 
   it("a config-less fastagent/ that READS as a workspace fails loudly (never a silent flat downgrade)", async () => {
@@ -93,16 +93,16 @@ describe("config: resolveWorkspace (structural placement resolution)", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-configless-"));
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
-    expect(() => resolveWorkspace(dir)).toThrow(/fastagent\.config.*fastagent init/s);
+    expect(() => resolvePlacement(dir)).toThrow(/fastagent\.config.*fastagent init/s);
     // Same refusal from inside the directory.
-    expect(() => resolveWorkspace(join(dir, "fastagent"))).toThrow(/fastagent\.config.*fastagent init/s);
+    expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/fastagent\.config.*fastagent init/s);
   });
 
   it("a fastagent/ that does NOT read as a workspace stays zero-config flat (a directory is an agent)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-unrelated-"));
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "notes.txt"), "unrelated\n");
-    expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir });
+    expect(resolvePlacement(dir)).toEqual({ agentDir: dir, workspace: dir });
   });
 
   it("a package.json alone does NOT make a fastagent/ read as a workspace (an unrelated clone/package)", async () => {
@@ -112,10 +112,10 @@ describe("config: resolveWorkspace (structural placement resolution)", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-pkgonly-"));
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "package.json"), "{}\n");
-    expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir });
-    expect(resolveWorkspace(join(dir, "fastagent"))).toEqual({
-      root: join(dir, "fastagent"),
-      workbench: join(dir, "fastagent"),
+    expect(resolvePlacement(dir)).toEqual({ agentDir: dir, workspace: dir });
+    expect(resolvePlacement(join(dir, "fastagent"))).toEqual({
+      agentDir: join(dir, "fastagent"),
+      workspace: join(dir, "fastagent"),
     });
   });
 });

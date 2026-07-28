@@ -1,7 +1,7 @@
 /**
  * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
- * (`<workspaceRoot>/.secrets/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`. The
- * positional is the PROVIDER (not a dir), so the workspace resolves from cwd — `cd` into your agent
+ * (`<agentDir>/.secrets/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`. The
+ * positional is the PROVIDER (not a dir), so the agent resolves from cwd — `cd` into your agent
  * before logging in (running it from $HOME writes the global `~/.fastagent/.secrets/auth.json`).
  *
  * Creates and self-ignores `<root>/.secrets/` (the credential's gitignored home) BEFORE the auth flow,
@@ -9,7 +9,7 @@
  * empty secrets dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
 import { loadDotEnv } from "../../env.ts";
-import { resolveAuthPath, resolveSecretsDir, resolveWorkspace } from "../../engines/pi/config.ts";
+import { resolveAuthPath, resolveSecretsDir, resolvePlacement } from "../../engines/pi/config.ts";
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -23,7 +23,7 @@ export interface LoginOptions {
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
-  const { root: loginDir } = failStartupOn(() => resolveWorkspace(process.cwd()));
+  const { agentDir: loginDir } = failStartupOn(() => resolvePlacement(process.cwd()));
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const secretsDir = resolveSecretsDir(loginDir);

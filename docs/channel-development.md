@@ -6,7 +6,7 @@ status: current
 
 # Channel development
 
-This guide is for developers building a new FastAgent channel adapter, either inside one workspace (`channels/<name>.ts`) or as a reusable package such as `fastagent-channel-acme`.
+This guide is for developers building a new FastAgent channel adapter, either inside one agent (`channels/<name>.ts`) or as a reusable package such as `fastagent-channel-acme`.
 
 A channel is an ingress adapter. It receives an external event, decides whether to invoke the agent, and returns an HTTP response appropriate for that external system.
 
@@ -19,15 +19,15 @@ Every channel has two layers:
 | Layer | Owner | Example |
 |---|---|---|
 | Adapter | reusable package or first-party module | verify signature, parse body, ACK/retry rules, SDK calls |
-| Glue | the agent workspace | map an event to a session and prompt |
+| Glue | the agent | map an event to a session and prompt |
 
 For first-party channels, the adapter is `@fastagent-sh/fastagent/github`, `@fastagent-sh/fastagent/telegram`, `@fastagent-sh/fastagent/slack`, `@fastagent-sh/fastagent/feishu`, or `@fastagent-sh/fastagent/lark`, and the glue is the scaffolded `channels/*.ts` file.
 
-For a community channel, publish the adapter as a separate package and keep the user's glue in their workspace.
+For a community channel, publish the adapter as a separate package and keep the user's glue in their agent.
 
 ## Workspace discovery
 
-A workspace channel is a module in `channels/` that default-exports either a route `ChannelModule` or a `LongConnectionChannelModule`. Route form:
+An agent channel is a module in `channels/` that default-exports either a route `ChannelModule` or a `LongConnectionChannelModule`. Route form:
 
 ```ts
 import type { ChannelModule } from "@fastagent-sh/fastagent/core";
@@ -212,7 +212,7 @@ A reusable channel package should normally look like:
 }
 ```
 
-The user's workspace installs the adapter and wires it in `channels/acme.ts`:
+The user's agent installs the adapter and wires it in `channels/acme.ts`:
 
 ```ts
 import { acmeChannel } from "fastagent-channel-acme";
@@ -223,7 +223,7 @@ export default acmeChannel({
 });
 ```
 
-Keep workspace-specific policy in the user's `channels/*.ts`; keep transport mechanics in the adapter package.
+Keep agent-specific policy in the user's `channels/*.ts`; keep transport mechanics in the adapter package.
 
 ## Testing guidance
 

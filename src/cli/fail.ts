@@ -24,7 +24,7 @@ export function failStartup(error: unknown): never {
 
 /**
  * Run a SYNC startup step under the startup-failure policy — the synchronous sibling of the
- * `.catch(failStartup)` every async chain carries. Layout resolution (`resolveWorkspace`) runs before
+ * `.catch(failStartup)` every async chain carries. Layout resolution (`resolvePlacement`) runs before
  * any promise exists; a bare call would surface its user-fixable refusal (the ambiguous-layout error)
  * as a raw uncaught stack instead of the one-line `Error:` + exit 1 every other startup problem gets.
  */

@@ -98,7 +98,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("sk-");
   });
 
-  it("namespaces nested artifacts under fastagent/ and builds from the workbench root", () => {
+  it("namespaces nested artifacts under fastagent/ and builds from the workspace root", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: undefined,
@@ -114,7 +114,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(plan.composePath).toBe("fastagent/fastagent.compose.yml");
     expect(compose(plan)).toContain("context: ..");
     expect(compose(plan)).toContain("dockerfile: fastagent/Dockerfile");
-    expect(runbook(plan)).toContain("run from the WORKBENCH ROOT");
+    expect(runbook(plan)).toContain("run from the WORKSPACE ROOT");
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {

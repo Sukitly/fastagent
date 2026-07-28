@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveSecretsDir } from "./workspace.ts";
+import { resolveSecretsDir } from "./paths.ts";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -41,33 +41,33 @@ export function parseEnvContent(content: string): Map<string, string> {
   return parsed;
 }
 
-/** The workspace `.env` file: `<resolved secrets dir>/.env` — default `<workspaceRoot>/.secrets/.env`,
+/** The agent's `.env` file: `<resolved secrets dir>/.env` — default `<agentDir>/.secrets/.env`,
  *  moved together with auth.json by `FASTAGENT_SECRETS_DIR` ({@link resolveSecretsDir} in the neutral
- *  workspace.ts). THE path every reader/writer of the workspace .env must use, so "where do secrets
+ *  paths.ts). THE path every reader/writer of the agent's .env must use, so "where do secrets
  *  live" cannot diverge across commands. The file's OWN location resolves from the REAL environment:
  *  commands locate + load `.env` first, so a `FASTAGENT_SECRETS_DIR` set INSIDE it still relocates
  *  auth.json but cannot move the file it is read from. */
-export function dotEnvPath(root: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveSecretsDir(root, env), ".env");
+export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(resolveSecretsDir(agentDir, env), ".env");
 }
 
-/** The committable template: `<workspaceRoot>/.secrets/.env.example` — deliberately NOT moved by
- *  `FASTAGENT_SECRETS_DIR`: the template is authored, committable workspace surface (un-ignored by the
- *  `.secrets/.gitignore` the scaffold writes, so it travels with the workspace while real values never
+/** The committable template: `<agentDir>/.secrets/.env.example` — deliberately NOT moved by
+ *  `FASTAGENT_SECRETS_DIR`: the template is authored, committable agent surface (un-ignored by the
+ *  `.secrets/.gitignore` the scaffold writes, so it travels with the agent while real values never
  *  do); only the real `.env` follows the override. */
-export function envExamplePath(root: string): string {
-  return join(root, ".secrets", ".env.example");
+export function envExamplePath(agentDir: string): string {
+  return join(agentDir, ".secrets", ".env.example");
 }
 
 /**
- * Load the workspace `.env` ({@link dotEnvPath}) into `process.env` ({@link loadEnvFile}), treating a
- * MISSING file as normal (no .env) — the workspace-facing entry every command + the tunnel use. `root`
- * is the workspace ROOT (resolveWorkspace().root). Only ENOENT is swallowed; any other read error (a
+ * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link loadEnvFile}), treating a
+ * MISSING file as normal (no .env) — the agent-facing entry every command + the tunnel use. `agentDir`
+ * is the AGENT DIR (resolvePlacement().agentDir). Only ENOENT is swallowed; any other read error (a
  * corrupt/unreadable file) propagates, so a real problem surfaces instead of silently skipping.
  */
-export function loadDotEnv(root: string): void {
+export function loadDotEnv(agentDir: string): void {
   try {
-    loadEnvFile(dotEnvPath(root));
+    loadEnvFile(dotEnvPath(agentDir));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

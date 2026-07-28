@@ -56,7 +56,7 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
  * existing win), plus the non-default tool names and collisions to report. One source for the
  * dev/start openers AND `fastagent tool`, so they all mount exactly the same set.
  */
-export async function resolveWorkspaceTools(
+export async function resolveAgentTools(
   config: FastagentConfig,
   root: string,
   cwd: string = root,
@@ -69,7 +69,7 @@ export async function resolveWorkspaceTools(
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
-  // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the workbench the agent operates
+  // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the workspace the agent operates
   // on); discovered `tools/` come from `root` (the workspace's own surface). They coincide when flat.
   const discovered = await loadTools(root);
   const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent workspace: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.*."
+description: "Configure a FastAgent agent: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.*."
 status: current
 ---
 
@@ -10,11 +10,11 @@ FastAgent keeps behavior and deployment choices separate:
 
 - agent behavior lives in `persona.md` (identity), `skills/`, `tools/`, and `AGENTS.md` project context,
 - deployment choices live in `fastagent.config.*`, CLI flags, and environment variables,
-- secrets live in `<workspace>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
+- secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
 ## Config file
 
-A workspace may contain exactly one config file:
+An agent may contain exactly one config file:
 
 ```txt
 fastagent.config.ts
@@ -89,9 +89,9 @@ FastAgent resolves model credentials through the model provider layer. Common op
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<workspace>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global `~/.fastagent/.secrets/auth.json`). |
+| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global `~/.fastagent/.secrets/auth.json`). |
 | Provider env vars | Good for servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
-| Workspace `.env` | Local development secrets at `<workspace>/.secrets/.env`, loaded by CLI commands. The `.secrets/` dir self-gitignores. |
+| Workspace `.env` | Local development secrets at `<agent dir>/.secrets/.env`, loaded by CLI commands. The `.secrets/` dir self-gitignores. |
 
 Do not commit `.env` or provider credentials.
 
@@ -115,12 +115,12 @@ Use `PORT` in hosted environments that inject a port.
 
 ## Machinery: `.state/` and `.secrets/`
 
-The workspace carries two fastagent-managed machinery dirs, split by deploy lifecycle:
+The agent carries two fastagent-managed machinery dirs, split by deploy lifecycle:
 
-- `<workspace>/.state/` — **mutable machine state**: sessions, channel state (`channels/<kind>/`),
+- `<agent dir>/.state/` — **mutable machine state**: sessions, channel state (`channels/<kind>/`),
   schedule state. Precious, single-process, must survive a redeploy → a container points it at a
   volume.
-- `<workspace>/.secrets/` — **secrets**: the workspace `.env` and the project-level `auth.json`.
+- `<agent dir>/.secrets/` — **secrets**: the agent's `.env` and the project-level `auth.json`.
   Never committed (the dir self-gitignores; only `.env.example` travels), never baked into an image —
   a deployed box gets values through the host's secret store, and its seeded (possibly rotated)
   `auth.json` also lives on the volume so refresh survives restarts.
@@ -134,24 +134,24 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 The finer knobs still override their specific path on top:
 
 ```txt
-state root: FASTAGENT_STATE_DIR                          > <workspace>/.state
-secrets:    FASTAGENT_SECRETS_DIR                        > <workspace>/.secrets
+state root: FASTAGENT_STATE_DIR                          > <agent dir>/.state
+secrets:    FASTAGENT_SECRETS_DIR                        > <agent dir>/.secrets
 sessions:   --sessions-dir > FASTAGENT_SESSIONS_DIR      > <state root>/sessions
 auth:       --auth-path    > FASTAGENT_AUTH_PATH         > <secrets>/auth.json
 ```
 
 A leading `~` in any of these is expanded to your home dir.
 
-`FASTAGENT_SECRETS_DIR` moves both the workspace `.env` and `auth.json`. The `.env`'s own location
+`FASTAGENT_SECRETS_DIR` moves both the agent's `.env` and `auth.json`. The `.env`'s own location
 resolves from the real environment — a `FASTAGENT_SECRETS_DIR` set *inside* `.env` still relocates
 `auth.json` but cannot move the file it is read from. The committable `.env.example` template always
-stays at `<workspace>/.secrets/.env.example`.
+stays at `<agent dir>/.secrets/.env.example`.
 
 ## Tools
 
 There are two ways to add tools:
 
-1. Files under `tools/` — recommended for workspace authors.
+1. Files under `tools/` — recommended for agent authors.
 2. `config.tools` — programmatic injection for advanced embedding/config use.
 
 `tools/` files are auto-discovered. The filename is the tool name:
@@ -177,12 +177,12 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ### When the repo already owns `tools/` or `channels/`
 
-Nothing to do — the default placement (the whole workspace in `./fastagent/`) means FastAgent scans
-the workspace's own directories, never the host repo's names (the placement is structural — the
-`fastagent/` directory is the marker, nothing is configured). Only a `--flat` workspace scans the
-directory root itself. Within the workspace, a broken tool is reported and skipped, while
+Nothing to do — the default placement (the whole agent in `./fastagent/`) means FastAgent scans
+the agent's own directories, never the host repo's names (the placement is structural — the
+`fastagent/` directory is the marker, nothing is configured). Only a `--flat` agent scans the
+directory root itself. Within the agent, a broken tool is reported and skipped, while
 a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
-programmatic tools outside the workspace, declare them with `config.tools`.
+programmatic tools outside the agent, declare them with `config.tools`.
 
 ## Channels
 

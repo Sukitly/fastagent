@@ -6,7 +6,7 @@
  */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolveWorkspace } from "../../engines/pi/config.ts";
+import { resolvePlacement } from "../../engines/pi/config.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
@@ -25,19 +25,19 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const fireDir = resolve(dirArg);
-  const ws = failStartupOn(() => resolveWorkspace(fireDir));
-  loadDotEnv(ws.root);
+  const ws = failStartupOn(() => resolvePlacement(fireDir));
+  loadDotEnv(ws.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(ws.root, opts);
-  // Schedules are workspace surface — discover them where dev/start/`schedule list` do (the workspace
+  await resolveFirstRunModel(ws.agentDir, opts);
+  // Schedules are agent surface — discover them where dev/start/`schedule list` do (the workspace
   // root), so `fire` sees the same set the scheduler serves for a nested root too.
-  const { schedules, failures } = await loadSchedules(ws.root).catch(failStartup);
+  const { schedules, failures } = await loadSchedules(ws.agentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
-    // Name the discovery path for a nested root: a schedule misplaced at the workbench root
+    // Name the discovery path for a nested root: a schedule misplaced at the workspace root
     // should read as "wrong place", not "broken file".
-    const looked = ws.root !== ws.workbench ? ` (looked in fastagent/schedules)` : "";
+    const looked = ws.agentDir !== ws.workspace ? ` (looked in fastagent/schedules)` : "";
     failStartup(
       new Error(
         `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,

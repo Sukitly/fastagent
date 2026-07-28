@@ -49,7 +49,7 @@ import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
-import { resolveWorkspaceAssembly } from "./workspace.ts";
+import { resolveAgentAssembly } from "./workspace.ts";
 
 /** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
 function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
@@ -127,8 +127,8 @@ export async function buildWorkspaceSessionRuntime(
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of fastagent's harness.
-    const { config, modelSpec, root, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
-      await resolveWorkspaceAssembly(cwd, options);
+    const { config, modelSpec, agentDir, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
+      await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth — the ModelRuntime-shaped sibling of
@@ -150,7 +150,7 @@ export async function buildWorkspaceSessionRuntime(
     }
     const model = resolveModel(modelRuntime, modelSpec);
     const env = new NodeExecutionEnv({ cwd });
-    const definition = await loadAgentDefinition(root, { cwd, env });
+    const definition = await loadAgentDefinition(agentDir, { cwd, env });
     reportDefinitionWarnings(definition.collisions, definition.diagnostics);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));

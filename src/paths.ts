@@ -13,15 +13,15 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import ignore, { type Ignore } from "ignore";
 
 /**
- * The fixed name of a nested workspace directory: `<host>/fastagent/`. Visible on purpose — the
- * workspace is the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it
+ * The fixed name of a nested agent directory: `<workspace>/fastagent/`. Visible on purpose — the
+ * agent directory holds the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it
  * follows the repo convention for code (a plain directory), while fastagent's own machinery inside it
  * (`.secrets/`, `.state/`) keeps the dot prefix.
  */
-export const WORKSPACE_DIR = "fastagent";
+export const AGENT_DIR = "fastagent";
 
 /** The user-global machinery home under `$HOME` — hidden, per the dotfile convention for per-user
- *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link WORKSPACE_DIR}, which names workspaces. */
+ *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link AGENT_DIR}, which names agent directories. */
 export const GLOBAL_HOME_DIR = ".fastagent";
 
 /**
@@ -38,7 +38,7 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
 }
 
 /**
- * The machinery home for a workspace root: the root itself — EXCEPT when the root is the user's HOME
+ * The machinery home for an agent dir: the dir itself — EXCEPT when it is the user's HOME
  * directory (`fastagent login` run from `~`): machinery then lives under the user-global
  * `~/.fastagent/` (so `~/.secrets` / `~/.state` are never created). The global home carries the same
  * unified shape inside it (`~/.fastagent/.secrets/auth.json` — GLOBAL_AUTH_PATH in auth.ts).
@@ -57,7 +57,7 @@ function machineryHome(dir: string): string {
 
 /**
  * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/,
- * control.json): `FASTAGENT_STATE_DIR` env > `<workspaceRoot>/.state`. Absolute, so channels and the
+ * control.json): `FASTAGENT_STATE_DIR` env > `<agentDir>/.state`. Absolute, so channels and the
  * startup report agree regardless of cwd. Definition: mutable runtime state — single lifecycle
  * (precious, survives redeploy), single process; a container points this at its mounted volume.
  * Secrets are NOT here — they live under {@link resolveSecretsDir} (a different deploy lifecycle:
@@ -73,7 +73,7 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
 
 /**
  * The resolved secrets dir — everything fastagent manages that must NEVER leave the machine (the
- * workspace `.env` + auth.json): `FASTAGENT_SECRETS_DIR` env > `<workspaceRoot>/.secrets`. Split from
+ * agent's `.env` + auth.json): `FASTAGENT_SECRETS_DIR` env > `<agentDir>/.secrets`. Split from
  * the state root on deploy lifecycle: secrets travel through the host's secret store (env vars / the
  * auth seed), state through a volume. A deployed box sets both env knobs at its volume (e.g.
  * `/data/.secrets`, `/data/.state`) so a seeded-then-ROTATED OAuth credential persists across
@@ -86,22 +86,22 @@ export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.
 }
 
 /**
- * Guard that `<workspaceDir>/<name>` resolves INSIDE the workspace — a symlink that escapes (or an
+ * Guard that `<agentDir>/<name>` resolves INSIDE the agent dir — a symlink that escapes (or an
  * absolute target) is rejected, so discovery/scaffolding never reaches out of the definition directory.
  * A missing target is fine (nothing to guard yet).
  */
-export async function assertInsideWorkspace(workspaceDir: string, name: string): Promise<void> {
-  const target = join(workspaceDir, name);
+export async function assertInsideAgentDir(agentDir: string, name: string): Promise<void> {
+  const target = join(agentDir, name);
   const real = await realpath(target).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "ENOENT" || e.code === "not_found") return undefined;
     throw e;
   });
   if (real === undefined) return;
-  const root = await realpath(workspaceDir).catch(() => resolve(workspaceDir));
+  const root = await realpath(agentDir).catch(() => resolve(agentDir));
   const rel = relative(root, real);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error(
-      `${target} resolves outside the workspace (${real}) — it must live inside the definition directory; ` +
+      `${target} resolves outside the agent dir (${real}) — it must live inside the definition directory; ` +
         `use a real directory or a symlink that stays within it`,
     );
   }

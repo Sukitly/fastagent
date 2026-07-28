@@ -1,6 +1,6 @@
 /**
  * The `fastagent dev` process supervisor: re-spawn the CLI as a worker (`FASTAGENT_DEV_WORKER=1`) and
- * restart it on debounced edits to the workspace's CODE inputs. Each restart is a fresh process
+ * restart it on debounced edits to the agent's CODE inputs. Each restart is a fresh process
  * (always-latest, no stale module cache). The supervisor never exits on a bad edit — the worker fails
  * loudly and it waits for the next save.
  *
@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { resolveStateRoot, resolveWorkspace } from "./engines/pi/config.ts";
+import { resolveStateRoot, resolvePlacement } from "./engines/pi/config.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
@@ -54,11 +54,11 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
 
 /** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
 export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
-  // The watch root is the WORKSPACE ROOT (structural — resolveWorkspace): every restart-relevant code
+  // The watch root is the WORKSPACE ROOT (structural — resolvePlacement): every restart-relevant code
   // input lives under it in both placements, so a nested root's host tree costs no watchers at all.
   // The placement is assumed STATIC for the dev session (creating/removing `fastagent/` mid-session
   // is out of scope for watch re-sync).
-  const ws = resolveWorkspace(dir);
+  const ws = resolvePlacement(dir);
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
@@ -86,10 +86,10 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(ws.root, t.url, {
+            void announceWebhooks(ws.agentDir, t.url, {
               openUrl: openExternalUrl,
               routeChannels: m.routeChannels,
-              stateRoot: resolveStateRoot(ws.root),
+              stateRoot: resolveStateRoot(ws.agentDir),
             });
           }
         });
@@ -125,9 +125,9 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
 
   // chokidar gives reliable cross-platform recursion + structural ignore that native fs.watch
   // cannot; devWatchIgnored (above) narrows the scope to the process-bound code inputs.
-  const watcher = watchTree(ws.root, {
+  const watcher = watchTree(ws.agentDir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(ws.root),
+    ignored: devWatchIgnored(ws.agentDir),
   });
   watcher.on("all", () => {
     clearTimeout(timer);

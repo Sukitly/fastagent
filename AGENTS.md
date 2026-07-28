@@ -36,9 +36,9 @@ src/
 ├── dev-supervisor.ts        # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
 ├── proxy.ts                 # HTTPS_PROXY wiring
 ├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
-├── runtime.ts               # workspace runtime/package-manager detection (node vs bun) + readPackageJson
+├── runtime.ts               # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts                # neutral ESM module discovery/loading for tools/ channels/ schedules/ config
-├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
+├── paths.ts, version.ts    # neutral helpers (AGENT_DIR + machinery paths, containment guard, ignore files, version)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
@@ -104,8 +104,8 @@ src/
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
-    ├── session-builder.ts   # definition-aware session builder: workspace assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
-    ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
+    ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
+    ├── workspace.ts         # shared opener: directory → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
     ├── tool.ts              # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
     ├── tool-context.ts      # ToolContext.session + tool-activation bridge via AsyncLocalStorage (set around the turn; read in execute — the wake/search_tools seam)

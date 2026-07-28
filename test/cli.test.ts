@@ -236,7 +236,7 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/available: daily/);
   });
 
-  it("fire discovers schedules from the nested workspace root (where the scheduler serves them), not the workbench", async () => {
+  it("fire discovers schedules from the nested workspace root (where the scheduler serves them), not the workspace", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-fire-nested-"));
     await mkdir(join(dir, "fastagent", "schedules"), { recursive: true });
     await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
@@ -381,7 +381,7 @@ describe("cli papercuts", () => {
   });
 
   it("an ambiguous workspace (config at BOTH roots) fails as a one-line startup error, not a raw stack", async () => {
-    // resolveWorkspace throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
+    // resolvePlacement throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
     // the failStartupOn wrapper the refusal surfaced as an uncaught stack trace (found in acceptance).
     const dir = await mkdtemp(join(tmpdir(), "fa-ambiguous-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");

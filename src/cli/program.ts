@@ -10,14 +10,18 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 
 // Shared flags — same name, same meaning, on every command that supports them (clig: consistency).
-const DIR_ARG = { name: "[dir]", description: "workspace directory", default: "." };
+const DIR_ARG = {
+  name: "[dir]",
+  description: "workspace directory (the agent is here, or in its ./fastagent/)",
+  default: ".",
+};
 const MODEL: FlagSpec = {
   flags: "--model <provider/modelId>",
   description: "model override (precedence: --model > FASTAGENT_MODEL > config)",
 };
 const AUTH_PATH: FlagSpec = {
   flags: "--auth-path <file>",
-  description: "credentials file (default: <workspace>/.secrets/auth.json; env: FASTAGENT_AUTH_PATH)",
+  description: "credentials file (default: <agent dir>/.secrets/auth.json; env: FASTAGENT_AUTH_PATH)",
 };
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
 const NO_INPUT: FlagSpec = {
@@ -46,7 +50,7 @@ const init: CommandSpec = {
   flags: [
     { flags: "--minimal", description: "persona.md + the example skill + config only (no code tool / package.json)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
-    { flags: "--flat", description: "land the workspace directly in dir (the directory IS the agent)" },
+    { flags: "--flat", description: "land the agent directly in dir (the directory IS the agent)" },
   ],
   examples: [
     { cmd: "fastagent init", note: "workspace goes into ./fastagent/" },

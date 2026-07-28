@@ -4,14 +4,14 @@
  * runs `fastagent start /app` on `$PORT` with machinery under `$FASTAGENT_STATE_DIR` /
  * `$FASTAGENT_SECRETS_DIR` — standard container conventions, no host coupling.
  *
- * ONE deploy semantic for both layouts: bake the WORKBENCH as the image (`COPY . .` — what you see is
- * what ships). Flat: workbench = the workspace. Nested: workbench = the host tree, with the
- * workspace at `./fastagent` — the resolver in the image finds it exactly like dev does, so the two
+ * ONE deploy semantic for both layouts: bake the WORKSPACE as the image (`COPY . .` — what you see is
+ * what ships). Flat: the agent IS the workspace. Nested: the workspace is the surrounding tree, with
+ * the agent at `./fastagent` — the resolver in the image finds it exactly like dev does, so the two
  * layouts share this generator end to end; the only differences are where deps install (`/app` vs
  * `/app/fastagent`) and where the Dockerfile itself lives (namespaced under `fastagent/` so it never
  * collides with the host repo's own).
  */
-import { WORKSPACE_DIR } from "../workspace.ts";
+import { AGENT_DIR } from "../paths.ts";
 
 export interface Artifact {
   path: string;
@@ -32,7 +32,7 @@ export function isGeneratedDockerfile(content: string): boolean {
 }
 
 export interface ContainerInput {
-  /** Whether the workspace has a package.json (a code workspace); else a pure markdown/skills agent. */
+  /** Whether the agent has a package.json (a code agent); else a pure markdown/skills agent. */
   hasPackageJson: boolean;
   /** The package manager the generated image targets: `bun` (packageManager: bun / a bun lockfile) gets an
    *  `oven/bun` base + `bun install` + `bun run fastagent`; otherwise npm on `node:22-slim`. */
@@ -46,11 +46,11 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
-  /** Nested layout: the workspace lives at `./fastagent` inside the baked workbench. The runtime
+  /** Nested layout: the agent lives at `./fastagent` inside the baked workspace. The runtime
    *  facts above (hasPackageJson/runtime/hasLockfile) describe THE WORKSPACE (its package.json drives
    *  the image's install step), never the host repo's — whose manifest belongs to the host's own deploy. */
   nested?: boolean;
-  /** Whether the baked workbench ships a `.git` (preflight fact). When true, preflight has already
+  /** Whether the baked workspace ships a `.git` (preflight fact). When true, preflight has already
    *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
    *  their runbook's freshness/write-back guidance from the same fact. */
   shipsGit?: boolean;
@@ -67,11 +67,11 @@ function aptLayer(packages?: string[]): string {
 }
 
 function dockerfile(input: ContainerInput): string {
-  // The workspace prefix inside the image: deps install (and the local bin lives) here. undefined =
-  // flat (the workspace IS /app) — the emitted lines then carry no noisy "./." segments.
-  const ws = input.nested ? WORKSPACE_DIR : undefined;
+  // The agent prefix inside the image: deps install (and the local bin lives) here. undefined =
+  // flat (the agent IS /app) — the emitted lines then carry no noisy "./." segments.
+  const ws = input.nested ? AGENT_DIR : undefined;
   const layoutNote = input.nested
-    ? `Nested: the whole directory is the agent's workbench; the workspace lives in fastagent/.`
+    ? `Nested: the whole directory is the agent's workspace; the agent lives in fastagent/.`
     : `The directory IS the agent — no build step.`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
@@ -81,7 +81,7 @@ function dockerfile(input: ContainerInput): string {
   // from PATH. That needs npm + a global bin, which live on node:22-slim, NOT on oven/bun — so this path
   // pins node:22-slim regardless of input.runtime (a stray bun lockfile with no package.json would
   // otherwise select a bun base here and crash the `npm i -g` build). input.runtime is meaningful only
-  // for a code workspace, so the bun-vs-node base below is scoped to that path.
+  // for a code agent, so the bun-vs-node base below is scoped to that path.
   if (!input.hasPackageJson) {
     return `${GENERATED_DOCKERFILE_MARKER}. ${layoutNote}
 # npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
@@ -104,9 +104,9 @@ ${apt}WORKDIR /app
 `;
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
-  // we can't tell a repo-as-agent from a purpose-built workspace, so the safe default keeps everything.
-  // Nested installs ONLY the workspace's deps — the host repo's own deps are the agent's runtime
-  // concern (it can install them in its workbench when its job needs them).
+  // we can't tell a repo-as-agent from a purpose-built agent, so the safe default keeps everything.
+  // Nested installs ONLY the agent's deps — the host repo's own deps are the agent's runtime
+  // concern (it can install them in its workspace when its job needs them).
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to a plain `bun install`
     // (resolves at build time — not reproducible; the CLI warns to commit the lockfile).
@@ -127,7 +127,7 @@ COPY . .
 CMD ["bun", "run", "fastagent", "start", "/app"]
 `;
   }
-  // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` workspace);
+  // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent);
   // fall back to `npm install` when there is none so the build never breaks. Caveat: `npm install`
   // resolves caret ranges at build time, so THIS branch is NOT reproducible — unlike the pinned
   // `npm ci` (lockfile) and pinned global (markdown) paths. The CLI warns to commit a lockfile.
@@ -150,15 +150,15 @@ CMD ["./node_modules/.bin/fastagent", "start", "/app"]
 }
 
 /** Patterns are RECURSIVE (`**​/`) on purpose — dockerignore patterns are root-anchored (unlike
- *  .gitignore), and a baked workbench can hold nested projects: a bare `node_modules` would upload
+ *  .gitignore), and a baked workspace can hold nested projects: a bare `node_modules` would upload
  *  their build-machine deps (macOS binaries!) and a bare `.env` would bake their secrets into the
  *  image. `.secrets`/`.state`/`.cache` are fastagent machinery — secrets travel through the host's
  *  secret store, state lives on the volume, cache is re-derivable; NONE of it may enter an image.
  *  `.git` is deliberately SHIPPED: the deployed agent's write-back (pull/commit/push) needs the
  *  repo's history+remote — the WYSIWYG bake's freshness/durability loop runs through git, driven by
  *  the agent itself, not by deploy machinery. Shipping `.git` is only half of that loop: preflight
- *  bakes the git BINARY into the generated image iff the workbench ships a `.git` (layout-neutral,
- *  the `shipsGit` fact); a non-git workbench that still needs git declares config.deploy.apt. */
+ *  bakes the git BINARY into the generated image iff the workspace ships a `.git` (layout-neutral,
+ *  the `shipsGit` fact); a non-git workspace that still needs git declares config.deploy.apt. */
 const DOCKERIGNORE = `**/node_modules
 **/.secrets
 **/.state
@@ -174,7 +174,7 @@ const DOCKERIGNORE = `**/node_modules
 
 /**
  * The Dockerfile + ignore artifacts — spread into any host's artifact list. Nested: the Dockerfile
- * is namespaced under the workspace (`fastagent/Dockerfile`) so it never collides with the host
+ * is namespaced under the agent dir (`fastagent/Dockerfile`) so it never collides with the host
  * repo's own. The ignore ships in TWO forms because context packing is host-CLI-owned and
  * inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own context packers
  * reliably read (kept if the host already has one — preflight then warns specifically about the
@@ -186,9 +186,9 @@ const DOCKERIGNORE = `**/node_modules
 export function containerArtifacts(input: ContainerInput): Artifact[] {
   if (input.nested) {
     return [
-      { path: `${WORKSPACE_DIR}/Dockerfile`, content: dockerfile(input) },
+      { path: `${AGENT_DIR}/Dockerfile`, content: dockerfile(input) },
       { path: ".dockerignore", content: DOCKERIGNORE },
-      { path: `${WORKSPACE_DIR}/Dockerfile.dockerignore`, content: DOCKERIGNORE },
+      { path: `${AGENT_DIR}/Dockerfile.dockerignore`, content: DOCKERIGNORE },
     ];
   }
   return [

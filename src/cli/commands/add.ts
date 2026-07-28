@@ -9,7 +9,7 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { loadDotEnv } from "../../env.ts";
-import { resolveSecretsDir, resolveStateRoot, resolveWorkspace } from "../../engines/pi/config.ts";
+import { resolveSecretsDir, resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
 import { ensureSecretsDirSelfIgnored } from "../../engines/pi/definition.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -33,9 +33,9 @@ export async function runAddChannel(
   dirArg: string,
   opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
-  // The channel (glue + companion tool + secrets) is workspace surface — everything lands at the
-  // workspace ROOT (`fastagent/` when nested), the same place dev/start discover channels/.
-  const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
+  // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
+  // AGENT DIR (`fastagent/` when nested), the same place dev/start discover channels/.
+  const { agentDir: target } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
@@ -148,7 +148,7 @@ export async function runAddChannel(
     console.error(`    ${action} ${e.name}${value} in .secrets/.env   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
-  // knowledge) — resolve them to the real workspace-root-relative locations here.
+  // knowledge) — resolve them to the real agent-dir-relative locations here.
   for (const s of steps) {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", "tools")}`);
   }
@@ -274,7 +274,7 @@ export async function runAddSkill(
   dirArg: string,
   opts: { update?: boolean },
 ): Promise<void> {
-  const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
+  const { agentDir: target } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
   if (!source) {
     // A missing source is a usage error (exit 2), but the guide is worth more than a bare
     // missing-argument line — the common path (writing your own skill) needs no command at all.
@@ -289,7 +289,7 @@ export async function runAddSkill(
         `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
   }
-  // Skills are workspace surface — vendored into `<root>/skills` (`fastagent/skills` when nested).
+  // Skills are agent surface — vendored into `<agent dir>/skills` (`fastagent/skills` when nested).
   const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);

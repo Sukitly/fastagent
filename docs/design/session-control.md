@@ -334,7 +334,7 @@ directory and session repository — never client-provided paths.
 
 The shared builder `src/engines/pi/session-builder.ts` (Phase 0, extracted from the TUI launcher)
 proves this assembly seam: it builds a resident pi `AgentSessionRuntime` with FastAgent's prompt,
-skills, tools, auth, and workspace boundary; the TUI (`chat.ts`) is one consumer of it. The
+skills, tools, auth, and agent boundary; the TUI (`chat.ts`) is one consumer of it. The
 formerly TUI-only `~/.pi` auth divergence was eliminated in place, not inherited.
 
 ## 11. Pi capability selection

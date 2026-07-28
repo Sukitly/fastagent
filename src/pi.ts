@@ -1,4 +1,4 @@
-// The pi reference implementation: assembly, workspace discovery, tools, config, models, auth, and state ports.
+// The pi reference implementation: assembly, agent discovery, tools, config, models, auth, and state ports.
 export {
   createPiAgent,
   createPiAgentFromDefinition,

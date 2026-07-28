@@ -42,7 +42,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   });
 
   it("nested: the watch root IS the workspace root — the host tree never enters the scope", () => {
-    // The supervisor watches resolveWorkspace().root (= <host>/fastagent), so host files are
+    // The supervisor watches resolvePlacement().agentDir (= <host>/fastagent), so host files are
     // structurally out of scope: they are never passed to the matcher at all. Within the root the
     // same rules apply as flat — one shape, one matcher.
     const nestedRoot = join("/repo", "fastagent");

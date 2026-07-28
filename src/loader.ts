@@ -1,5 +1,5 @@
 /**
- * Generic ESM module discovery + loading for the workspace's code-input dirs (`tools/`, `channels/`,
+ * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`,
  * `schedules/`, config). Pure node stdlib — engine-neutral, so it lives at the top level: the schedule
  * discovery (src/schedule/) must not reach into `engines/` for what is plain filesystem/import plumbing.
  */
@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 
-/** Whether `name` is an importable workspace module (a discovery candidate, not a type declaration). */
+/** Whether `name` is an importable agent module (a discovery candidate, not a type declaration). */
 export function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
 }
@@ -24,7 +24,7 @@ export interface DiscoveredModule {
   mod: { default?: unknown };
 }
 
-/** A workspace module that failed to load, surfaced as data so its caller can report the exact file.
+/** An agent module that failed to load, surfaced as data so its caller can report the exact file.
  *  `loadModuleDir` fills it for import failures; domain loaders add validation failures. The caller owns
  *  policy: tools/schedules may skip one bad file, while serving treats a broken declared channel as fatal. */
 export interface ModuleLoadFailure {

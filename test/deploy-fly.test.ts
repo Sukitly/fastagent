@@ -182,7 +182,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     const df = p.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(df).toContain("COPY fastagent/package.json fastagent/package-lock.json* ./fastagent/"); // workspace deps…
     expect(df).toContain("cd fastagent && npm ci");
-    expect(df).toContain("COPY . ."); // …then the whole workbench
+    expect(df).toContain("COPY . ."); // …then the whole workspace
     expect(df).toContain(`"./fastagent/node_modules/.bin/fastagent", "start", "/app"`); // runs from the workspace
     const ignore = p.artifacts.find((a) => a.path === "fastagent/Dockerfile.dockerignore")?.content ?? "";
     expect(ignore).not.toMatch(/^\.git$/m); // write-back needs the repo's .git — NOT excluded
@@ -192,7 +192,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(ignore).toMatch(/^\*\*\/\.env$/m);
     expect(ignore).toMatch(/^\*\*\/\.secrets$/m); // the machinery dirs never enter an image
     expect(ignore).toMatch(/^\*\*\/\.state$/m);
-    // The runbook deploys from the workbench root with explicit, version-proof flags.
+    // The runbook deploys from the workspace root with explicit, version-proof flags.
     expect(runbook(p)).toContain(
       "fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile --app bot",
     );

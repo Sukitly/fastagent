@@ -10,7 +10,7 @@ import {
   resolveAuthPath,
   resolveSecretsDir,
   resolveSessionsDirOverride,
-  resolveWorkspace,
+  resolvePlacement,
 } from "../../engines/pi/config.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
@@ -35,25 +35,25 @@ export interface StartOptions {
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const ws = failStartupOn(() => resolveWorkspace(dir));
+  const ws = failStartupOn(() => resolvePlacement(dir));
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
   const portFlag = parsePort(opts.port, "--port", "flag");
-  loadDotEnv(ws.root);
+  loadDotEnv(ws.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(ws.root, opts);
+  await resolveFirstRunModel(ws.agentDir, opts);
 
   // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
   // materialize it into the writable secrets dir BEFORE the opener resolves auth (once, absent-only).
   // Same resolveAuthPath the opener uses — ONE owner of the flag > env > default chain.
-  await maybeSeedAuth(resolveAuthPath(ws.root, opts.authPath));
+  await maybeSeedAuth(resolveAuthPath(ws.agentDir, opts.authPath));
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);
   const {
     agent,
     definition,
-    root,
-    workbench,
+    agentDir,
+    workspace,
     config,
     modelSpec,
     stateRoot,
@@ -71,8 +71,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
 
-  log.info(`[fastagent] workspace: ${root}`);
-  log.info(`[fastagent] workbench: ${workbench}`);
+  log.info(`[fastagent] agent:     ${agentDir}`);
+  log.info(`[fastagent] workspace: ${workspace}`);
   log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
@@ -86,13 +86,13 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   reportModuleLoadFailures(toolFailures);
   log.info(`[fastagent] state:  ${stateRoot}`);
   log.info(`[fastagent] sessions: ${sessionsDir}`);
-  // State defaults under the workspace root, which a redeploy may replace wholesale. Gate on where the
-  // root ACTUALLY resolved (in-tree?), not on the raw env var: an empty `FASTAGENT_STATE_DIR=""` reads
+  // State defaults under the agent dir, which a redeploy may replace wholesale. Gate on where the
+  // agentDir ACTUALLY resolved (in-tree?), not on the raw env var: an empty `FASTAGENT_STATE_DIR=""` reads
   // as unset (resolveStateRoot) and still lands in-tree, so a raw `=== undefined` check would wrongly
   // silence the warning. A sessions override to a volume does not help — channel state (the
   // telegram turn/context files replay depends on) is still in-tree. (auth.json is NOT under the
-  // state root — it lives in the secrets dir, resolveSecretsDir.)
-  if (isUnderDir(stateRoot, root)) {
+  // state agentDir — it lives in the secrets dir, resolveSecretsDir.)
+  if (isUnderDir(stateRoot, agentDir)) {
     log.info(
       `[fastagent] note: state (sessions, channel state) lives under the definition dir; point ` +
         `FASTAGENT_STATE_DIR at a persistent volume so a redeploy that replaces the dir does not wipe it.`,
@@ -102,7 +102,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // rotation), so the copy under the definition dir is the only valid one — a redeploy that replaces
   // the dir loses a credential no re-seed can restore. An independent check on purpose: moving ONE
   // of the two to a volume must not silence the note about the other.
-  if (isUnderDir(resolveSecretsDir(root), root)) {
+  if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
     log.info(
       `[fastagent] note: secrets (.env, rotated auth.json) live under the definition dir; point ` +
         `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
@@ -112,18 +112,18 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
-  const routed = await routesFor(root, traced, stateRoot, sessionControl).catch(failStartup);
+  const routed = await routesFor(agentDir, traced, stateRoot, sessionControl).catch(failStartup);
   const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced,
   });
-  await startSchedules(root, traced, stateRoot, config.selfSchedule ?? false);
+  await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
   serve(
     { ...routed, routes: withControl.routes },
     portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
     (p) => {
       withControl.announce(p);
-      maybeTunnel(root, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);
+      maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an

@@ -34,10 +34,10 @@ Engine-neutral consumers use `/core`.
 
 ## 2. Workspace shape and prompt assembly
 
-There is ONE workspace shape, with two placements. The shape:
+There is ONE agent shape, with two placements. The shape:
 
 ```txt
-<workspace root>/
+<agent dir>/
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
 ├── skills/
@@ -52,15 +52,15 @@ There is ONE workspace shape, with two placements. The shape:
 ```
 
 The DEFAULT placement (no mode name — it is just what `init` does) nests the whole shape into
-`<dir>/fastagent/` — the host tree gets ZERO writes; the parent directory is the WORKBENCH (the
+`<dir>/fastagent/` — the host tree gets ZERO writes; the parent directory is the WORKSPACE (the
 agent's cwd, whose `AGENTS.md` ancestors are ② context). The directory is visible on purpose: the
-workspace is the author's code (persona, skills, tools), not tool configuration — fastagent's own
+agent directory is the author's code (persona, skills, tools), not tool configuration — fastagent's own
 machinery inside it keeps the dot prefix (`.secrets/`, `.state/`):
 
 ```txt
-repo/                       # the workbench — what the agent works ON, untouched
+repo/                       # the workspace — what the agent works ON, untouched
 ├── AGENTS.md               # host project context, read as ②
-└── fastagent/              # the WHOLE workspace — the flat shape, nested one level down
+└── fastagent/              # the WHOLE agent — the flat shape, nested one level down
     ├── persona.md
     ├── skills/  tools/  channels/  schedules/
     ├── fastagent.config.mjs
@@ -69,26 +69,26 @@ repo/                       # the workbench — what the agent works ON, untouch
 ```
 
 **Flat** (`init --flat`) places the identical shape directly in the directory ("the directory IS the
-agent": a standalone agent dir, a monorepo package): root = workbench.
+agent": a standalone agent dir, a monorepo package): agentDir = workspace.
 
 Placement is STRUCTURAL, never configured — and deliberately not DETECTED either: `init` has no
-jurisdiction heuristic; it nests unless told `--flat`. `resolveWorkspace(dir)` finds a
+jurisdiction heuristic; it nests unless told `--flat`. `resolvePlacement(dir)` finds a
 `fastagent.config.*` at the dir root (flat) or under `<dir>/fastagent/` (nested); both at once is a
-refused ambiguity, and `root !== workbench` is the only in-code discriminant (`ResolvedWorkspace` has
+refused ambiguity, and `agentDir !== workspace` is the only in-code discriminant (`ResolvedPlacement` has
 no mode field). The machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's
 secret store (never an image), `.state/` through a volume
 (`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it in a container), `.cache/` is
 re-derivable.
 
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
-see docs/embedding.md. The nested workspace placement is not a mode and has no name.)
+see docs/embedding.md. The nested agent placement is not a mode and has no name.)
 
 The pi reference prompt has four segments:
 
 | Segment | Source |
 |---|---|
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
-| ② project context | `AGENTS.md` files loaded by pi from the workspace root and the workbench ancestor walk |
+| ② project context | `AGENTS.md` files loaded by pi from the agent dir and the workspace ancestor walk |
 | ③ skills listing | definition-local Agent Skills |
 | ④ runtime context | cwd only — no date, deliberately: a date line would invalidate the provider prefix cache at every day boundary (mirrors pi ≥0.80.7) |
 
@@ -109,7 +109,7 @@ The pi reference implementation has three reusable rungs:
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromWorkspace` sits above L2. It resolves the workspace (`resolveWorkspace`), config,
+`createPiAgentFromWorkspace` sits above L2. It resolves the placement (`resolvePlacement`), config,
 model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
 assembly rather than carrying parallel implementations.
 
@@ -232,7 +232,7 @@ modules or opening connections, so top-level module construction must not requir
 adapter owns reconnects; `AbortSignal` is the sole shutdown command, while `ready` and `closed` expose
 lifecycle observation without a second `close()` path.
 
-Enabled workspace channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming a
+Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming a
 file to `telegram.ts.disabled` disables it without adding a second config source.
 
 The loader collects all per-file diagnostics, but `dev` / `start` treats any broken enabled channel or
@@ -250,7 +250,7 @@ listener, force-closes active HTTP streams, and has a bounded exit fallback so s
 ### GitHub
 
 The GitHub adapter verifies the HMAC over the capped raw body, maps a verified delivery through the
-workspace's `on(event)` policy, acknowledges with 202, and runs turns in the process. It has no durable
+agent's `on(event)` policy, acknowledges with 202, and runs turns in the process. It has no durable
 post-ACK replay; an interrupted review is lost and logged.
 
 ### Telegram
@@ -329,7 +329,7 @@ wire formats, but Lark international trails Feishu in app creation and applicati
 `src/channels/feishu/cloud.ts` record those capability differences. A kind still owns its channel
 identity, env, state, logs, and onboarding: `feishuChannel` returns `POST /feishu`, while
 `feishuWebSocketChannel` returns a long-connection module; the Lark factories mirror those boundaries
-without becoming the core. Both share `channels/<kind>/` state and the same event engine. One workspace
+without becoming the core. Both share `channels/<kind>/` state and the same event engine. One agent
 can run both clouds. Outbound APIs and webhook protocol handling remain fetch-based; WebSocket ingress is
 isolated behind the official `@larksuiteoapi/node-sdk` because its protobuf connection protocol is not
 a stable hand-authored surface. What is platform-different:
@@ -415,7 +415,7 @@ would silently miss clock events.
 `FASTAGENT_STATE_DIR` selects the one machine-state root:
 
 ```txt
-<stateRoot>/                # <workspace root>/.state (FASTAGENT_STATE_DIR overrides)
+<stateRoot>/                # <agent dir>/.state (FASTAGENT_STATE_DIR overrides)
 ├── sessions/
 ├── channels/telegram/
 ├── channels/slack/
@@ -423,7 +423,7 @@ would silently miss clock events.
 └── schedule/
 ```
 
-Credentials live separately, under `<workspace root>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides):
+Credentials live separately, under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides):
 a different deploy lifecycle — secrets ride the host's secret store / the auth seed, state rides the
 volume; a deployed box points both env knobs at its volume so a rotated OAuth credential persists.
 
@@ -436,14 +436,14 @@ required secret names, and a runbook. Docker adds a user-owned `fastagent.compos
 service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
 Quick Tunnel URL and registers webhooks. Both placements deploy through ONE semantic — bake the
-workbench as the image (WYSIWYG: what you see is what ships, git or not, clean or not). A nested root
+workspace as the image (WYSIWYG: what you see is what ships, git or not, clean or not). A nested root
 namespaces every artifact under `fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single
 host-tree write is the root `.dockerignore` the host CLIs' context packers require (kept if the host
 owns one; preflight then checks it — missing secret excludes or a rule dropping `fastagent` from the
 context gate `--run`, else warn). `.git`
 ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
-deploy machinery — the git binary is baked in exactly when the workbench ships a `.git`; a non-git
-workbench adds it via `config.deploy.apt`.
+deploy machinery — the git binary is baked in exactly when the workspace ships a `.git`; a non-git
+workspace adds it via `config.deploy.apt`.
 
 ## 10. Current boundaries
 

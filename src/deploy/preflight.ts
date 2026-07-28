@@ -12,7 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
-import { WORKSPACE_DIR, resolveAuthPath } from "../engines/pi/config.ts";
+import { AGENT_DIR, resolveAuthPath } from "../engines/pi/config.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
@@ -59,12 +59,12 @@ export type DeployPreflight = { ok: false; gate: string } | ({ ok: true } & Depl
  * provider) — the CLI wraps the call in its `failStartup` so the fault surfaces and exits, never silently.
  */
 export async function preflightDeploy(input: {
-  /** The workspace ROOT (resolveWorkspace().root) — channels/schedules are discovered here, and the
-   *  container facts (package.json/lockfile) read it: the workspace's manifest drives the image's
+  /** The AGENT DIR (resolvePlacement().agentDir) — channels/schedules are discovered here, and the
+   *  container facts (package.json/lockfile) read it: the agent's manifest drives the image's
    *  install step, never the host repo's (whose manifest belongs to the host's own deploy). */
-  root: string;
-  /** The workbench (build context; = root when flat, the host tree when nested). */
-  workbench: string;
+  agentDir: string;
+  /** The workspace (build context; = the agent dir when flat, the surrounding tree when nested). */
+  workspace: string;
   nested: boolean;
   config: FastagentConfig;
   modelSpec: string | undefined;
@@ -72,11 +72,11 @@ export async function preflightDeploy(input: {
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
-  /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<state root>/auth.json`)
+  /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<state agentDir>/auth.json`)
    *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
   authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {
-  const { root, workbench, nested, config, modelSpec, run, force, authPathFlag } = input;
+  const { agentDir, workspace, nested, config, modelSpec, run, force, authPathFlag } = input;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
@@ -105,7 +105,7 @@ export async function preflightDeploy(input: {
 
   // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; note and let the
   // author wire them.
-  const inspected = await inspectChannels(root);
+  const inspected = await inspectChannels(agentDir);
   if (inspected.failures.length > 0) {
     throw new Error(
       `cannot inspect channel modules: ${inspected.failures.map((failure) => `${failure.label}: ${failure.message}`).join("; ")}`,
@@ -129,7 +129,7 @@ export async function preflightDeploy(input: {
   // nothing external wakes a scale-to-zero box for a cron instant or a wake-up. The note is CONDITIONAL
   // ("the generated plan…"): in KEEP mode an existing fly.toml is not rewritten — the CLI warns separately
   // when a kept fly.toml still scales to zero.
-  const hasTimeTriggers = (await discoverScheduleFiles(root)).length > 0 || !!config.selfSchedule;
+  const hasTimeTriggers = (await discoverScheduleFiles(agentDir)).length > 0 || !!config.selfSchedule;
   if (longConnectionChannels.length > 0) {
     messages.push({
       level: "note",
@@ -149,29 +149,30 @@ export async function preflightDeploy(input: {
 
   // Probe auth from the SAME project-level file the opener/login use — not the global default, which would
   // miss a `fastagent login` credential and falsely report "none configured".
-  const authPath = resolveAuthPath(root, authPathFlag);
+  const authPath = resolveAuthPath(agentDir, authPathFlag);
   const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
 
   // Container facts (shared by every host) + the warnings that follow. The facts describe the
   // WORKSPACE — its package.json/runtime/lockfile drive the image's install step — never the host
-  // repo's (nested bakes the whole workbench, but the host's manifest belongs to its own deploy).
-  const hasPackageJson = await exists(join(root, "package.json"));
-  const pkg = await readPackageJson(root);
-  const { runtime, bunVersion, hasLockfile } = detectRuntime(root, pkg);
+  // repo's (nested bakes the whole workspace, but the host's manifest belongs to its own deploy).
+  const hasPackageJson = await exists(join(agentDir, "package.json"));
+  const pkg = await readPackageJson(agentDir);
+  const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
   const install = runtime === "bun" ? "bun install" : "npm install";
   const runner = runtime === "bun" ? "bun run fastagent" : "./node_modules/.bin/fastagent";
   const hasOtherLock =
-    runtime === "node" && ((await exists(join(root, "pnpm-lock.yaml"))) || (await exists(join(root, "yarn.lock"))));
-  // Does the baked workbench ship a `.git`? ONE fact driving both the image's git install (below)
+    runtime === "node" &&
+    ((await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock"))));
+  // Does the baked workspace ship a `.git`? ONE fact driving both the image's git install (below)
   // and the plans' runbook wording — the write-back loop needs the history AND the binary together.
-  const shipsGit = await exists(join(workbench, ".git"));
+  const shipsGit = await exists(join(workspace, ".git"));
   if (nested) {
-    // After the facts: the deps sentence must match the workspace's actual shape (a markdown-only
-    // workspace has no package.json and installs nothing — the note must not point at a file that
+    // After the facts: the deps sentence must match the agent's actual shape (a markdown-only
+    // agent has no package.json and installs nothing — the note must not point at a file that
     // doesn't exist).
     const deps = hasPackageJson
-      ? `only the workspace's deps (fastagent/package.json) are installed — the host repo's own deps are the agent's runtime concern`
-      : `the workspace has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
+      ? `only the agent's deps (fastagent/package.json) are installed — the host repo's own deps are the agent's runtime concern`
+      : `the agent has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
     const durability = shipsGit
       ? `Un-pushed changes on the box do not survive a redeploy; freshness and write-back run through git, ` +
         `driven by the agent itself (persona owns the policy; GH_TOKEN etc. go in config.deploy.secrets)`
@@ -180,11 +181,11 @@ export async function preflightDeploy(input: {
     messages.push({
       level: "note",
       text:
-        `nested image: the whole directory is baked as the agent's workbench (WYSIWYG — what you see ` +
+        `nested image: the whole directory is baked as the agent's workspace (WYSIWYG — what you see ` +
         `is what ships, git or not, clean or not); ${deps}. ${durability}.`,
     });
   }
-  // A code workspace with no lockfile builds via a non-frozen install (ranges resolve at build time) — not
+  // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not
   // reproducible. A pnpm/yarn user gets an accurate message (their lockfile is ignored by the npm Dockerfile).
   if (hasPackageJson && !hasLockfile) {
     const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
@@ -197,7 +198,7 @@ export async function preflightDeploy(input: {
           `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
     });
   }
-  // The code-path Dockerfile runs `${runner}` — the workspace's OWN local dependency, never the
+  // The code-path Dockerfile runs `${runner}` — the agent's OWN local dependency, never the
   // registry — so a package.json missing it means the container fails at start (no bin to run).
   if (hasPackageJson && !("@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
     messages.push({
@@ -207,10 +208,10 @@ export async function preflightDeploy(input: {
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
     });
   }
-  // A KEPT workbench-root .dockerignore silently replaces the generated one's protections — read it
+  // A KEPT workspace-root .dockerignore silently replaces the generated one's protections — read it
   // and check SPECIFICALLY (the generic "kept" line suggests --force, which never clobbers the host's
   // file). The critical ones: (a) a rule matching `fastagent` on a nested deploy — the packer
-  // would drop the WHOLE workspace from the context (the box boots with no agent and crash-loops);
+  // would drop the WHOLE agent from the context (the box boots with no agent and crash-loops);
   // (b) `.secrets`/`.env` excludes — without them the packer BAKES SECRETS INTO THE IMAGE. Both GATE
   // under --run (a full deploy must not push a broken or secret-laden image; same discipline as the
   // model-travel gate) and warn generate-only. (c) a recursive **/node_modules — without it the build
@@ -218,16 +219,16 @@ export async function preflightDeploy(input: {
   // the agent's pull/push loop (note-level: a legitimate slimming choice). Not force-gated: kept even
   // under --force. `covers` is a conservative line matcher, not full dockerignore semantics: a `!`
   // negation naming the same form reads as NOT covered (a false warn beats a false all-clear).
-  if (await exists(join(workbench, ".dockerignore"))) {
-    const lines = (await readFile(join(workbench, ".dockerignore"), "utf8")).split("\n").map((l) => l.trim());
+  if (await exists(join(workspace, ".dockerignore"))) {
+    const lines = (await readFile(join(workspace, ".dockerignore"), "utf8")).split("\n").map((l) => l.trim());
     const matches = (l: string, name: string): boolean =>
       l === name || l === `${name}/` || l === `**/${name}` || l === `**/${name}/` || l === `/${name}`;
     const covers = (name: string): boolean =>
       lines.some((l) => matches(l, name)) && !lines.some((l) => l.startsWith("!") && matches(l.slice(1), name));
-    if (nested && covers(WORKSPACE_DIR)) {
+    if (nested && covers(AGENT_DIR)) {
       const text =
-        `your .dockerignore (kept) excludes \`${WORKSPACE_DIR}\` — the build context would ship WITHOUT the ` +
-        `agent workspace entirely (the deployed box has no persona/config and crash-loops). Remove that line ` +
+        `your .dockerignore (kept) excludes \`${AGENT_DIR}\` — the build context would ship WITHOUT the ` +
+        `agent entirely (the deployed box has no persona/config and crash-loops). Remove that line ` +
         `from it before deploying.`;
       if (run) return { ok: false, gate: text };
       messages.push({ level: "warn", text });
@@ -260,14 +261,14 @@ export async function preflightDeploy(input: {
         level: "note",
         text:
           `your .dockerignore excludes .git — the baked copy ships WITHOUT history/remote, so the agent ` +
-          `cannot pull/commit/push it; it must \`git clone\` its repo in the workbench instead (or remove the .git line).`,
+          `cannot pull/commit/push it; it must \`git clone\` its repo in the workspace instead (or remove the .git line).`,
       });
     }
   }
 
   // Write-back mechanics are fastagent's (the policy is the persona's): the image carries the git
-  // BINARY iff the baked workbench ships a `.git` — layout-neutral (history without the binary is a
-  // dead loop; the binary without history is dead weight). A non-git workbench that still needs git
+  // BINARY iff the baked workspace ships a `.git` — layout-neutral (history without the binary is a
+  // dead loop; the binary without history is dead weight). A non-git workspace that still needs git
   // (the agent clones repos as its job) declares config.deploy.apt: ["git"] explicitly. Merged with
   // (never duplicating) config.deploy.apt.
   const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
@@ -288,7 +289,7 @@ export async function preflightDeploy(input: {
   // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
   // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts. Don't suggest
   // --force here: it would overwrite the user's hand-written file.
-  const dockerfileHome = join(root, "Dockerfile");
+  const dockerfileHome = join(agentDir, "Dockerfile");
   if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
     if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
       messages.push({

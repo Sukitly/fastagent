@@ -130,7 +130,7 @@ export async function configureGroupBehavior(input: {
 }
 
 /**
- * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the workspace ROOT
+ * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the AGENT DIR
  * — credentials land in `<target>/.secrets/.env` (the caller has already ensured the secrets dir
  * self-ignores, so a real credential can never land committable). Returns credentials for the
  * caller's generic .env write (the guided Lark path), or undefined when nothing remains to write —
@@ -416,7 +416,7 @@ async function createFeishuAppFlow(
   }
 }
 
-/** Active workspace `.env` (`.secrets/.env`) values for the requested names — decided by THE .env
+/** Active agent `.env` (`.secrets/.env`) values for the requested names — decided by THE .env
  * parser, so this check can never disagree with what `loadEnvFile` reads. Empty/commented values are absent. */
 async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
   let content: string;

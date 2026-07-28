@@ -12,7 +12,7 @@ Unlike the GitHub channel, Telegram is request/reply: the channel holds the bot 
 
 ## Add the channel
 
-From an agent workspace:
+From an agent directory:
 
 ```bash
 fastagent add telegram
@@ -29,7 +29,7 @@ It also appends the required env vars to `.env.example` when possible.
 
 ## Configure Telegram
 
-Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the workspace `.secrets/.env`:
+Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the agent's `.secrets/.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
@@ -185,7 +185,7 @@ Downloaded files persist until the operator cleans them up. Treat `<state root>/
 
 ## State & restarts
 
-The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<workspace>/.state`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
+The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<agent dir>/.state`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start.

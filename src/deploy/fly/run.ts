@@ -41,9 +41,9 @@ export interface FlyRunPlan {
   missingSecrets: string[];
   channels: ChannelKind[];
   longConnectionChannels?: string[];
-  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workbench root). */
+  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace root). */
   flyConfig: string;
-  /** Dockerfile path passed explicitly (nested: `fastagent/Dockerfile` with the workbench as
+  /** Dockerfile path passed explicitly (nested: `fastagent/Dockerfile` with the workspace as
    *  context — flyctl would otherwise resolve it relative to the config's own directory). */
   dockerfile?: string;
 }
@@ -136,7 +136,7 @@ export async function deployFlyRun(
   }
 
   // 6. Deploy — remote builder (no local Docker), one machine. Nested passes context + Dockerfile
-  //    explicitly (the workbench root is the context; the Dockerfile lives under fastagent/).
+  //    explicitly (the workspace root is the context; the Dockerfile lives under fastagent/).
   log("deploying (remote build)…");
   const deployArgs = [
     "deploy",
