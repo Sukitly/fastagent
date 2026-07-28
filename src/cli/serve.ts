@@ -5,6 +5,8 @@
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Agent } from "../agent.ts";
+import { agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
+import { activeWork } from "../channels/busy.ts";
 import { controlRoutes } from "../channels/control.ts";
 import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
@@ -14,7 +16,8 @@ import { type Routes, parseRouteKey, router, serveNode } from "../host/node.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { loadSchedules } from "../schedule/discover.ts";
-import { createScheduler } from "../schedule/scheduler.ts";
+import type { LoadedSchedule } from "../schedule/schedule.ts";
+import { createScheduler, fireScheduleOnce } from "../schedule/scheduler.ts";
 import type { SessionControl } from "../session.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup } from "./fail.ts";
@@ -166,6 +169,42 @@ export function mountSessionControl(
 }
 
 /**
+ * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) over the serving routes —
+ * the deployed container's ONLY reachable surface (channels/agentcore.ts). Wired by `start` when
+ * `FASTAGENT_AGENTCORE=1` (set by the generated deploy artifacts, never by hand). A channel colliding
+ * on either path fails startup, same disposition as the control-plane mount: the adapter's paths are
+ * the platform's contract, so a channel shadowing them would silently unserve the whole deployment.
+ */
+export function mountAgentcore(
+  routes: Routes,
+  options: { agent: Agent; stateRoot: string; schedules: LoadedSchedule[] },
+): Routes {
+  const { agent, stateRoot, schedules } = options;
+  const mounted = agentcoreRoutes({
+    routes,
+    agent,
+    isBusy: () => activeWork() > 0,
+    fire:
+      schedules.length === 0
+        ? undefined
+        : (name, slot) => {
+            const schedule = schedules.find((s) => s.name === name);
+            if (!schedule) throw new UnknownScheduleError(name);
+            return fireScheduleOnce({ agent, stateRoot, schedule, slot });
+          },
+  });
+  const mountedPaths = new Set(Object.keys(mounted).map((key) => parseRouteKey(key).path));
+  const collisions = Object.keys(routes).filter((key) => mountedPaths.has(parseRouteKey(key).path));
+  if (collisions.length > 0) {
+    throw new Error(
+      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the AgentCore adapter ` +
+        `(/invocations, /ping) — rename the channel route`,
+    );
+  }
+  return { ...routes, ...mounted };
+}
+
+/**
  * Bind HTTP, open long-connection channels, and report ready only when both forms are usable. Each
  * adapter owns reconnects; a terminal close rejects `closed` and fails the process visibly. Abort is
  * the sole clean-shutdown command.
@@ -280,21 +319,30 @@ export function maybeTunnel(
 
 /**
  * Load and start the workspace's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
- * there are static schedules OR `selfSchedule` is on. Best-effort stop on process signals.
+ * there are static schedules OR `selfSchedule` is on. Best-effort stop on process signals. Returns the
+ * loaded schedules so a serving surface that needs them (the AgentCore adapter's fire binding) shares
+ * ONE load instead of re-discovering. `externalClock` (the AgentCore deployment) arms no cron timers —
+ * see SchedulerOptions.externalClock.
  */
 export async function startSchedules(
   workspaceDir: string,
   agent: Agent,
   stateRoot: string,
   selfSchedule: boolean,
-): Promise<void> {
+  options: { externalClock?: boolean } = {},
+): Promise<LoadedSchedule[]> {
   const { schedules, failures } = await loadSchedules(workspaceDir).catch(failStartup);
   reportModuleLoadFailures(failures);
-  if (schedules.length === 0 && !selfSchedule) return;
-  const scheduler = createScheduler({ agent, stateRoot, schedules });
+  if (schedules.length === 0 && !selfSchedule) return schedules;
+  const scheduler = createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock });
   scheduler.start();
-  if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
+  if (schedules.length > 0) {
+    log.info(
+      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
+    );
+  }
   const stop = (): void => scheduler.stop();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  return schedules;
 }

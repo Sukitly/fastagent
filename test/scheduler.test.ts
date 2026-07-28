@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
-import { createScheduler, scheduleSession } from "../src/schedule/scheduler.ts";
+import { createScheduler, fireScheduleOnce, scheduleSession } from "../src/schedule/scheduler.ts";
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { readRuns } from "../src/schedule/audit.ts";
 
@@ -284,6 +284,107 @@ describe("schedule/scheduler: fire algorithm", () => {
       error: expect.stringMatching(/dropped after too many/),
     });
     expect(listWakeups(root)).toHaveLength(0); // gone — that's exactly why the audit must say failed
+    s.stop();
+  });
+});
+
+describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
+  const slot = new Date("2026-07-07T10:00:00Z");
+
+  it("fires, claims lastFired, audits, and returns the outcome", async () => {
+    const root = await freshRoot();
+    const { agent, calls } = recordingAgent();
+    const now = () => new Date("2026-07-07T10:00:03Z");
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
+    expect(outcome.fired).toBe(true);
+    expect(outcome.failed).toBeUndefined();
+    expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
+    expect(await readFires(root)).toEqual({ job: "2026-07-07T10:00:03.000Z" });
+    expect(readRuns(root, "job")).toHaveLength(1);
+  });
+
+  it("skips a duplicate slot delivery (at-least-once external clock → at-most-once fire)", async () => {
+    const root = await freshRoot();
+    const { agent, calls } = recordingAgent();
+    const now = () => new Date("2026-07-07T10:00:03Z");
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
+    const dup = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
+    expect(dup.fired).toBe(false);
+    expect(dup.skippedReason).toMatch(/already fired/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a LATER slot still fires after an earlier one", async () => {
+    const root = await freshRoot();
+    const { agent, calls } = recordingAgent();
+    await fireScheduleOnce({
+      agent,
+      stateRoot: root,
+      schedule: hourly(),
+      slot,
+      now: () => new Date("2026-07-07T10:00:03Z"),
+    });
+    const next = await fireScheduleOnce({
+      agent,
+      stateRoot: root,
+      schedule: hourly(),
+      slot: new Date("2026-07-07T11:00:00Z"),
+      now: () => new Date("2026-07-07T11:00:02Z"),
+    });
+    expect(next.fired).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("without a slot the claim is unconditional (the resident scheduler's behavior)", async () => {
+    const root = await freshRoot();
+    const { agent, calls } = recordingAgent();
+    seedFires(root, { job: "2026-07-07T09:00:00Z" });
+    const outcome = await fireScheduleOnce({
+      agent,
+      stateRoot: root,
+      schedule: hourly(),
+      now: () => new Date("2026-07-07T10:00:03Z"),
+    });
+    expect(outcome.fired).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("surfaces a failed turn in the outcome and the audit", async () => {
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "model exploded" }]);
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    expect(outcome.fired).toBe(true);
+    expect(outcome.failed).toBe("model exploded");
+    expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "failed", error: "model exploded" });
+  });
+});
+
+describe("schedule/scheduler: externalClock mode", () => {
+  it("arms NO cron timers and does NO boot catch-up — but still pumps wake-ups", async () => {
+    const root = await freshRoot();
+    // An overdue slot the resident scheduler WOULD catch up: lastFired 09:00, now 10:30 (10:00 missed).
+    seedFires(root, { job: "2026-07-07T09:00:00Z" });
+    mkdirSync(join(root, "schedule"), { recursive: true });
+    writeFileSync(
+      join(root, "schedule", "wakeups.json"),
+      JSON.stringify([{ id: "w1", session: "s", prompt: "wake!", fireAt: "2026-07-07T10:00:00Z" }]),
+    );
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T10:30:00Z"),
+      externalClock: true,
+    });
+    s.start();
+    // The due wake-up fires (the pump runs); the overdue CRON slot does not (the external clock owns it).
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]!.text).toContain("wake!");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toHaveLength(1);
+    expect((await readFires(root)).job).toBe("2026-07-07T09:00:00Z"); // untouched — no resident claim
     s.stop();
   });
 });

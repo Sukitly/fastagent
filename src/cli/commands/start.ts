@@ -15,7 +15,7 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
-import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
+import { maybeTunnel, mountAgentcore, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface StartOptions {
@@ -99,9 +99,24 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     tunnel: opts.tunnel ?? false,
     agent: traced,
   });
-  await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
+  // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
+  // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
+  // slots arrive from the external clock through it — so no resident cron timers.
+  const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
+  const schedules = await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
+    externalClock: agentcore,
+  });
+  let routes = withControl.routes;
+  if (agentcore) {
+    try {
+      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules });
+    } catch (e) {
+      failStartup(e);
+    }
+    log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
+  }
   serve(
-    { ...routed, routes: withControl.routes },
+    { ...routed, routes },
     portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
     (p) => {
       withControl.announce(p);
