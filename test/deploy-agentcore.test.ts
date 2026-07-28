@@ -104,18 +104,25 @@ describe("deploy agentcore: the plan", () => {
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: ["telegram"], routeChannels: ["telegram"] }));
-    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/forwarder.mjs");
+    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/forwarder.js");
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::Lambda::Function");
     expect(template).toContain("Type: AWS::Lambda::Url");
     expect(template).toContain("AuthType: NONE");
+    // BOTH url permissions — post-Oct-2025 Function URLs 403 with only InvokeFunctionUrl.
+    expect(template).toContain("Action: lambda:InvokeFunctionUrl");
+    expect(template).toContain("Action: lambda:InvokeFunction\n");
+    // CommonJS on purpose — CFN inline code lands as index.js where ESM import is a syntax error.
+    expect(forwarderSource()).toContain('require("@aws-sdk/client-bedrock-agentcore")');
+    expect(forwarderSource()).toContain("exports.handler");
+    expect(forwarderSource()).not.toMatch(/^import /m);
     expect(template).toContain(`INGRESS_SESSION_ID: ${ingressSessionId("my-agent")}`);
     // Secrets ride NoEcho parameters, mapped into the runtime environment.
     expect(template).toContain("TelegramBotToken:");
     expect(template).toContain("TELEGRAM_BOT_TOKEN: !Ref TelegramBotToken");
     expect(plan.runbook.join("\n")).toContain("setWebhook");
     // The forwarder artifact and the template's inline ZipFile come from the ONE source.
-    const forwarder = plan.artifacts.find((a) => a.path === "lambda/forwarder.mjs")!;
+    const forwarder = plan.artifacts.find((a) => a.path === "lambda/forwarder.js")!;
     expect(forwarder.content).toBe(forwarderSource());
     expect(template).toContain("InvokeAgentRuntimeCommand");
   });
@@ -146,7 +153,7 @@ describe("deploy agentcore: the plan", () => {
     );
     const paths = plan.artifacts.map((a) => a.path);
     expect(paths).toContain(`agent/${TEMPLATE_FILE}`);
-    expect(paths).toContain("agent/lambda/forwarder.mjs");
+    expect(paths).toContain("agent/lambda/forwarder.js");
     expect(plan.runbook.join("\n")).toContain("-f agent/Dockerfile");
   });
 
