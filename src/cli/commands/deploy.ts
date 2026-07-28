@@ -238,12 +238,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }
-    if (config.selfSchedule) {
-      console.error(
-        `[fastagent] warn: selfSchedule (the wake tool) is DEGRADED on AgentCore — wake-ups fire only while a ` +
-          `session's compute is awake (no resident poller). Time-critical wake-ups need fly/railway.`,
-      );
-    }
+    // selfSchedule is fully supported: pending wake-ups are mirrored into one-shot EventBridge
+    // schedules via the forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts).
     // Schedules feed EventBridge rules — parsed facts (cron/tz), not just file names, so a bad file
     // must surface here (a schedule silently missing its rule would never fire).
     const loaded = await loadSchedules(agentDir).catch(failStartup);
@@ -289,6 +285,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         authPath,
         channels,
         extraSecrets,
+        selfSchedule: !!config.selfSchedule,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -574,8 +571,9 @@ async function runDeployAgentcore(params: {
   authPath: string;
   channels: ChannelKind[];
   extraSecrets: string[];
+  selfSchedule: boolean;
 }): Promise<void> {
-  const { target, name, kitDir, modelAuth, authPath, channels, extraSecrets } = params;
+  const { target, name, kitDir, modelAuth, authPath, channels, extraSecrets, selfSchedule } = params;
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
@@ -583,6 +581,9 @@ async function runDeployAgentcore(params: {
     extraSecrets,
     env: deployEnvironment(target, channels),
   });
+  // The wake-alarm shared secret (container ↔ forwarder). Minted fresh each run — both sides receive
+  // the SAME parameter, so rotation is atomic; it never needs to be remembered locally.
+  if (selfSchedule) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
   if (needsModelCredential) {
     failStartup(
       new Error(

@@ -11,6 +11,8 @@ import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { log, setLogLevel } from "../../log.ts";
+import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
+import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -103,6 +105,24 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
   // slots arrive from the external clock through it — so no resident cron timers.
   const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
+  // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
+  // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
+  // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment
+  // degrades to awake-only wakes — warned, never silent.
+  if (agentcore && config.selfSchedule) {
+    const wakeSecret = process.env.FASTAGENT_WAKE_SECRET;
+    if (wakeSecret) {
+      const sink = createWakeAlarmSink({ secret: wakeSecret });
+      setWakeupsSink(sink);
+      reconcileWakeAlarms(stateRoot, sink); // pending wakes may have lost their alarms across a redeploy
+      log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
+    } else {
+      log.warn(
+        `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
+          `(redeploy with the current template to fix)`,
+      );
+    }
+  }
   const schedules = await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
     externalClock: agentcore,
   });

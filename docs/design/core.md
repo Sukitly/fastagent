@@ -465,9 +465,16 @@ the runtime resource — the EFS/VPC mount is the named upgrade path when state 
 A live session keeps its
 old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
 successful deploy, making the new image serve immediately (an in-flight turn is cut; channels with
-replay re-run it). Structural limits, gated/warned at deploy time: long-connection channels cannot run
-(the connection IS the ingress; nothing wakes a reclaimed session), and wake-ups are degraded (no
-resident poller — they fire only while a session is awake).
+replay re-run it). Self-scheduled wake-ups are EventBridge-backed: every wakeups-store mutation
+notifies a sink (`schedule/wake-alarm.ts`) that POSTs the pending set to the forwarder's reserved
+path (shared secret), and the forwarder mirrors each into a self-deleting one-shot EventBridge
+schedule that pokes it at the instant — waking the container, whose ordinary wake pump fires the due
+entry (a recurring wake re-arms itself through the same store-save → sink loop). The forwarder
+injects its own URL into every envelope, so nothing is circularly baked into the template. Structural
+limits, gated/warned/noted at deploy time: long-connection channels cannot run (the connection IS the
+ingress; nothing wakes a reclaimed session), and a wake set inside a direct-invoke session (its own
+per-session storage, not the ingress session's) has no alarm — it fires only while that session is
+awake.
 
 ## 10. Current boundaries
 
@@ -479,7 +486,8 @@ The following are explicit limits, not implied capabilities:
 - file-backed state is single-process;
 - the repo-as-workspace deploy path is experimental;
 - the AgentCore target has no resident process: long-connection channels are unsupported there, and
-  self-scheduled wake-ups fire only while a session's compute is awake;
+  a wake-up set in a direct-invoke session (outside the ingress surface) fires only while that
+  session's compute is awake;
 - observability is logs/traces, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.

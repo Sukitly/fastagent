@@ -5,6 +5,7 @@ import {
   type ScheduleFact,
   TEMPLATE_FILE,
   cfnParamName,
+  forwarderInlineSource,
   forwarderSource,
   ingressSessionId,
   planAgentcoreDeploy,
@@ -160,14 +161,33 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("-f agent/Dockerfile");
   });
 
-  it("selfSchedule surfaces the wake degradation note", () => {
-    const runbook = planAgentcoreDeploy(baseInput({ selfSchedule: true })).runbook.join("\n");
-    expect(runbook).toContain("wake tool");
-    expect(runbook).toContain("DEGRADED");
+  it("selfSchedule brings the full wake-alarm topology: forwarder, secret param, roles, env", () => {
+    const plan = planAgentcoreDeploy(baseInput({ selfSchedule: true }));
+    const template = plan.artifacts[0]!.content;
+    // selfSchedule alone needs the forwarder — it is the alarm registrar and the poke target.
+    expect(template).toContain("Type: AWS::Lambda::Function");
+    expect(template).toContain("WakeSchedulerRole:");
+    expect(template).toContain("FastagentWakeSecret:");
+    expect(template).toContain("FASTAGENT_WAKE_SECRET: !Ref FastagentWakeSecret");
+    expect(template).toContain("WAKE_SECRET: !Ref FastagentWakeSecret");
+    expect(template).toContain("WAKE_PREFIX: fa-my-agent-wk-");
+    expect(template).toContain("scheduler:CreateSchedule");
+    expect(template).toContain("lambda:GetFunctionUrlConfig");
+    const runbook = plan.runbook.join("\n");
+    expect(runbook).toContain("EventBridge-backed");
+    expect(runbook).toContain("FastagentWakeSecret=<any random string>");
+    expect(runbook).not.toContain("DEGRADED");
+    // The forwarder carries the alarm + poke machinery.
+    expect(forwarderSource()).toContain("wake-alarm");
+    expect(forwarderSource()).toContain("wakePoke");
   });
 
-  it("the forwarder source stays under CloudFormation's 4096-byte inline cap", () => {
-    expect(Buffer.byteLength(forwarderSource())).toBeLessThan(4096);
+  it("the inline forwarder form (comments stripped) stays under the 4096-byte cap and derives from the one source", () => {
+    const inline = forwarderInlineSource();
+    expect(Buffer.byteLength(inline)).toBeLessThan(4096);
+    // Every inline line exists verbatim in the full source — a mechanical strip, not a fork.
+    const full = new Set(forwarderSource().split("\n"));
+    for (const line of inline.split("\n")) expect(full.has(line)).toBe(true);
   });
 
   it("OAuth model auth (non-env) gets the FastagentAuthSeed guidance instead of a fake secret", () => {

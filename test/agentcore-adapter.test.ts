@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Buffer } from "node:buffer";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import {
   type AgentcoreEnvelope,
@@ -27,10 +30,13 @@ interface AdapterOverrides {
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
 }
 
+const stateRoot = await mkdtemp(join(tmpdir(), "fa-agentcore-adapter-"));
+
 const adapter = (over: AdapterOverrides = {}): Routes =>
   agentcoreRoutes({
     routes: over.routes ?? {},
     agent: over.agent ?? scriptedAgent(),
+    stateRoot,
     isBusy: over.isBusy ?? (() => false),
     fire: over.fire,
   });
@@ -154,6 +160,32 @@ describe("agentcore adapter: schedule-fire envelope", () => {
       slot: "not-a-date",
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
+  it("acks a wake-poke (the invocation itself is the payload)", async () => {
+    const res = await postEnvelope(adapter(), { kind: "wake-poke" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("persists the forwarder URL ridden on an envelope for the wake-alarm sink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fa-wake-url-"));
+    const routes = agentcoreRoutes({
+      routes: {},
+      agent: scriptedAgent(),
+      stateRoot: root,
+      isBusy: () => false,
+    });
+    await routes["POST /invocations"]!(
+      new Request("http://x/invocations", {
+        method: "POST",
+        body: JSON.stringify({ kind: "wake-poke", wake: { url: "https://fn.lambda-url.on.aws/" } }),
+      }),
+    );
+    const { readWakeAlarmUrl } = await import("../src/schedule/wake-alarm.ts");
+    expect(readWakeAlarmUrl(root)).toBe("https://fn.lambda-url.on.aws/");
   });
 });
 

@@ -183,6 +183,7 @@ export function mountAgentcore(
   const mounted = agentcoreRoutes({
     routes,
     agent,
+    stateRoot,
     isBusy: () => activeWork() > 0,
     fire:
       schedules.length === 0

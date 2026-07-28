@@ -29,6 +29,7 @@ import type { Agent } from "../agent.ts";
 import type { Routes } from "../host/node.ts";
 import { router } from "../host/node.ts";
 import { log } from "../log.ts";
+import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
@@ -38,8 +39,10 @@ import { text } from "./respond.ts";
  *  base64 expansion (×4/3) plus envelope overhead — 2 MiB covers it with headroom. */
 export const MAX_ENVELOPE_BYTES = 2 << 20;
 
-/** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. */
-export type AgentcoreEnvelope =
+/** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
+ *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
+ *  ALARM sink (schedule/wake-alarm.ts) can call back without the URL being baked anywhere. */
+export type AgentcoreEnvelope = { wake?: { url: string } } & (
   | {
       kind: "webhook";
       /** Original webhook request line, verbatim. `path` must be absolute ("/telegram"). */
@@ -56,7 +59,11 @@ export type AgentcoreEnvelope =
       /** The cron instant this fire is FOR (ISO) — the slot-idempotency key. */
       slot: string;
     }
-  | { kind: "invoke"; session: string; text: string };
+  | { kind: "invoke"; session: string; text: string }
+  /** An EventBridge wake-up poke: the invocation ITSELF is the payload — it wakes the container,
+   *  whose boot drain / 30s wake pump then fires whatever is due. The handler only acks. */
+  | { kind: "wake-poke" }
+);
 
 /** The webhook envelope's reply: the channel's real HTTP response, ridden inside a transport-200
  *  body so the forwarder can re-emit it verbatim (see the module header on AgentCore's 424 folding). */
@@ -70,6 +77,8 @@ export interface AgentcoreAdapterOptions {
   /** The serving routes a direct deployment would mount (channels or the builtin invoke + health). */
   routes: Routes;
   agent: Agent;
+  /** Where the forwarder URL from envelopes is persisted for the wake-alarm sink (the state root). */
+  stateRoot: string;
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
   isBusy: () => boolean;
   /** Slot-idempotent schedule fire ({@link fireScheduleOnce} bound to this workspace's schedules);
@@ -89,7 +98,7 @@ const json = (body: unknown, status: number): Response =>
  * a local `curl` debug surface.
  */
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { routes, agent, isBusy, fire } = options;
+  const { routes, agent, stateRoot, isBusy, fire } = options;
   const dispatch = router(routes);
   const invokeHandler = createInvokeHandler(agent);
 
@@ -103,7 +112,16 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       return text("invalid json\n", 400);
     }
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
-      return text('need { "kind": "webhook" | "schedule-fire" | "invoke", ... }\n', 400);
+      return text('need { "kind": "webhook" | "schedule-fire" | "invoke" | "wake-poke", ... }\n', 400);
+    }
+    // The forwarder rides its public URL along on every envelope — persist it (write-if-changed) so
+    // the wake-alarm sink can call back. Total: a bad persist must not fail the turn.
+    if (typeof envelope.wake?.url === "string") {
+      try {
+        rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
+      } catch (e) {
+        log.error(`[agentcore] could not persist the wake-alarm URL: ${String(e)}`);
+      }
     }
 
     switch (envelope.kind) {
@@ -154,6 +172,11 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
           log.error(`[agentcore] schedule-fire ${name} failed: ${String(e)}`);
           return text(`schedule-fire failed: ${String(e)}\n`, 500);
         }
+      }
+      case "wake-poke": {
+        // The poke's job is DONE by arriving: the invocation woke (or kept awake) the container, and
+        // the wake pump (boot drain + 30s poll) fires whatever is due. Nothing to dispatch.
+        return json({ ok: true }, 200);
       }
       case "invoke": {
         // Reuse the HTTP channel's handler wholesale (SSE, cancellation, backpressure) by handing it

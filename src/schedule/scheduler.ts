@@ -13,6 +13,7 @@
  *    "a digest late once" beats "twice"). Strict at-least-once (a per-turn WAL) is a later tier.
  */
 import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
+import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { appendRun } from "./audit.ts";
 import { nextRun } from "./cron.ts";
@@ -197,7 +198,10 @@ export function createScheduler({
       if (!w) break;
       const label = `wake ${w.id.slice(0, 8)}`;
       const firedAt = now().toISOString();
-      const r = await runTurn(agent, label, w.session, wakeEnvelope(w));
+      // A wake turn runs in the BACKGROUND (no open request tracks it) — count it as in-flight work
+      // (busy.ts) so a serving surface that must not idle mid-turn (the AgentCore /ping) sees it.
+      const workDone = beginWork();
+      const r = await runTurn(agent, label, w.session, wakeEnvelope(w)).finally(workDone);
       // Busy handling differs by kind (busy = the turn never started — replay-safe; every other outcome is
       // terminal for this occurrence, since a turn that DID start may have run side effects). ONE-SHOT: defer (bounded) — it has no "next time", dropping it
       // would lose it forever. RECURRING: the claim already ADVANCED the entry to the next instant (see
