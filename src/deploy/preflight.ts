@@ -69,11 +69,15 @@ export async function preflightDeploy(input: {
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
+  /** The target delivers cron slots from an external clock and holds no resident process (agentcore):
+   *  the resident-host "keeps one machine running" notes don't apply — the host branch owns its own
+   *  long-connection gate and wake warning instead. */
+  externalClock?: boolean;
   /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<state root>/auth.json`)
    *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
   authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {
-  const { target, agentDir, config, modelSpec, run, force, authPathFlag } = input;
+  const { target, agentDir, config, modelSpec, run, force, externalClock, authPathFlag } = input;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
@@ -127,7 +131,7 @@ export async function preflightDeploy(input: {
   // ("the generated plan…"): in KEEP mode an existing fly.toml is not rewritten — the CLI warns separately
   // when a kept fly.toml still scales to zero.
   const hasTimeTriggers = (await discoverScheduleFiles(agentDir)).length > 0 || !!config.selfSchedule;
-  if (longConnectionChannels.length > 0) {
+  if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({
       level: "note",
       text:
@@ -135,7 +139,7 @@ export async function preflightDeploy(input: {
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     });
   }
-  if (hasTimeTriggers) {
+  if (hasTimeTriggers && !externalClock) {
     messages.push({
       level: "note",
       text:

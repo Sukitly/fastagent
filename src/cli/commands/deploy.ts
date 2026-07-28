@@ -7,12 +7,15 @@
  * Read-only on the definition; the only writes are generated artifacts (never clobbered without
  * --force). `--run` drives the target CLI instead of printing.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts";
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
+import { TEMPLATE_FILE, planAgentcoreDeploy } from "../../deploy/agentcore/plan.ts";
+import { deployAgentcoreRun } from "../../deploy/agentcore/run.ts";
 import { isGeneratedDockerfile } from "../../deploy/container.ts";
 import {
   composeHasTunnelService,
@@ -37,6 +40,7 @@ import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveAgentDir, resolveModelSpec, resolveStateRoot } from "../../engines/pi/config.ts";
+import { loadSchedules } from "../../schedule/discover.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -45,7 +49,7 @@ import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
-export type DeployHost = "docker" | "fly" | "railway";
+export type DeployHost = "docker" | "fly" | "railway" | "agentcore";
 
 export interface DeployOptions {
   run?: boolean;
@@ -87,6 +91,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     modelSpec,
     run: !!opts.run,
     force: !!opts.force,
+    externalClock: host === "agentcore", // cron rides EventBridge there — the resident-host notes don't apply
     authPathFlag: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by preflight (one owner)
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
@@ -204,6 +209,86 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
+      });
+    }
+    console.log(plan.runbook.join("\n"));
+    return;
+  }
+
+  // AgentCore: one CloudFormation stack (runtime + forwarder Lambda + EventBridge schedules); no
+  // public URL and no resident process — see deploy/agentcore/plan.ts for the topology decisions.
+  if (host === "agentcore") {
+    if (opts.stop || opts.scaleToZero === false) {
+      console.error(
+        `[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — AgentCore's idle/lifetime policy lives in ` +
+          `the template's LifecycleConfiguration.`,
+      );
+    }
+    if (opts.intoLinked) {
+      console.error(`[fastagent] warn: --into-linked is Railway-only — ignored for AgentCore`);
+    }
+    // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a
+    // reclaimed session has nothing to wake it — events in the gap are silently lost. `--run` gates
+    // (deploying a channel that can't connect); generate-only warns and prints the runbook.
+    if (longConnectionChannels.length > 0) {
+      const msg =
+        `long-connection channel (${longConnectionChannels.join(", ")}) cannot run on AgentCore — there is no ` +
+        `resident process to hold the connection, and nothing wakes a reclaimed session. Switch the channel ` +
+        `to webhook mode (its events then ride the forwarder like every other channel).`;
+      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+      console.error(`[fastagent] warn: ${msg}`);
+    }
+    if (config.selfSchedule) {
+      console.error(
+        `[fastagent] warn: selfSchedule (the wake tool) is DEGRADED on AgentCore — wake-ups fire only while a ` +
+          `session's compute is awake (no resident poller). Time-critical wake-ups need fly/railway.`,
+      );
+    }
+    // Schedules feed EventBridge rules — parsed facts (cron/tz), not just file names, so a bad file
+    // must surface here (a schedule silently missing its rule would never fire).
+    const loaded = await loadSchedules(agentDir).catch(failStartup);
+    if (loaded.failures.length > 0) {
+      failStartup(
+        new Error(
+          `deploy stopped: cannot load schedules: ${loaded.failures.map((x) => `${x.label}: ${x.message}`).join("; ")}`,
+        ),
+      );
+    }
+    const acName =
+      basename(target)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "agent";
+    const plan = planAgentcoreDeploy({
+      name: acName,
+      modelAuth,
+      channels,
+      routeChannels,
+      extraSecrets,
+      schedules: loaded.schedules.map((s) => ({ name: s.name, cron: s.cron, tz: s.tz })),
+      selfSchedule: !!config.selfSchedule,
+      ...container,
+    });
+    for (const u of plan.untranslatableSchedules) {
+      // Same discipline as Fly's kept-toml time-trigger gate: a deploy whose schedule silently never
+      // fires is worse than a stopped deploy — nothing fails visibly when the instant passes.
+      const msg = `schedule "${u.name}" cannot be expressed as an EventBridge rule — ${u.reason}`;
+      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+      console.error(`[fastagent] warn: ${msg} — it will NOT fire on this deployment`);
+    }
+    await writeArtifacts(target, plan.artifacts, {
+      force: !!opts.force,
+      neverForce: container.kitDir ? [".dockerignore"] : [],
+    });
+    if (opts.run) {
+      return runDeployAgentcore({
+        target,
+        name: acName,
+        kitDir: container.kitDir,
+        modelAuth,
+        authPath,
+        channels,
+        extraSecrets,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -472,6 +557,81 @@ async function runDeployFly(params: {
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
+}
+
+/**
+ * `deploy agentcore --run`: drive aws + docker to completion. Mirrors {@link runDeployFly} — same
+ * credential carry via {@link assembleSecrets}, same runner seam (spawned `aws` + `docker`, cwd = the
+ * workspace so the build context is the agent). The AgentCore-specific sequence (identity → buildx →
+ * ECR → CloudFormation → outputs → webhooks) lives in {@link deployAgentcoreRun}; the params temp
+ * file (secret values off argv) is created here — 0600, removed after the run either way.
+ */
+async function runDeployAgentcore(params: {
+  target: string;
+  name: string;
+  kitDir: string | undefined;
+  modelAuth: string | undefined;
+  authPath: string;
+  channels: ChannelKind[];
+  extraSecrets: string[];
+}): Promise<void> {
+  const { target, name, kitDir, modelAuth, authPath, channels, extraSecrets } = params;
+  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
+    modelAuth,
+    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
+    channels,
+    extraSecrets,
+    env: deployEnvironment(target, channels),
+  });
+  if (needsModelCredential) {
+    failStartup(
+      new Error(
+        `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+      ),
+    );
+  }
+  // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides —
+  // never argv); 0700/0600 and removed after the run, success or gate.
+  const paramsDir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-"));
+  try {
+    const outcome = await deployAgentcoreRun(
+      {
+        name,
+        templatePath: kitDir ? `${kitDir}/${TEMPLATE_FILE}` : TEMPLATE_FILE,
+        dockerfilePath: kitDir ? `${kitDir}/Dockerfile` : undefined,
+        tag: new Date()
+          .toISOString()
+          .replace(/[-:.TZ]/g, "")
+          .slice(0, 14),
+        region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION,
+        secrets,
+        missingSecrets,
+        channels,
+      },
+      spawnRunner("aws", target),
+      spawnRunner("docker", target),
+      (m) => console.error(`[fastagent] ${m}`),
+      async (content) => {
+        const path = join(paramsDir, "params.json");
+        await writeFile(path, content, { mode: 0o600 });
+        await chmod(path, 0o600);
+        return path;
+      },
+      (baseUrl) => registerTelegramWebhook(baseUrl),
+      (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
+      (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
+    );
+    if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
+    console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);
+    if (outcome.url) console.error(`[fastagent] webhook ingress → ${outcome.url}`);
+    console.error(
+      `[fastagent] invoke: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
+        `  --runtime-session-id "my-conversation-000000000000000000" \\\n` +
+        `  --payload '{"kind":"invoke","session":"cli","text":"hello"}' --cli-binary-format raw-in-base64-out /dev/stdout`,
+    );
+  } finally {
+    await rm(paramsDir, { recursive: true, force: true });
+  }
 }
 
 /**

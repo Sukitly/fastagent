@@ -440,12 +440,31 @@ The shipped file-backed implementations are single-process. Multiple instances r
 lease, credential, and channel-state backends; sharing one local state directory between processes is
 unsupported.
 
-`fastagent deploy docker|fly|railway` generates a Dockerfile, target config, persistent-volume wiring,
-required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one app
-service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
+`fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config, persistent-volume
+wiring, required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one
+app service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
 Quick Tunnel URL and registers webhooks. The `agentDir` repo-as-workspace recipe remains experimental;
 `--run` stays gated for every target pending explicit end-to-end validation of that layout.
+
+**AgentCore** (AWS Bedrock AgentCore Runtime) differs from the resident-box hosts in kind: the platform
+has no public URL (ingress is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute
+is per-session microVMs, reclaimed when idle). The generated CloudFormation stack therefore carries a
+forwarder Lambda (public Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`)
+fronting the webhooks, and EventBridge Scheduler rules delivering each cron slot. Inside the container,
+`FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
+unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the SAME channel routes
+(signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
+reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with the
+slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as SSE.
+`GET /ping` reports `HealthyBusy` while background turns run (the shared turn-queue/task-tracker report
+into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn. All ingress traffic shares ONE
+fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
+until the runtime is deleted — with state on the platform's SessionStorage mount (`/mnt/state`; tied to
+the runtime resource — the EFS/VPC mount is the named upgrade path when state must outlive it).
+Structural limits, gated/warned at deploy time: long-connection channels cannot run (the connection IS
+the ingress; nothing wakes a reclaimed session), and wake-ups are degraded (no resident poller — they
+fire only while a session is awake).
 
 ## 10. Current boundaries
 
@@ -456,6 +475,8 @@ The following are explicit limits, not implied capabilities:
 - GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
 - the repo-as-workspace deploy path is experimental;
+- the AgentCore target has no resident process: long-connection channels are unsupported there, and
+  self-scheduled wake-ups fire only while a session's compute is awake;
 - observability is logs/traces, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.
