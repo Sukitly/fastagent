@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AgentcorePlanInput,
   MOUNT,
+  type ScheduleFact,
   TEMPLATE_FILE,
   cfnParamName,
   forwarderSource,
@@ -120,14 +121,11 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("schedules become EventBridge rules with tz + slot-carrying input; untranslatable ones warn", () => {
-    const plan = planAgentcoreDeploy(
-      baseInput({
-        schedules: [
-          { name: "digest", cron: "0 9 * * 1-5", tz: "Asia/Shanghai" },
-          { name: "impossible", cron: "0 9 1 * 1" },
-        ],
-      }),
-    );
+    const schedules: ScheduleFact[] = [
+      { name: "digest", cron: "0 9 * * 1-5", tz: "Asia/Shanghai" },
+      { name: "impossible", cron: "0 9 1 * 1" },
+    ];
+    const plan = planAgentcoreDeploy(baseInput({ schedules }));
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("ScheduleDigest:");
     expect(template).toContain("ScheduleExpression: cron(0 9 ? * 2-6 *)");
