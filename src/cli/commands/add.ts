@@ -12,6 +12,8 @@ import { dotEnvPath, loadDotEnv } from "../../env.ts";
 import { resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
+import { isUnderDir } from "../../engines/pi/definition.ts";
+import { displayPath } from "../../scaffold/init.ts";
 import { guardCredentialHome } from "../shared.ts";
 import {
   type ChannelKind,
@@ -42,11 +44,13 @@ export async function runAddChannel(
   }
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
   // Paths are printed to someone standing in their CWD, usually the workspace, while every file
-  // belongs to the AGENT dir — prefix them, or they point at nothing. And the `.env` label names the
-  // file actually WRITTEN (FASTAGENT_SECRETS_DIR relocates it), never the default spelling.
-  const fromCwd = relative(process.cwd(), target);
-  const inAgent = (p: string): string => (fromCwd === "" ? p : join(fromCwd, p));
-  const envLabel = relative(process.cwd(), dotEnvPath(target)) || dotEnvPath(target);
+  // belongs to the AGENT dir — prefix them, or they point at nothing. `displayPath` owns the
+  // relative-vs-absolute policy (shared with `init`). The `.env` label names the file actually
+  // WRITTEN (FASTAGENT_SECRETS_DIR relocates it, possibly out of the agent), never the default spelling.
+  const agentFromCwd = displayPath(process.cwd(), target);
+  const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
+  const envPath = dotEnvPath(target);
+  const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
   // and only path there). The retired --create-app spelling gets a pointer, not silence.
   if (opts.createApp) {
@@ -141,7 +145,7 @@ export async function runAddChannel(
     detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
   console.error(`  next steps:`);
   console.error(
-    `    ${fromCwd === "" ? install : `(cd ${fromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,
+    `    ${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,
   );
   for (const e of env) {
     if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do

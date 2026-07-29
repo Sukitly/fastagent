@@ -26,7 +26,9 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
-  console.error(`[fastagent] invoke: ${ws.workspace} (${modelSpec})`);
+  // BOTH directories, like dev/start: from the workspace, `ws.workspace` alone equals the dir you
+  // typed, so it cannot tell you which agent actually ran.
+  console.error(`[fastagent] invoke: ${ws.agentDir} (workspace ${ws.workspace}, ${modelSpec})`);
   await reportAuth(modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).

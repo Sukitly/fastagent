@@ -46,7 +46,7 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
     return;
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape check before spawning
-  await runDevSupervisor(dir, { tunnel: opts.tunnel ?? false });
+  await runDevSupervisor(ws, { tunnel: opts.tunnel ?? false });
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */

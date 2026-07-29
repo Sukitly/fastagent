@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { resolveStateRoot, resolvePlacement } from "./engines/pi/config.ts";
+import { type ResolvedPlacement, resolveStateRoot } from "./engines/pi/config.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
@@ -57,12 +57,12 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
-export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
-  // The watch root is the AGENT DIR (structural — resolvePlacement): every restart-relevant code
-  // input lives under it, so the surrounding workspace costs no watchers at all.
-  // The placement is assumed STATIC for the dev session (creating/removing `fastagent/` mid-session
-  // is out of scope for watch re-sync).
-  const ws = resolvePlacement(dir);
+export async function runDevSupervisor(ws: ResolvedPlacement, options: { tunnel?: boolean } = {}): Promise<void> {
+  // The placement arrives RESOLVED from the command (which already routed its refusal through
+  // failStartup): re-resolving here would duplicate the rule and surface the same user-fixable
+  // refusal as a raw stack. The watch root is the AGENT DIR — every restart-relevant code input lives
+  // under it, so the surrounding workspace costs no watchers at all. Placement is assumed STATIC for
+  // the session (creating/removing `fastagent/` mid-session is out of scope for watch re-sync).
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?

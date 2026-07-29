@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromDir } from "../src/index.ts";
 import { ensureSecretsDirSelfIgnored, loadAgentDefinition } from "../src/engines/pi/definition.ts";
-import { nextStepCd, scaffoldAgent } from "../src/scaffold/init.ts";
+import { displayPath, scaffoldAgent } from "../src/scaffold/init.ts";
 
 /** A path inside the scaffolded agent dir, as scaffoldAgent reports it (relative to the workspace). */
 const agentPath = (...parts: string[]) => join("fastagent", ...parts);
@@ -33,11 +33,11 @@ function cliInit(args: string[], cwd: string): Promise<string> {
 }
 
 describe("init: scaffoldAgent", () => {
-  it("nextStepCd: relative inside cwd, absolute when the target climbs out, nothing for cwd itself", () => {
-    expect(nextStepCd("/a/b", "/a/b/x")).toBe("x"); // inside cwd → relative
-    expect(nextStepCd("/a/b", "/a/b/..agent")).toBe("..agent"); // a dir literally named "..agent" is INSIDE cwd
-    expect(nextStepCd("/a/b", "/a/b")).toBeUndefined(); // already in cwd → no cd step
-    expect(nextStepCd("/a/b", "/tmp/x")).toBe("/tmp/x"); // outside → absolute, not ../../tmp/x noise
+  it("displayPath: relative inside cwd, absolute when the target climbs out, nothing for cwd itself", () => {
+    expect(displayPath("/a/b", "/a/b/x")).toBe("x"); // inside cwd → relative
+    expect(displayPath("/a/b", "/a/b/..agent")).toBe("..agent"); // a dir literally named "..agent" is INSIDE cwd
+    expect(displayPath("/a/b", "/a/b")).toBeUndefined(); // already in cwd → no cd step
+    expect(displayPath("/a/b", "/tmp/x")).toBe("/tmp/x"); // outside → absolute, not ../../tmp/x noise
   });
 
   it("scaffolds a COMPLETE agent into ./fastagent/ with ZERO writes to the workspace around it", async () => {

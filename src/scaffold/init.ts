@@ -45,9 +45,10 @@ export interface ScaffoldResult {
   created: string[];
 }
 
-/** The `cd` target to show in `init`'s next-steps: the relative path when the target is inside `cwd`,
- *  the absolute path when it climbs out (a `../../..` is noise), or undefined when already in `cwd`. */
-export function nextStepCd(cwd: string, dir: string): string | undefined {
+/** How to WRITE a path for someone standing in `cwd`: relative when it is inside `cwd`, absolute when
+ *  it climbs out (a `../../..` is noise), and undefined when it IS `cwd` (nothing to say). ONE policy,
+ *  shared by `init`'s `cd` step and `add`'s next-steps paths — both answer the same question. */
+export function displayPath(cwd: string, dir: string): string | undefined {
   const rel = relative(cwd, dir);
   if (rel === "") return undefined;
   // "Climbs out" is a path-SEGMENT check — rel is ".." or starts with "../" (or "..\" on Windows). A

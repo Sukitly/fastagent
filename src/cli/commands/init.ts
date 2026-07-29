@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { AGENT_DIR } from "../../engines/pi/config.ts";
-import { nextStepCd, scaffoldAgent } from "../../scaffold/init.ts";
+import { displayPath, scaffoldAgent } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
 
 export interface InitOptions {
@@ -35,7 +35,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   }
 
   console.error(`  next steps:`);
-  const cdTarget = nextStepCd(process.cwd(), dir);
+  const cdTarget = displayPath(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (complete && (!opts.install || installFailed)) console.error(`    (cd ${AGENT_DIR} && npm install)`);
   console.error(`    fastagent dev   # serve locally and iterate`);

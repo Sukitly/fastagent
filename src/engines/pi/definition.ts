@@ -205,6 +205,13 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
   }
 }
 
+/** Is `p` inside fastagent's user-global machinery home (`~/.fastagent`)? THE one owner of "this is
+ *  ours and needs no `.gitignore`" — a dotfiles repo may track that directory deliberately. Both the
+ *  guard below and the CLI's secret-leak policy (cli/shared.ts) ask it, so the rule cannot fork. */
+export function isGlobalMachineryPath(p: string): boolean {
+  return isUnderDir(p, join(homedir(), GLOBAL_HOME_DIR));
+}
+
 /**
  * The `.secrets/` sibling of {@link ensureStateRootSelfIgnored}: iff the resolved secrets dir lands
  * inside the agent dir, make it exist and self-ignore ({@link SECRETS_GITIGNORE}) — called by
@@ -216,13 +223,6 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
  * tracks on purpose) — but the caller is usually about to write a real secret there, and only the
  * caller knows whether that deserves a warning or nothing at all.
  */
-/** Is `p` inside fastagent's user-global machinery home (`~/.fastagent`)? THE one owner of "this is
- *  ours and needs no `.gitignore`" — a dotfiles repo may track that directory deliberately. Both the
- *  guard below and the CLI's secret-leak policy (cli/shared.ts) ask it, so the rule cannot fork. */
-export function isGlobalMachineryPath(p: string): boolean {
-  return isUnderDir(p, join(homedir(), GLOBAL_HOME_DIR));
-}
-
 export async function ensureSecretsDirSelfIgnored(
   dir: string,
   secretsDir: string,
