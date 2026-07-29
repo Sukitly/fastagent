@@ -11,11 +11,10 @@
  * product, including editing its own AGENTS.md) never has its in-flight turn killed by the watcher.
  */
 import { spawn } from "node:child_process";
-import { join, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { resolveStateRoot, resolvePlacement } from "./engines/pi/config.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
-import { SECRETS_DIRNAME } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
@@ -33,10 +32,7 @@ const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.con
  * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
  * out of scope by design (keep it under tools/, or restart manually) — the startup log names the set.
  */
-export function devWatchIgnored(
-  root: string,
-  envFile: string = join(root, SECRETS_DIRNAME, ".env"),
-): (path: string) => boolean {
+export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
   // The `.env` is allow-listed by its RESOLVED path, not by the `.secrets` name: FASTAGENT_SECRETS_DIR
   // can put it in an in-agent directory called anything, and a name-based rule would prune the very
   // file the worker loads (a credential edit would then silently never restart it).

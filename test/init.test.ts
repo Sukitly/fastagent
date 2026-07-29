@@ -194,7 +194,7 @@ describe("init: scaffoldAgent", () => {
     // command resolves the OUTER one. Refusing keeps that from being a silent no-op scaffold.
     const inside = join(await freshDir(), "fastagent");
     await mkdir(inside);
-    await expect(scaffoldAgent(inside)).rejects.toThrow(/already inside an agent directory/);
+    await expect(scaffoldAgent(inside)).rejects.toThrow(/reserved agent-directory name.*init <name>/s);
     expect(await exists(join(inside, "fastagent"))).toBe(false); // side-effect-free refusal
   });
 

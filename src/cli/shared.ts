@@ -4,7 +4,7 @@
  * module-scoped flag access (`values.*`) became parameters.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { dirname, relative } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
@@ -17,16 +17,31 @@ import {
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
-  resolveSecretsDir,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { ensureSecretsDirSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored } from "../engines/pi/definition.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
 import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
+
+/**
+ * Protect the directory a credential is about to land in: self-ignore the auth file's OWN parent
+ * (whatever `--auth-path`/`FASTAGENT_AUTH_PATH` resolved to — an in-agent custom path needs the same
+ * protection as the default `.secrets/`), and warn when it lands outside the agent, where writing a
+ * `.gitignore` is not ours to do but the credential is written anyway. THE one owner for every
+ * command that mints a credential: `fastagent login` and the first-run inline login below.
+ */
+export async function ensureCredentialHome(agentDir: string, authPath: string): Promise<void> {
+  if ((await ensureSecretsDirSelfIgnored(agentDir, dirname(authPath))) === "outside") {
+    console.error(
+      `[fastagent] warn: ${authPath} is outside the agent — fastagent does not write a .gitignore there, ` +
+        `so make sure the credential cannot be committed`,
+    );
+  }
+}
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
 export function isInteractive(): boolean {
@@ -138,10 +153,9 @@ async function pickWithCredentials(agentDir: string, models: Models, authPath: s
     return chosen;
   }
 
-  // Inline login. Same leak guard as `login`: self-ignore the secrets dir BEFORE a credential
-  // can land in-tree, so the secret is never untracked-but-committable.
-  const secretsDir = resolveSecretsDir(agentDir);
-  if (isUnderDir(authPath, secretsDir)) await ensureSecretsDirSelfIgnored(agentDir, secretsDir);
+  // Inline login: the SAME leak guard `fastagent login` runs, through the same helper — a credential
+  // is a credential whichever command mints it.
+  await ensureCredentialHome(agentDir, authPath);
   try {
     // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
     // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.

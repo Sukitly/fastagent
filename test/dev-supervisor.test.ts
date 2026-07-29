@@ -4,7 +4,7 @@ import { devWatchIgnored } from "../src/dev-supervisor.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   const root = join("/work", "agent");
-  const ignored = devWatchIgnored(root);
+  const ignored = devWatchIgnored(root, join(root, ".secrets", ".env"));
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
@@ -46,7 +46,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     // structurally out of scope: they are never passed to the matcher at all. Within the root the
     // same rules apply as flat — one shape, one matcher.
     const nestedRoot = join("/repo", "fastagent");
-    const ig = devWatchIgnored(nestedRoot);
+    const ig = devWatchIgnored(nestedRoot, join(nestedRoot, ".secrets", ".env"));
     expect(ig(nestedRoot)).toBe(false);
     expect(ig(join(nestedRoot, "tools", "foo.ts"))).toBe(false);
     expect(ig(join(nestedRoot, "persona.md"))).toBe(true); // live-read, no restart

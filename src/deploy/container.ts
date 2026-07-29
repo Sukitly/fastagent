@@ -54,10 +54,11 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
-  /** Workspace-relative paths holding secrets that the NAME-based excludes below would miss — a
-   *  `FASTAGENT_SECRETS_DIR` pointed at an in-tree directory not called `.secrets`. Preflight resolves
-   *  them; excluding by path is what keeps `COPY . .` from baking a credential. */
-  secretPaths?: string[];
+  /** Workspace-relative machinery paths the NAME-based excludes below would miss — a
+   *  `FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` pointed at an in-tree directory not called
+   *  `.secrets`/`.state`. Preflight resolves them; excluding by PATH is what keeps `COPY . .` from
+   *  baking a credential (or the build machine's sessions). */
+  machineryPaths?: string[];
   /** Whether the baked workspace ships a `.git` (preflight fact). When true, preflight has already
    *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
    *  their runbook's freshness/write-back guidance from the same fact. */
@@ -153,9 +154,11 @@ CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
  *  the `shipsGit` fact); a non-git workspace that still needs git declares config.deploy.apt. */
 const dockerignore = (input: ContainerInput): string =>
   DOCKERIGNORE_BASE +
-  (input.secretPaths ?? [])
-    .filter((p) => !p.startsWith(`${AGENT_DIR}/${SECRETS_DIRNAME}/`)) // already covered by the name-based rule below
-    .map((p) => `# resolved secrets path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH)\n/${p}\n`)
+  (input.machineryPaths ?? [])
+    .filter((p) => !p.startsWith(`${AGENT_DIR}/${SECRETS_DIRNAME}/`) && p !== `${AGENT_DIR}/${STATE_DIRNAME}`)
+    .map(
+      (p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH / FASTAGENT_STATE_DIR)\n/${p}\n`,
+    )
     .join("");
 
 const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).

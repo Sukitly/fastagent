@@ -99,6 +99,14 @@ point both at it in a container).
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
 see docs/embedding.md.)
 
+**Known boundary (accepted, documented):** the name is the WHOLE rule, so ANY directory called
+`fastagent` reads as an agent dir — including a project that happens to be named that. Its parent
+then becomes the workspace, and `init` inside it is refused (the way out is `init <name>`, an agent in
+a subdirectory). Adding "…and it looks like an agent" evidence would buy that case at the price of
+re-introducing content sniffing into a rule whose value is that it reads nothing — and it would break
+entry-point invariance for a zero-config agent. The mis-resolution is loud in practice: such a
+directory has no config, so the next step fails with `missing model` before anything is written.
+
 **Known boundary (accepted, documented):** `workspace` is always `agentDir`'s immediate parent —
 never further. Since `fastagent/` is a fixed name, a workspace holds at most one agent, and "two
 agents that both work ON this repo" is not expressible: `init reviewer` + `init releaser` gives two

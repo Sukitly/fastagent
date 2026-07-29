@@ -13,7 +13,6 @@
  * empty secrets dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
 import { homedir } from "node:os";
-import { dirname } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import {
   AGENT_DIR,
@@ -22,11 +21,10 @@ import {
   resolveAuthPath,
   resolvePlacement,
 } from "../../engines/pi/config.ts";
-import { ensureSecretsDirSelfIgnored } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
-import { isInteractive, loginWithKeyCheck } from "../shared.ts";
+import { ensureCredentialHome, isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
   authPath?: string;
@@ -61,13 +59,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // `fastagent/creds/auth.json`) lands somewhere else in the tree and needs the same protection. A
   // genuinely out-of-agent path is nothing of ours (no empty dir created); it is announced instead,
   // because the credential still gets written. The guard itself skips the HOME-global dir.
-  const authHome = dirname(authPath);
-  if ((await ensureSecretsDirSelfIgnored(loginDir, authHome)) === "outside") {
-    console.error(
-      `[fastagent] warn: ${authPath} is outside the agent — fastagent does not write a .gitignore there, ` +
-        `so make sure the credential cannot be committed`,
-    );
-  }
+  await ensureCredentialHome(loginDir, authPath);
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
   // prompts for a key). In a non-TTY (a pipe, CI, a coding-agent shell) the menu can't receive keystrokes
   // and would hang; --no-input asks for the same posture explicitly. Fail fast with the reason instead

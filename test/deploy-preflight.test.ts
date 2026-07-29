@@ -113,7 +113,8 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       // Generated ignore: the resolved dir is excluded by PATH, not by its (non-matching) name.
       const clean = await call2();
       expect(clean.ok).toBe(true);
-      if (clean.ok) expect(clean.container.secretPaths).toEqual(["creds/auth.json", "creds/.env"]);
+      if (clean.ok)
+        expect(clean.container.machineryPaths).toEqual(["creds/auth.json", "creds/.env", "fastagent/.state"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
       await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
