@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import ignore from "ignore";
 import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -63,6 +64,14 @@ describe("init: scaffoldAgent", () => {
     // THE point of the placement: the workspace gained exactly one entry — `fastagent/` — and nothing else.
     expect((await readdir(dir)).sort()).toEqual([...before, "fastagent"].sort());
     expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# Project spec\n"); // ②, untouched
+
+    // The agent-root .gitignore covers the .env habit puts there (fastagent reads .secrets/.env, but
+    // an unignored root .env is the plausible mistake this layout invites); the example still travels.
+    const rootIgnore = await readFile(join(dir, "fastagent", ".gitignore"), "utf8");
+    const ig = ignore({ ignorecase: false }).add(rootIgnore);
+    expect(ig.ignores(".env")).toBe(true);
+    expect(ig.ignores(".env.local")).toBe(true);
+    expect(ig.ignores(".env.example")).toBe(false);
 
     // `.secrets/` self-ignores: everything but the template + the protection itself stays local.
     const secretsIgnore = await readFile(join(dir, "fastagent", ".secrets", ".gitignore"), "utf8");
@@ -194,7 +203,10 @@ describe("init: scaffoldAgent", () => {
     // command resolves the OUTER one. Refusing keeps that from being a silent no-op scaffold.
     const inside = join(await freshDir(), "fastagent");
     await mkdir(inside);
-    await expect(scaffoldAgent(inside)).rejects.toThrow(/reserved agent-directory name.*init <name>/s);
+    await expect(scaffoldAgent(inside)).rejects.toThrow(/reserved agent-directory name.*Rename it/s);
+    // The refusal must not offer a way out that the next guard refuses: a subdirectory of it is
+    // inside an agent, so nothing under this path can be scaffolded either.
+    await expect(scaffoldAgent(join(inside, "my-agent"))).rejects.toThrow(/is inside the agent/);
     expect(await exists(join(inside, "fastagent"))).toBe(false); // side-effect-free refusal
 
     // …and deeper inside the agent's own surface, where the outer agent would load the new one as

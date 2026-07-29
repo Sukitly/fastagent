@@ -264,12 +264,12 @@ export async function preflightDeploy(input: {
   // stale content on disk would gate a deploy on a file about to be replaced. Ours + --force: skip.
   // Ours WITHOUT --force is still checked (it is what would ship), but the remedy differs: hand-adding
   // lines to fastagent's own output is not the fix — regenerating it is.
-  const oursStale = keptDockerignore !== undefined && isGeneratedDockerignore(keptDockerignore);
+  const keptIsOurs = keptDockerignore !== undefined && isGeneratedDockerignore(keptDockerignore);
   const remedy = (lines: string[]): string =>
-    oursStale
+    keptIsOurs
       ? `Re-run with --force to regenerate it.`
       : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before deploying (the same lines the generated .dockerignore writes).`;
-  if (keptDockerignore !== undefined && !(force && oursStale)) {
+  if (keptDockerignore !== undefined && !(force && keptIsOurs)) {
     const excluded = dockerignoreMatcher(keptDockerignore);
     // Both the directory AND a file inside it: an allowlist `.dockerignore` (`*` + `!fastagent` +
     // `!fastagent/**`) re-includes the dir, so requiring both keeps the gap above from gating a

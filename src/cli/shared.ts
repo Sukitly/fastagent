@@ -37,9 +37,12 @@ import { failStartup, failUsage } from "./fail.ts";
  * lands in a directory the operator named and manages, where writing a `*`-ignoring `.gitignore`
  * would hide their files and VERIFYING one they already wrote would abort the login over a directory
  * that is none of our business. The user gets the fact and owns the decision.
+ *
+ * `anchorDir` is usually the agent dir, but `$HOME` is a legal anchor too (`login` outside any agent):
+ * its machinery home is fastagent's own, needs no `.gitignore`, and is silently skipped.
  */
-export async function guardCredentialHome(agentDir: string, authPath: string): Promise<void> {
-  const secretsDir = resolveSecretsDir(agentDir);
+export async function guardCredentialHome(anchorDir: string, authPath: string): Promise<void> {
+  const secretsDir = resolveSecretsDir(anchorDir);
   const warn = (text: string): void => console.error(`[fastagent] warn: ${text}`);
   if (!isUnderDir(authPath, secretsDir)) {
     warn(
@@ -48,7 +51,7 @@ export async function guardCredentialHome(agentDir: string, authPath: string): P
     );
     return; // don't create an empty `.secrets/` for a credential that is not going into it
   }
-  if ((await ensureSecretsDirSelfIgnored(agentDir, secretsDir)) === "outside") {
+  if ((await ensureSecretsDirSelfIgnored(anchorDir, secretsDir)) === "outside") {
     warn(
       `${secretsDir} is outside the agent — fastagent does not write a .gitignore there, so make sure ` +
         `the credential cannot be committed`,

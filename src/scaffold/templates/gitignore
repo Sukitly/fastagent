@@ -1,5 +1,11 @@
 # dependencies (reinstalled at deploy)
 node_modules/
 
+# a hand-created .env at the agent root: fastagent reads .secrets/.env (which self-ignores), but
+# this is the file habit puts here — never let it become committable. The template still travels.
+.env
+.env.*
+!.env.example
+
 # fastagent machinery (.secrets/ credentials+.env, .state/ sessions+channel state) carries
 # its own self-ignoring .gitignore — no entries needed here.

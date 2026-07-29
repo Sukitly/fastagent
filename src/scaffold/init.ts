@@ -111,9 +111,9 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   // then resolves PAST (they find the outer one) — a silent no-op scaffold. Refuse with the way out.
   if (basename(dir) === AGENT_DIR) {
     throw new Error(
-      `"${dir}": "${AGENT_DIR}" is the reserved agent-directory name, so this path already reads as an ` +
-        `agent — init here would create ${AGENT_DIR}/${AGENT_DIR}/, which no command would resolve. ` +
-        `Run \`fastagent init <name>\` to put an agent in a subdirectory of it, or init from the parent.`,
+      `"${dir}": "${AGENT_DIR}" is the reserved agent-directory name, so this path already READS as an ` +
+        `agent — nothing can be scaffolded here or under it (every command would resolve this ` +
+        `directory, not the new agent). Rename it, or init in a different directory.`,
     );
   }
   // Inside an agent's own surface (`fastagent/skills`, `fastagent/tools`): scaffolding here would hide
