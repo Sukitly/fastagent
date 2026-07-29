@@ -497,20 +497,18 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
 });
 
 describe("definition: the leak guard decides on the TARGET dir, not the anchor", () => {
-  it("protects a credential home reached from a $HOME anchor; skips only fastagent's global home", async () => {
-    // `login --auth-path ./creds/auth.json` outside any agent resolves its anchor to $HOME. Deciding
-    // "is this home?" on the anchor would skip the guard entirely and write the credential into a
-    // committable project directory — the case this whole family of guards exists to close.
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    const project = join(home, "project", "creds");
-    await mkdir(project, { recursive: true });
-    expect(await ensureSecretsDirSelfIgnored(home, project)).toBe("ignored");
-    expect(await readFile(join(project, ".gitignore"), "utf8")).toMatch(/^\*$/m);
-
-    // fastagent's own global machinery home is the one exception (a dotfiles repo may track it).
+  it("skips fastagent's global home by TARGET, not by the caller's anchor", async () => {
+    // The exception is about the directory being written, not about who asked: `login` outside any
+    // agent anchors on $HOME, and deciding there would skip the guard for every target under it.
     const { GLOBAL_HOME_DIR } = await import("../src/paths.ts");
-    const globalSecrets = join(homedir(), GLOBAL_HOME_DIR, ".secrets");
-    expect(await ensureSecretsDirSelfIgnored(homedir(), globalSecrets)).toBe("home");
+    expect(await ensureSecretsDirSelfIgnored(homedir(), join(homedir(), GLOBAL_HOME_DIR, ".secrets"))).toBe("home");
+
+    // A project-level secrets dir under the same anchor IS protected.
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    const secrets = join(home, "project", ".secrets");
+    await mkdir(secrets, { recursive: true });
+    expect(await ensureSecretsDirSelfIgnored(home, secrets)).toBe("ignored");
+    expect(await readFile(join(secrets, ".gitignore"), "utf8")).toMatch(/^\*$/m);
   });
 
   it("verifies control.json is ignored — the one SECRET under the state root", async () => {

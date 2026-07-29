@@ -2,7 +2,9 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export interface WorkspaceRuntime {
+/** How to install and run the AGENT: its package.json + lockfile decide, never the surrounding
+ *  workspace's (whose toolchain is the agent's runtime concern, not fastagent's). */
+export interface AgentRuntime {
   /** The JS runtime the agent targets — drives the generated Dockerfile base + install/run commands
    *  and the package-manager hints in `init`/`add`. */
   runtime: "node" | "bun";
@@ -19,7 +21,7 @@ export interface WorkspaceRuntime {
  * `{}` when there is none / it is malformed). One source for the deploy Dockerfile and the CLI hints, so
  * they agree on what the agent is.
  */
-export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): WorkspaceRuntime {
+export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): AgentRuntime {
   const pm = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
   const bunLock = existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
   if (pm.startsWith("bun@") || bunLock) {

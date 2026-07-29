@@ -4,7 +4,7 @@
  * module-scoped flag access (`values.*`) became parameters.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, relative } from "node:path";
+import { relative } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
@@ -17,9 +17,10 @@ import {
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
+  resolveSecretsDir,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { ensureSecretsDirSelfIgnored } from "../engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
 import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
@@ -28,17 +29,29 @@ import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
- * Protect the directory a credential is about to land in: self-ignore the auth file's OWN parent
- * (whatever `--auth-path`/`FASTAGENT_AUTH_PATH` resolved to — an in-agent custom path needs the same
- * protection as the default `.secrets/`), and warn when it lands outside the agent, where writing a
- * `.gitignore` is not ours to do but the credential is written anyway. THE one owner for every
- * command that mints a credential: `fastagent login` and the first-run inline login below.
+ * Make sure a credential cannot land untracked-but-committable. THE one owner for every command that
+ * MINTS one (`fastagent login` and the first-run inline login below).
+ *
+ * fastagent self-ignores only the directory it OWNS — the resolved `.secrets/`. A credential steered
+ * elsewhere by `--auth-path`/`FASTAGENT_AUTH_PATH` lands in a directory the operator named and
+ * manages: writing a `*`-ignoring `.gitignore` into it would hide their files, and VERIFYING one they
+ * already wrote would abort the login over a directory that is none of our business. So that case is
+ * announced, not managed — the user gets the fact and owns the decision.
  */
 export async function ensureCredentialHome(agentDir: string, authPath: string): Promise<void> {
-  if ((await ensureSecretsDirSelfIgnored(agentDir, dirname(authPath))) === "outside") {
-    console.error(
-      `[fastagent] warn: ${authPath} is outside the agent — fastagent does not write a .gitignore there, ` +
+  const secretsDir = resolveSecretsDir(agentDir);
+  const warn = (text: string): void => console.error(`[fastagent] warn: ${text}`);
+  if (!isUnderDir(authPath, secretsDir)) {
+    warn(
+      `${authPath} is outside fastagent's secrets dir (${secretsDir}) — no .gitignore is written there, ` +
         `so make sure the credential cannot be committed`,
+    );
+    return; // don't create an empty `.secrets/` for a credential that is not going into it
+  }
+  if ((await ensureSecretsDirSelfIgnored(agentDir, secretsDir)) === "outside") {
+    warn(
+      `${secretsDir} is outside the agent — fastagent does not write a .gitignore there, so make sure ` +
+        `the credential cannot be committed`,
     );
   }
 }

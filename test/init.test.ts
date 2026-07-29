@@ -196,6 +196,12 @@ describe("init: scaffoldAgent", () => {
     await mkdir(inside);
     await expect(scaffoldAgent(inside)).rejects.toThrow(/reserved agent-directory name.*init <name>/s);
     expect(await exists(join(inside, "fastagent"))).toBe(false); // side-effect-free refusal
+
+    // …and deeper inside the agent's own surface, where the outer agent would load the new one as
+    // definition content. Every other command refuses this position; init must not be the way in.
+    const surface = join(inside, "skills");
+    await mkdir(surface);
+    await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the agent .*fastagent —/);
   });
 
   it("`init` always nests — no detection, no prompt, no placement flags", async () => {

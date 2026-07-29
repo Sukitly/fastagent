@@ -21,7 +21,7 @@
  */
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
-import { AGENT_CONFIG_NAMES, AGENT_DIR } from "../engines/pi/config.ts";
+import { AGENT_CONFIG_NAMES, AGENT_DIR, enclosingAgentDir } from "../engines/pi/config.ts";
 import { SECRETS_DIRNAME } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
@@ -114,6 +114,16 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       `"${dir}": "${AGENT_DIR}" is the reserved agent-directory name, so this path already reads as an ` +
         `agent — init here would create ${AGENT_DIR}/${AGENT_DIR}/, which no command would resolve. ` +
         `Run \`fastagent init <name>\` to put an agent in a subdirectory of it, or init from the parent.`,
+    );
+  }
+  // Inside an agent's own surface (`fastagent/skills`, `fastagent/tools`): scaffolding here would hide
+  // a whole agent inside another agent's definition, where the outer one loads it as content. Every
+  // other command refuses this position (resolvePlacement); init must not be the way in.
+  const enclosing = enclosingAgentDir(dir);
+  if (enclosing) {
+    throw new Error(
+      `"${dir}" is inside the agent ${enclosing} — an agent scaffolded here would be part of that ` +
+        `agent's definition, not an agent of its own. Init in ${dirname(enclosing)} or another directory.`,
     );
   }
 
