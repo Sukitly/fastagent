@@ -128,7 +128,7 @@ describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", ()
     expect(defaultAuthPath("/data/.secrets")).toBe("/data/.secrets/auth.json");
   });
 
-  it("workspace root == $HOME → machinery nests under ~/.fastagent (never bare ~/.state / ~/.secrets)", async () => {
+  it("anchor == $HOME (login outside any agent) → machinery nests under ~/.fastagent, never bare ~/.state", async () => {
     const { homedir } = await import("node:os");
     expect(resolveStateRoot(homedir(), {} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".fastagent", ".state"));
     expect(resolveSecretsDir(homedir(), {} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".fastagent", ".secrets"));

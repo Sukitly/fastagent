@@ -235,7 +235,7 @@ fastagent add feishu [dir]   # 飞书 (open.feishu.cn) — also CREATES the app 
 fastagent add lark [dir]     # Lark intl — opens console + collects/validates credentials
 ```
 
-Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.secrets/.env.example` when possible. The channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, github's `GITHUB_WEBHOOK_SECRET` — random strings the user contributes nothing to) are written to `.secrets/.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps — the CLI makes `.secrets/` self-gitignore before any secret lands, so no ignore setup is required. Everything (glue, companion tool, secrets) lands at the workspace root — `./fastagent/` in the default placement — the same place `dev`/`start` discover channels.
+Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.secrets/.env.example` when possible. The channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, github's `GITHUB_WEBHOOK_SECRET` — random strings the user contributes nothing to) are written to `.secrets/.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps — the CLI makes `.secrets/` self-gitignore before any secret lands, so no ignore setup is required. Everything (glue, companion tool, secrets) lands in the agent dir (`./fastagent/`) — the same place `dev`/`start` discover channels.
 
 An enabled `channels/*.ts|*.js|*.mjs` file must load successfully or `dev` / `start` fails. To
 intentionally disable one, rename it to e.g. `channels/telegram.ts.disabled`; channel files, not config,

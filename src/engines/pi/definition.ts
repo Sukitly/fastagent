@@ -171,21 +171,21 @@ async function ensureDirSelfIgnored(dir: string, content: string, mustIgnore: st
 const SECRETS_GITIGNORE = "*\n!.gitignore\n!.env.example\n";
 
 /**
- * The single owner of the self-ignore MECHANISM: iff the resolved state ROOT lands inside the workspace
- * tree, write `<stateRoot>/.gitignore="*"` — which then covers EVERYTHING under it (sessions, auth.json,
- * every channel's `channels/<kind>` home). `ensureStateDirSelfIgnored` is private, so a caller cannot
- * write a `.gitignore` bypassing this.
+ * The state half of the leak guard: iff the resolved state ROOT lands inside the AGENT DIR, write
+ * `<stateRoot>/.gitignore="*"` — which then covers everything under it (sessions, every channel's
+ * `channels/<kind>` home, the session-control `control.json` token). Credentials are the OTHER half
+ * ({@link ensureSecretsDirSelfIgnored}, `.secrets/`); both go through the private
+ * {@link ensureDirSelfIgnored}, so no caller can write a machinery `.gitignore` bypassing its
+ * verification.
  *
  * ROOT-based, not path-based: everything derives from the state root (config.ts), so protecting the
- * root protects all of it — INCLUDING a custom in-tree root (a `FASTAGENT_STATE_DIR` inside the agent
- * dir), the case a path-based (`.state`-only) guard would leak. A per-path override
- * (`--sessions-dir`/`--auth-path`) is operator-owned: pointed at an external volume it is out-of-tree
- * (correctly not ours to ignore); pointed at a custom in-tree dir WE DON'T OWN, we do not write a
- * `.gitignore` into it (it may be a directory the operator deliberately tracks).
+ * root protects all of it — INCLUDING a custom in-agent root (a `FASTAGENT_STATE_DIR` pointed inside
+ * the agent dir), the case a path-based (`.state`-only) guard would leak. Anything OUTSIDE the agent
+ * dir is not ours: an external volume (the deployed posture) and an operator-named directory alike
+ * get no `.gitignore` — the workspace around the agent is precisely where fastagent must not write.
  *
- * Excludes the user's HOME-global `~/.fastagent` (e.g. `login`/`dev` run from `$HOME`): self-ignore is
- * for protecting state inside an agent PROJECT tree, not for writing a `.gitignore` into the user's
- * home, which a dotfiles repo may track. The global credential file there was never self-ignored.
+ * Excludes the user's home directory as an anchor: self-ignore protects state inside an AGENT, not a
+ * `.gitignore` written into the user's home, which a dotfiles repo may track.
  */
 export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string): Promise<void> {
   // Compare CANONICAL paths for the home check: `dir` arrives realpath-resolved (it is `process.cwd()`
