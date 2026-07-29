@@ -54,6 +54,10 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
+  /** Workspace-relative paths holding secrets that the NAME-based excludes below would miss — a
+   *  `FASTAGENT_SECRETS_DIR` pointed at an in-tree directory not called `.secrets`. Preflight resolves
+   *  them; excluding by path is what keeps `COPY . .` from baking a credential. */
+  secretPaths?: string[];
   /** Whether the baked workspace ships a `.git` (preflight fact). When true, preflight has already
    *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
    *  their runbook's freshness/write-back guidance from the same fact. */
@@ -147,7 +151,14 @@ CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
  *  the agent itself, not by deploy machinery. Shipping `.git` is only half of that loop: preflight
  *  bakes the git BINARY into the generated image iff the workspace ships a `.git` (layout-neutral,
  *  the `shipsGit` fact); a non-git workspace that still needs git declares config.deploy.apt. */
-const DOCKERIGNORE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).
+const dockerignore = (input: ContainerInput): string =>
+  DOCKERIGNORE_BASE +
+  (input.secretPaths ?? [])
+    .filter((p) => !p.startsWith(`${AGENT_DIR}/.secrets/`)) // already covered by **/.secrets
+    .map((p) => `# resolved secrets path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH)\n/${p}\n`)
+    .join("");
+
+const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).
 **/node_modules
 **/.secrets
 **/.state
@@ -172,9 +183,10 @@ const DOCKERIGNORE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take
  * only at deploy time — without it the host CLI's packer would bake `.secrets/` into the image.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
+  const ignore = dockerignore(input);
   return [
     { path: `${AGENT_DIR}/Dockerfile`, content: dockerfile(input) },
-    { path: ".dockerignore", content: DOCKERIGNORE },
-    { path: `${AGENT_DIR}/Dockerfile.dockerignore`, content: DOCKERIGNORE },
+    { path: ".dockerignore", content: ignore },
+    { path: `${AGENT_DIR}/Dockerfile.dockerignore`, content: ignore },
   ];
 }

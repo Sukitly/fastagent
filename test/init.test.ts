@@ -114,7 +114,7 @@ describe("init: scaffoldAgent", () => {
     const dir = await freshDir();
     await scaffoldAgent(dir, { minimal: true });
     const agent = join(dir, "fastagent");
-    await expect(ensureSecretsDirSelfIgnored(agent, join(agent, ".secrets"))).resolves.toBeUndefined();
+    await expect(ensureSecretsDirSelfIgnored(agent, join(agent, ".secrets"))).resolves.toBe("ignored");
   });
 
   it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {

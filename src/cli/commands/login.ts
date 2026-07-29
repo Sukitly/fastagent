@@ -14,11 +14,18 @@
  */
 import { homedir } from "node:os";
 import { loadDotEnv } from "../../env.ts";
-import { AGENT_DIR, findAgentDir, resolveAuthPath, resolveSecretsDir } from "../../engines/pi/config.ts";
+import {
+  AGENT_DIR,
+  enclosingAgentDir,
+  findAgentDir,
+  resolveAuthPath,
+  resolvePlacement,
+  resolveSecretsDir,
+} from "../../engines/pi/config.ts";
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
@@ -29,6 +36,10 @@ export interface LoginOptions {
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   const agentDir = findAgentDir(process.cwd());
+  // Standing INSIDE an agent (`fastagent/tools/`) is NOT "outside an agent": the global fallback would
+  // write a credential the agent right here will never read, under a message saying there is no agent.
+  // resolvePlacement owns that refusal — every other command gives the same one.
+  if (!agentDir && enclosingAgentDir(process.cwd())) failStartupOn(() => resolvePlacement(process.cwd()));
   const loginDir = agentDir ?? homedir();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)

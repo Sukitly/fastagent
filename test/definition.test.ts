@@ -73,7 +73,7 @@ describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () =>
 
     // Author's own additions are fine as long as the protection holds (.env + auth.json ignored).
     await writeFile(join(secrets, ".gitignore"), "*\n!.gitignore\n!.env.example\n!README.md\n");
-    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).resolves.toBeUndefined();
+    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).resolves.toBe("ignored");
   });
 });
 

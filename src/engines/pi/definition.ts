@@ -203,10 +203,20 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
  * inside the agent dir, make it exist and self-ignore ({@link SECRETS_GITIGNORE}) — called by
  * every path that WRITES a secret (`login`, the opener, channel onboarding), so a credential or `.env`
  * value can never land untracked-but-committable. Same home exclusion and containment rules.
+ *
+ * REPORTS the outcome rather than deciding policy: a `FASTAGENT_SECRETS_DIR` pointed outside the agent
+ * is not ours to write a `.gitignore` into (it may be a mounted volume, or a directory the operator
+ * tracks on purpose) — but the caller is usually about to write a real secret there, and only the
+ * caller knows whether that deserves a warning or nothing at all.
  */
-export async function ensureSecretsDirSelfIgnored(dir: string, secretsDir: string): Promise<void> {
-  if (canonicalPath(dir) === canonicalPath(homedir())) return;
-  if (isUnderDir(secretsDir, dir)) await ensureDirSelfIgnored(secretsDir, SECRETS_GITIGNORE, [".env", "auth.json"]);
+export async function ensureSecretsDirSelfIgnored(
+  dir: string,
+  secretsDir: string,
+): Promise<"ignored" | "outside" | "home"> {
+  if (canonicalPath(dir) === canonicalPath(homedir())) return "home";
+  if (!isUnderDir(secretsDir, dir)) return "outside";
+  await ensureDirSelfIgnored(secretsDir, SECRETS_GITIGNORE, [".env", "auth.json"]);
+  return "ignored";
 }
 
 /** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath.

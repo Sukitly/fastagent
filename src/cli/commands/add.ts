@@ -86,8 +86,16 @@ export async function runAddChannel(
   // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
   // written into `.secrets/.env` — make the secrets dir exist and self-ignore FIRST, so the CLI never
   // materializes a secret into a committable file (the .secrets/.gitignore is authoritative over any
-  // root-level negation — git's nested-ignore precedence).
-  await ensureSecretsDirSelfIgnored(target, resolveSecretsDir(target)).catch(failStartup);
+  // root-level negation — git's nested-ignore precedence). A FASTAGENT_SECRETS_DIR pointed outside the
+  // agent is not ours to self-ignore, and the write below happens anyway — so say it, or the guarantee
+  // above would be a claim the command does not keep.
+  const secretsDir = resolveSecretsDir(target);
+  if ((await ensureSecretsDirSelfIgnored(target, secretsDir).catch(failStartup)) === "outside") {
+    console.error(
+      `[fastagent] warn: FASTAGENT_SECRETS_DIR points outside the agent (${secretsDir}) — fastagent does not ` +
+        `write a .gitignore there, so make sure the generated secret below cannot be committed`,
+    );
+  }
   // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
   // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
   let created: Record<string, string> | undefined;

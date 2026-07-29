@@ -217,6 +217,16 @@ export function findAgentDir(dir: string): string | undefined {
   return isDir(nested) ? nested : undefined;
 }
 
+/** The agent dir `dir` sits INSIDE (a proper ancestor named `fastagent`), or undefined. Placement
+ *  resolution deliberately never walks up — the answer must not depend on how deep you stand — but
+ *  "you are inside an agent, just not at its root" is the likeliest reason resolution fails, and both
+ *  the refusal below and `login`'s global-fallback decision need to tell that case apart. */
+export function enclosingAgentDir(dir: string): string | undefined {
+  const segments = resolve(dir).split(sep);
+  const depth = segments.slice(0, -1).lastIndexOf(AGENT_DIR);
+  return depth > 0 ? segments.slice(0, depth + 1).join(sep) : undefined;
+}
+
 /**
  * Resolve a directory into its placement — the ONE owner of the rule, and it has exactly one shape:
  * the agent lives in a directory named `fastagent/`, and the directory around it is the workspace.
@@ -232,9 +242,7 @@ export function resolvePlacement(dir: string): ResolvedPlacement {
     // most likely way to land here is standing INSIDE an agent — in `fastagent/tools/`, say. Telling
     // that user to run `fastagent init` would send them to build `fastagent/fastagent/`, the one
     // shape scaffolding refuses. Name the enclosing agent instead.
-    const segments = base.split(sep);
-    const depth = segments.slice(0, -1).lastIndexOf(AGENT_DIR); // PROPER ancestors only
-    const enclosing = depth > 0 ? segments.slice(0, depth + 1).join(sep) : undefined;
+    const enclosing = enclosingAgentDir(base);
     throw new Error(
       enclosing
         ? `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`

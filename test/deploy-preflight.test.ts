@@ -90,6 +90,42 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
+  it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {
+    // The name-based `**/.secrets` excludes reach a directory called `.secrets`; an override pointing
+    // somewhere else in the baked tree is invisible to them, and `COPY . .` would ship the credential.
+    const agentDir = await workspace();
+    const host = dirname(agentDir);
+    const env = { ...process.env, FASTAGENT_SECRETS_DIR: join(host, "creds") };
+    const call2 = (over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
+      preflightDeploy({
+        agentDir,
+        workspace: host,
+        config: { model: "openai/gpt-4o-mini" },
+        modelSpec: "openai/gpt-4o-mini",
+        run: false,
+        force: false,
+        authPathFlag: undefined,
+        ...over,
+      });
+    const saved = process.env.FASTAGENT_SECRETS_DIR;
+    process.env.FASTAGENT_SECRETS_DIR = env.FASTAGENT_SECRETS_DIR;
+    try {
+      // Generated ignore: the resolved dir is excluded by PATH, not by its (non-matching) name.
+      const clean = await call2();
+      expect(clean.ok).toBe(true);
+      if (clean.ok) expect(clean.container.secretPaths).toEqual(["creds/auth.json", "creds/.env"]);
+
+      // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
+      await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
+      const gated = await call2({ run: true });
+      expect(gated.ok).toBe(false);
+      if (!gated.ok) expect(gated.gate).toMatch(/creds\/auth\.json/);
+    } finally {
+      if (saved === undefined) delete process.env.FASTAGENT_SECRETS_DIR;
+      else process.env.FASTAGENT_SECRETS_DIR = saved;
+    }
+  });
+
   it("--run gates on a kept .dockerignore that would bake secrets or drop the agent", async () => {
     // Missing **/.secrets and **/.env excludes: warn generate-only (asserted above), GATE under --run —
     // a full deploy must not push a secret-laden image (same discipline as the model-travel gate).
