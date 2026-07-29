@@ -1,12 +1,10 @@
 # This file is yours — fastagent writes it once, at `init`, and never touches git again.
+# (`.secrets/` carries its own, so the credentials stay protected however you edit this one.)
 
 # dependencies (reinstalled at deploy)
 node_modules/
 
-# fastagent machinery: credentials and machine state never belong in git.
-# `.secrets/*` (not `.secrets/`) so the committable template below can be re-included.
-.secrets/*
-!.secrets/.env.example
+# machine state: sessions, channel state, schedule state
 .state/
 .cache/
 

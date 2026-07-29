@@ -35,7 +35,7 @@ Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token i
 TELEGRAM_BOT_TOKEN=...
 ```
 
-`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.secrets/.env` (gitignored by the scaffolded agent `.gitignore`). If it could not write one, add it yourself:
+`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.secrets/.env` (gitignored by the scaffolded `.secrets/.gitignore`). If it could not write one, add it yourself:
 
 ```bash
 TELEGRAM_SECRET_TOKEN=... # any random string; verifies inbound updates

@@ -31,7 +31,7 @@ Both ingress modes feed the same request/reply engine: the channel holds the app
 
 ## Add the channel
 
-From an agent directory, credentials land in `.secrets/.env` — excluded by the agent `.gitignore` that `init` scaffolds; both
+From an agent directory, credentials land in `.secrets/.env` — excluded by the `.secrets/.gitignore` that `init` scaffolds; both
 commands refuse to write platform credentials into a committable file:
 
 ```bash

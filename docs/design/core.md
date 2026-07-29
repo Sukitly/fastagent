@@ -45,8 +45,8 @@ There is ONE agent shape, in ONE placement. The shape:
 ├── channels/
 ├── schedules/
 ├── fastagent.config.mjs
-├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .secrets, .state, .env
-├── .secrets/               # fastagent-managed secrets: .env + auth.json (only .env.example travels)
+├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .state, a stray .env
+├── .secrets/               # secrets: .env + auth.json, behind their own .gitignore (only .env.example travels)
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
@@ -104,9 +104,12 @@ The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through t
 store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
 point both at it in a container).
 
-**Git is the author's, not fastagent's.** `init` scaffolds the agent's `.gitignore` — covering
-`node_modules/`, both machinery dirs, and a stray `.env` — and that is the last time fastagent has an
-opinion about git. No command writes, rewrites, reads or verifies an ignore file at runtime. The
+**Git is the author's, not fastagent's.** `init` scaffolds two ignore files — the agent's own
+(`node_modules/`, `.state/`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the template) — and
+that is the last time fastagent has an opinion about git. No command writes, rewrites, reads or
+verifies an ignore file at runtime. They are split because the root one is the file an author has
+reason to edit: git's nested-ignore precedence keeps the credentials protected whatever happens to
+it. The
 version that did carried a decision procedure ("is this path under a directory we control?") that
 approximated git's own semantics with containment comparisons against a different anchor per command;
 it produced four reversals of the same predicate in review, could WRITE a `*`-ignoring file into a

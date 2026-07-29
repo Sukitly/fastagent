@@ -24,9 +24,8 @@ export const GLOBAL_HOME_DIR = ".fastagent";
 /** The secrets segment inside an agent dir (or the global home): every PATH fastagent resolves —
  *  `.env`, `.env.example`, auth.json, the scaffold's write — derives from it, so they cannot drift
  *  apart. `FASTAGENT_SECRETS_DIR` relocates the RESOLVED dir ({@link resolveSecretsDir}), never this
- *  name. NOT the only place the string appears: `templates/gitignore` spells the ignore rules out as
- *  literal text, because it is a real file the author owns from `init` on — renaming this constant
- *  means editing that template (and the init test that reads it against `git check-ignore`) too. */
+ *  name. The scaffold's ignore templates are real files the author owns from `init` on, so they spell
+ *  their rules out as literal text — renaming this constant means editing them too. */
 export const SECRETS_DIRNAME = ".secrets";
 
 /** The state segment inside an agent dir — same rule, same template caveat; `FASTAGENT_STATE_DIR`

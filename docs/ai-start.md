@@ -45,7 +45,7 @@ You are non-interactive, so do not rely on prompts you cannot answer.
 - Alternatively, ask the user for a provider API key and put it in the agent's `.secrets/.env` only with permission (never a root `.env` — that file is not read).
 - List available specifications with `fastagent models`.
 - Always pass `--model provider/id`, set `FASTAGENT_MODEL`, or write `model` in `fastagent.config.*`.
-- Never commit secrets or machine state — the agent `.gitignore` excludes `.secrets/` and `.state/`; do not undo that.
+- Never commit secrets or machine state — `.secrets/` carries its own `.gitignore` and the agent one excludes `.state/`; do not undo that.
 
 ## Know which commands exit
 
@@ -223,7 +223,7 @@ Declare additional host secrets in `config.deploy.secrets`, then register channe
    ```
 
 4. Do not leave `dev` or `start` running in the foreground.
-5. Do not commit secrets or machine state — the agent `.gitignore` excludes `.secrets/` and `.state/`; do not undo that.
+5. Do not commit secrets or machine state — `.secrets/` carries its own `.gitignore` and the agent one excludes `.state/`; do not undo that.
 6. If a command fails, read [Troubleshooting](troubleshooting.md) before guessing.
 
 ## References

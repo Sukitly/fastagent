@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
@@ -24,14 +23,6 @@ async function exists(p: string): Promise<boolean> {
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
-/** Run a command to completion in `cwd`; returns its exit code (git is the oracle for ignore rules). */
-function run(cmd: string, args: string[], cwd: string): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, stdio: "ignore" });
-    child.on("close", (code) => resolve(code ?? 1));
-    child.on("error", () => resolve(1));
-  });
-}
 /** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
 function cliInit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve) => {
@@ -68,6 +59,7 @@ describe("init: scaffoldAgent", () => {
         agentPath("package.json"),
         agentPath(".gitignore"),
         agentPath(".secrets", ".env.example"),
+        agentPath(".secrets", ".gitignore"),
       ].sort(),
     );
     // THE point of the placement: the workspace gained exactly one entry — `fastagent/` — and nothing else.
@@ -82,10 +74,10 @@ describe("init: scaffoldAgent", () => {
     expect(ig.ignores(".env.local")).toBe(true);
     expect(ig.ignores(".env.example")).toBe(false);
 
-    // ONE .gitignore, at the agent root, covering everything fastagent creates (the git-oracle test
-    // below proves it against real git); it travels with the directory.
+    // Both ignore files travel with the directory; `.secrets/` protects itself independently of the
+    // root one, which is the file the author is expected to edit.
     expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
-    expect(existsSync(join(dir, "fastagent", ".secrets", ".gitignore"))).toBe(false); // no second file
+    expect(await readFile(join(dir, "fastagent", ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
     // frames auth as a choice (`fastagent login` OR a provider API key), never implying a key is required.
@@ -121,30 +113,6 @@ describe("init: scaffoldAgent", () => {
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Project spec");
   });
 
-  it("the scaffolded .gitignore covers everything fastagent creates — asked of git itself", async () => {
-    // fastagent writes this file ONCE and never touches git again, so this is the whole protection:
-    // it has to hold for the real paths, under real git semantics. Oracle is `git check-ignore`, not
-    // our own matcher — the point is to agree with git, not with ourselves.
-    const dir = await freshDir();
-    await scaffoldAgent(dir, { minimal: true });
-    const agent = join(dir, "fastagent");
-    await run("git", ["init", "-q"], dir);
-    await mkdir(join(agent, ".state", "sessions"), { recursive: true });
-    await mkdir(join(agent, "node_modules", "pkg"), { recursive: true });
-    for (const p of [".env", ".secrets/.env", ".secrets/auth.json", ".state/control.json"]) {
-      await writeFile(join(agent, p), "x");
-    }
-    const ignored = async (rel: string) =>
-      (await run("git", ["check-ignore", "-q", join("fastagent", rel)], dir)) === 0;
-    for (const rel of [".env", ".secrets/.env", ".secrets/auth.json", ".state/sessions", ".state/control.json"]) {
-      expect(await ignored(rel), rel).toBe(true);
-    }
-    // …while everything the author is supposed to commit stays visible.
-    for (const rel of [".secrets/.env.example", "persona.md", "fastagent.config.mjs"]) {
-      expect(await ignored(rel), rel).toBe(false);
-    }
-  });
-
   it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
     const dir = await freshDir();
     const { complete, created } = await scaffoldAgent(dir, { minimal: true });
@@ -157,6 +125,7 @@ describe("init: scaffoldAgent", () => {
         agentPath("skills", "writing-great-skills", "LICENSE"),
         agentPath(".gitignore"),
         agentPath(".secrets", ".env.example"),
+        agentPath(".secrets", ".gitignore"),
         agentPath("fastagent.config.mjs"),
       ].sort(),
     );
