@@ -5,7 +5,8 @@
  * Red line: config describes deployment/runtime choices, never authored identity or expertise (those
  * live in persona.md + skills, with AGENTS.md as project context). The config is never structural:
  * deleting it leaves a zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
- * What makes a directory an agent is its NAME (`fastagent/` — see resolvePlacement).
+ * What makes a directory an agent is its NAME plus one shallow existence check (`fastagent/` holding
+ * a definition — see resolvePlacement).
  */
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -248,10 +249,11 @@ export function enclosingAgentDir(dir: string): string | undefined {
 
 /**
  * Resolve a directory into its placement — the ONE owner of the rule, and it has exactly one shape:
- * the agent lives in a directory named `fastagent/`, and the directory around it is the workspace.
- * Placement is STRUCTURAL (the name is the marker), never configured and never detected, so the
- * answer cannot depend on file contents or on where you invoked from: `<dir>` and `<dir>/fastagent`
- * resolve identically. A directory with no `fastagent/` is not an agent → throw (fail visibly).
+ * the agent lives in a directory named `fastagent/` that holds a definition, and the directory around
+ * it is the workspace. Placement is STRUCTURAL — never configured, never detected from the
+ * surroundings, and never dependent on where you invoked from: `<dir>` and `<dir>/fastagent` resolve
+ * identically, because the SAME name + evidence test ({@link findAgentDir}) decides both. Anything
+ * else is not an agent → throw (fail visibly), with the way out that fits which dead end it is.
  */
 export function resolvePlacement(dir: string): ResolvedPlacement {
   const base = resolve(dir);

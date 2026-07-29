@@ -20,8 +20,8 @@
  * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`). The files
  * this module writes are real templates under templates/, read through templates.ts.
  */
-import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative } from "node:path";
+import { access, lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { AGENT_CONFIG_NAMES, AGENT_DIR, enclosingAgentDir } from "../engines/pi/config.ts";
 import { SECRETS_DIRNAME } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
@@ -182,9 +182,9 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   const created: string[] = [];
   // ONE rollback scope: any failure removes what THIS run created — files AND the directories it made
   // for them. Leaving the empty dirs behind would be worse than untidy: the occupancy refusal above
-  // would then report the next `init` as "already exists and is not empty", blaming the user for our
-  // own debris. Every file lands inside the `fastagent/` dir that refusal proved empty, so `wx` (never
-  // clobber) can only fire on a concurrent writer — an error, not a file to keep.
+  // would then report the next `init` as occupied, blaming the user for our own debris. Every file
+  // lands inside the `fastagent/` dir that refusal proved empty, so `wx` (never clobber) can only fire
+  // on a concurrent writer — an error, not a file to keep.
   try {
     for (const file of files) {
       const abs = join(dir, file.rel);
@@ -194,10 +194,17 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     }
   } catch (error) {
     // Best-effort rollback of a partial scaffold: anything that won't delete is left behind (the
-    // original error below is the one worth surfacing — a cleanup failure must not mask it). The
-    // `fastagent/` root goes too, but only when THIS run created it.
+    // original error below is the one worth surfacing — a cleanup failure must not mask it). Files
+    // first, then the directories they lived in, deepest first: `rmdir` removes only what BECAME
+    // empty, so a pre-existing sibling is never touched. The `fastagent/` root goes last, and only
+    // when THIS run created it — "empty" was never proof of ownership. (Reaching here at all takes a
+    // real fs fault: the occupancy refusal above proved the target empty, so nothing else can fail
+    // mid-loop. The covered case is a permission fault before the first write.)
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
-    if (!agentDirExisted) await rm(join(dir, root), { recursive: true, force: true }).catch(() => {});
+    for (const rel of [...parents].sort((a, b) => b.split(sep).length - a.split(sep).length)) {
+      if (rel !== root) await rmdir(join(dir, rel)).catch(() => {});
+    }
+    if (!agentDirExisted) await rmdir(join(dir, root)).catch(() => {});
     throw error;
   }
   return { dir, complete: !minimal, created };

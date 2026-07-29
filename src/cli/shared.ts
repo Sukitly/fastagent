@@ -64,6 +64,15 @@ export async function guardCredentialHome(anchorDir: string, secretPath: string)
   }
 }
 
+/**
+ * ONE padded label writer for the startup report (`dev`/`start`), matching `info`'s: hand-spaced
+ * labels drift out of alignment the moment a longer one appears — which is exactly what happened when
+ * `workspace:` joined `config:`/`model:`/`state:`.
+ */
+export function reportLine(label: string, value: string): void {
+  log.info(`[fastagent] ${`${label}:`.padEnd(11)}${value}`);
+}
+
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
 export function isInteractive(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);

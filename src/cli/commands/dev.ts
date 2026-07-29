@@ -9,12 +9,12 @@ import { loadDotEnv } from "../../env.ts";
 import { resolvePlacement } from "../../engines/pi/config.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { log, setLogLevel } from "../../log.ts";
+import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
+import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";
 
 export interface DevOptions {
   port?: string;
@@ -60,12 +60,10 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
-  log.info(`[fastagent] agent:     ${a.agentDir}`);
-  log.info(`[fastagent] workspace: ${a.workspace}`);
-  log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
-  log.info(
-    `[fastagent] model:  ${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`,
-  );
+  reportLine("agent", a.agentDir);
+  reportLine("workspace", a.workspace);
+  reportLine("config", a.configPath ?? "(zero-config)");
+  reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
   await reportAuth(a.modelSpec, a.authPath);
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
@@ -87,12 +85,12 @@ type Assembled = Awaited<ReturnType<typeof createPiAgentFromDir>>;
 
 /** The agents/skills/tools/collisions report lines. */
 function reportAgentsSkillsTools(a: Assembled): void {
-  log.info(`[fastagent] context: ${a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
-  if (a.definition.persona) log.info(`[fastagent] persona: persona.md`);
-  log.info(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
-  if (a.toolNames.length > 0) log.info(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
+  reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
+  if (a.definition.persona) reportLine("persona", "persona.md");
+  reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
+  if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
   if (a.deferredToolNames.length > 0) {
-    log.info(`[fastagent] deferred: ${a.deferredToolNames.join(", ")} (activated via search_tools)`);
+    reportLine("deferred", `${a.deferredToolNames.join(", ")} (activated via search_tools)`);
   }
   reportToolCollisions(a.toolCollisions);
   reportModuleLoadFailures(a.toolFailures);

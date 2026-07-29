@@ -78,7 +78,7 @@ The default directory is the current directory. `init`:
 - keeps an existing `AGENTS.md` as project context;
 - refuses when `./fastagent/` already holds a `fastagent.config.*` (already an agent) or any other content.
 
-There is no placement flag: the agent is always `./fastagent/`, and the directory around it is the workspace. Placement is structural — the directory NAME is the marker, never configured.
+There is no placement flag: the agent is always `./fastagent/`, and the directory around it is the workspace. Placement is structural — a `fastagent/` directory holding a definition is the marker, never configured.
 
 Then run:
 

@@ -21,7 +21,7 @@ import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../scaffold/init.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
+import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -73,21 +73,21 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
 
-  log.info(`[fastagent] agent:     ${agentDir}`);
-  log.info(`[fastagent] workspace: ${workspace}`);
-  log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
+  reportLine("agent", agentDir);
+  reportLine("workspace", workspace);
+  reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
-  log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
-  if (definition.persona) log.info(`[fastagent] persona: persona.md`);
-  log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
-  if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
+  reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
+  if (definition.persona) reportLine("persona", "persona.md");
+  reportLine("skills", definition.skills.map((s) => s.name).join(", ") || "(none)");
+  if (toolNames.length > 0) reportLine("tools", toolNames.join(", "));
   if (deferredToolNames.length > 0) {
-    log.info(`[fastagent] deferred: ${deferredToolNames.join(", ")} (activated via search_tools)`);
+    reportLine("deferred", `${deferredToolNames.join(", ")} (activated via search_tools)`);
   }
   reportToolCollisions(toolCollisions);
   reportModuleLoadFailures(toolFailures);
-  log.info(`[fastagent] state:  ${stateRoot}`);
-  log.info(`[fastagent] sessions: ${sessionsDir}`);
+  reportLine("state", stateRoot);
+  reportLine("sessions", sessionsDir);
   // State defaults under the agent dir, which a redeploy may replace wholesale. Gate on where the
   // state root ACTUALLY resolved (inside the agent dir?), not on the raw env var: an empty
   // `FASTAGENT_STATE_DIR=""` reads as unset (resolveStateRoot) and still lands in-agent, so a raw

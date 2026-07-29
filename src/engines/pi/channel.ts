@@ -76,7 +76,7 @@ export async function inspectChannels(dir: string): Promise<{
 
 /**
  * Channel file basenames under `<dir>/channels/` — the authoring view (`fastagent info`), which lists
- * WITHOUT importing. A symlinked channels directory must remain inside the workspace.
+ * WITHOUT importing. A symlinked channels directory must remain inside the agent dir.
  */
 export async function discoverChannelFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "channels");
