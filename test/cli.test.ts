@@ -436,7 +436,7 @@ describe("cli papercuts", () => {
     delete env.FASTAGENT_AUTH_PATH;
     const { code, stderr } = await run(["login", "no-such-provider"], cwd, env);
     expect(code).not.toBe(0);
-    expect(stderr).toMatch(/no \.\/fastagent\/ here — logging in GLOBALLY/);
+    expect(stderr).toMatch(/no agent definition in \.\/fastagent\/ here — logging in GLOBALLY/);
     await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
 
     // …and it is silent when --auth-path outranks the fallback: an announcement naming a file the run

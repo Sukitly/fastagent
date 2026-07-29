@@ -54,7 +54,8 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // does not write would be worse than saying nothing). The resolved path goes in the message.
   if (!agentDir && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
-      `[fastagent] no ./${AGENT_DIR}/ here — logging in GLOBALLY (${authPath}). An agent reads its own ` +
+      `[fastagent] no agent definition in ./${AGENT_DIR}/ here — logging in GLOBALLY (${authPath}). ` +
+        `An agent reads its own ` +
         `.secrets/auth.json: \`cd\` into one first, or point this run at it with --auth-path.`,
     );
   }

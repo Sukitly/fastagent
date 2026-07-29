@@ -4,13 +4,11 @@
  * module-scoped flag access (`values.*`) became parameters.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join, relative } from "node:path";
+import { relative } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
 import { fastagentCredentialStore } from "../engines/pi/auth.ts";
-import { GLOBAL_HOME_DIR } from "../paths.ts";
 import {
   isValidPort,
   listModels,
@@ -22,7 +20,7 @@ import {
   resolveSecretsDir,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { ensureSecretsDirSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored, isGlobalMachineryPath, isUnderDir } from "../engines/pi/definition.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
 import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
@@ -47,10 +45,10 @@ import { failStartup, failUsage } from "./fail.ts";
 export async function guardCredentialHome(anchorDir: string, secretPath: string): Promise<void> {
   const secretsDir = resolveSecretsDir(anchorDir);
   const warn = (text: string): void => console.error(`[fastagent] warn: ${text}`);
-  // Decided on the TARGET first, like the guard itself: fastagent's user-global machinery home is its
-  // own and needs no `.gitignore`. Pointing `--auth-path` at it from inside an agent is the DOCUMENTED
-  // way to share one account across projects — warning about it would be advice against our own docs.
-  if (isUnderDir(secretPath, join(homedir(), GLOBAL_HOME_DIR))) return;
+  // Decided on the TARGET first, through the guard's own predicate: fastagent's user-global machinery
+  // home needs no `.gitignore`. Pointing `--auth-path` at it from inside an agent is the DOCUMENTED way
+  // to share one account across projects — warning about it would be advice against our own docs.
+  if (isGlobalMachineryPath(secretPath)) return;
   if (!isUnderDir(secretPath, secretsDir)) {
     warn(
       `${secretPath} is outside fastagent's secrets dir (${secretsDir}) — no .gitignore is written ` +

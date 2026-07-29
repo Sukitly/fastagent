@@ -83,7 +83,7 @@ export function moduleLoadHint(error: NodeJS.ErrnoException): string {
     return "\n  (a dependency is not installed — run `npm install` in the agent dir)";
   }
   if (/import statement outside a module|Unexpected token 'export'|ERR_REQUIRE_ESM/.test(error.message)) {
-    return '\n  (this workspace must be ESM — set "type": "module" in package.json)';
+    return '\n  (the agent dir must be ESM — set "type": "module" in package.json)';
   }
   return "";
 }

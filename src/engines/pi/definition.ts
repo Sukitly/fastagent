@@ -193,7 +193,7 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
   // Decided on the TARGET, exactly like the secrets half: fastagent's own global machinery home needs
   // no `.gitignore` (a dotfiles repo may track it), and judging by the CALLER's anchor instead would
   // skip the guard for every target beneath it.
-  if (isUnderDir(stateRoot, join(homedir(), GLOBAL_HOME_DIR))) return;
+  if (isGlobalMachineryPath(stateRoot)) return;
   // Containment on RAW paths: stateRoot is resolve()'d (config.ts) and `dir` is absolute, so it is exact
   // by construction. An external-volume root resolves outside the tree → skip (not ours to ignore).
   // Must-ignore names = the state dirs that actually live here (representative, not exhaustive).
@@ -216,6 +216,13 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
  * tracks on purpose) — but the caller is usually about to write a real secret there, and only the
  * caller knows whether that deserves a warning or nothing at all.
  */
+/** Is `p` inside fastagent's user-global machinery home (`~/.fastagent`)? THE one owner of "this is
+ *  ours and needs no `.gitignore`" — a dotfiles repo may track that directory deliberately. Both the
+ *  guard below and the CLI's secret-leak policy (cli/shared.ts) ask it, so the rule cannot fork. */
+export function isGlobalMachineryPath(p: string): boolean {
+  return isUnderDir(p, join(homedir(), GLOBAL_HOME_DIR));
+}
+
 export async function ensureSecretsDirSelfIgnored(
   dir: string,
   secretsDir: string,
@@ -224,7 +231,7 @@ export async function ensureSecretsDirSelfIgnored(
   // user-global machinery home needs no `.gitignore` (a dotfiles repo may track it deliberately);
   // anywhere else that a secret is about to land does — including a directory reached only because
   // the caller's anchor was $HOME (`login` outside any agent with an explicit --auth-path).
-  if (isUnderDir(secretsDir, join(homedir(), GLOBAL_HOME_DIR))) return "home";
+  if (isGlobalMachineryPath(secretsDir)) return "home";
   if (!isUnderDir(secretsDir, dir)) return "outside";
   await ensureDirSelfIgnored(secretsDir, SECRETS_GITIGNORE, [".env", "auth.json"]);
   return "ignored";
