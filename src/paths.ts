@@ -21,14 +21,16 @@ export const AGENT_DIR = "fastagent";
  *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link AGENT_DIR}, which names agent directories. */
 export const GLOBAL_HOME_DIR = ".fastagent";
 
-/** The secrets segment inside an agent dir (or the global home). ONE owner: `.env`, `.env.example`,
- *  auth.json and the scaffold all derive their paths from it, so a rename can never move the real
- *  `.env` without the template beside it (or auth.json without the `.gitignore` protecting it).
- *  `FASTAGENT_SECRETS_DIR` relocates the RESOLVED dir ({@link resolveSecretsDir}), never this name. */
+/** The secrets segment inside an agent dir (or the global home): every PATH fastagent resolves —
+ *  `.env`, `.env.example`, auth.json, the scaffold's write — derives from it, so they cannot drift
+ *  apart. `FASTAGENT_SECRETS_DIR` relocates the RESOLVED dir ({@link resolveSecretsDir}), never this
+ *  name. NOT the only place the string appears: `templates/gitignore` spells the ignore rules out as
+ *  literal text, because it is a real file the author owns from `init` on — renaming this constant
+ *  means editing that template (and the init test that reads it against `git check-ignore`) too. */
 export const SECRETS_DIRNAME = ".secrets";
 
-/** The state segment inside an agent dir — same ownership rule; `FASTAGENT_STATE_DIR` relocates the
- *  resolved dir ({@link resolveStateRoot}), never this name. */
+/** The state segment inside an agent dir — same rule, same template caveat; `FASTAGENT_STATE_DIR`
+ *  relocates the resolved dir ({@link resolveStateRoot}), never this name. */
 export const STATE_DIRNAME = ".state";
 
 /**

@@ -54,9 +54,9 @@ export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.en
 }
 
 /** The committable template: `<agentDir>/.secrets/.env.example` — deliberately NOT moved by
- *  `FASTAGENT_SECRETS_DIR`: the template is authored, committable agent surface (un-ignored by the
- *  `.secrets/.gitignore` the scaffold writes, so it travels with the agent while real values never
- *  do); only the real `.env` follows the override. */
+ *  `FASTAGENT_SECRETS_DIR`: it is authored agent surface that travels with the directory (the
+ *  scaffolded `.gitignore` re-includes exactly this path beside its `.secrets/*` exclude), while the
+ *  real values follow the override. */
 export function envExamplePath(agentDir: string): string {
   return join(agentDir, SECRETS_DIRNAME, ".env.example");
 }
