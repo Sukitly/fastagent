@@ -353,7 +353,7 @@ export async function deployAgentcoreRun(
   const url = outputs.ForwarderUrl?.replace(/\/$/, ""); // registrars append /<path>; no double slash
 
   // 8b. Restart the ingress session so the new image serves IMMEDIATELY. A live session keeps its
-  //     old compute until idle timeout (15 min) or max compute lifetime (8 h) — without this, a
+  //     old compute until the idle timeout or the max compute lifetime (8 h) — without this, a
   //     redeploy "succeeds" while an actively-chatting session keeps answering from the PREVIOUS
   //     image (the exact silent trap the first real deploy hit). Failure is advisory, never a gate:
   //     on a first deploy the session does not exist yet, and the stop is an immediacy optimization
@@ -414,7 +414,7 @@ export async function deployAgentcoreRun(
       } else {
         log(
           `warn: could not stop the ingress session — an ACTIVE session may keep serving the PREVIOUS ` +
-            `image until reclaimed (≤15 min idle / 8 h ceiling). Stop it manually: aws ${stopCommand.join(" ")}`,
+            `image until reclaimed (idle timeout / 8 h ceiling). Stop it manually: aws ${stopCommand.join(" ")}`,
         );
         const firstLine = stderr.trim().split("\n")[0];
         if (firstLine) log(`warn: ${firstLine}`);

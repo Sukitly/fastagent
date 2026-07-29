@@ -152,7 +152,7 @@ fastagent deploy agentcore
 
 Generates `agentcore.template.yaml` (one CloudFormation stack = the whole topology), `lambda/forwarder.js`, `Dockerfile`, `.dockerignore`, then prints the runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a **unique tag per deploy**, `aws cloudformation deploy` with the secret parameters, read the stack outputs, register webhooks. `--run` drives all of it (aws + docker CLIs) and carries your local model credential.
 
-AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed after ~15 min idle). The stack therefore carries:
+AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed 3 minutes after the agent goes idle). The stack therefore carries:
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
 - a **forwarder Lambda** with a public Function URL fronting the webhooks (channels verify signatures exactly as on every host);

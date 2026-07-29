@@ -70,6 +70,21 @@ export interface AgentcorePlan {
  *  Durability across deploys comes from the S3 snapshot (channels/agentcore-state.ts). */
 export const MOUNT = "/mnt/state";
 
+/**
+ * How long an idle session keeps its microVM. Memory is billed per second across the WHOLE session
+ * — idle included, at the peak level reached — so this tail is the standing cost of every burst of
+ * activity, while CPU stops billing the moment the agent stops working. 3 minutes rather than the
+ * platform's 15: the tail shrinks 5×, and the cost is a cold start (image + Node + snapshot restore)
+ * for anyone who returns after a longer gap. `/ping` reports HealthyBusy while work is in flight, so
+ * this timer only ever starts once the agent has genuinely settled — a long turn is never cut short.
+ * AWS accepts 60–28800.
+ */
+export const IDLE_TIMEOUT_SECONDS = 180;
+
+/** The platform ceiling on one session's compute (8 h). The session ID outlives it: the next invoke
+ *  simply gets fresh compute with the same storage. */
+export const MAX_LIFETIME_SECONDS = 28800;
+
 /** The state snapshot's object key in the deployment bucket (one object; see agentcore-state.ts). */
 export const STATE_KEY = "state/snapshot.json.gz";
 
@@ -556,9 +571,11 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     `      # forces a NAT gateway for model/channel egress (~$33/mo) — deliberately not the default.`,
     `      FilesystemConfigurations:`,
     `        - SessionStorage: { MountPath: ${MOUNT} }`,
-    `      # Idle 15 min (the ping's HealthyBusy keeps busy sessions alive), max compute lifetime 8 h`,
-    `      # (the platform ceiling; the session id stays valid — the next invoke gets a fresh compute).`,
-    `      LifecycleConfiguration: { IdleRuntimeSessionTimeout: 900, MaxLifetime: 28800 }`,
+    `      # Idle ${IDLE_TIMEOUT_SECONDS}s (the ping's HealthyBusy keeps BUSY sessions alive regardless), max compute`,
+    `      # lifetime ${MAX_LIFETIME_SECONDS}s — the platform ceiling; the session id stays valid, so the next invoke`,
+    `      # just gets fresh compute with the same storage. Memory bills per second for the whole`,
+    `      # session INCLUDING the idle tail, so a shorter tail is the main cost lever here.`,
+    `      LifecycleConfiguration: { IdleRuntimeSessionTimeout: ${IDLE_TIMEOUT_SECONDS}, MaxLifetime: ${MAX_LIFETIME_SECONDS} }`,
     `      EnvironmentVariables:`,
     ...envLines,
   ];
@@ -949,7 +966,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     runbook.push(
       ``,
       `# After a REDEPLOY, stop the ingress session so the new image serves immediately — a live session`,
-      `# keeps its old compute (and the OLD image) until 15 min idle / the 8 h compute ceiling`,
+      `# keeps its old compute (and the OLD image) until ${IDLE_TIMEOUT_SECONDS}s idle / the 8 h compute ceiling`,
       `# (\`--run\` does this automatically):`,
       `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
       `  --runtime-session-id "${ingressSessionId(name)}"`,

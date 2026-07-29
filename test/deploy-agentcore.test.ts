@@ -9,6 +9,8 @@ import {
   TEMPLATE_FILE,
   GENERATED_TEMPLATE_MARKER,
   FORWARDER_FILE,
+  IDLE_TIMEOUT_SECONDS,
+  MAX_LIFETIME_SECONDS,
   STATE_KEY,
   cfnParamName,
   forwarderSource,
@@ -297,6 +299,18 @@ describe("deploy agentcore: the plan", () => {
     const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
     expect(template).not.toContain("StateBucket");
     expect(template).not.toContain("s3:GetObject");
+  });
+
+  it("holds an idle session for 3 minutes — within the platform's 60–28800 range, and only after work settles", () => {
+    // The idle tail is what memory bills for after the agent stops working (CPU stops immediately),
+    // so it is the deployment's main standing cost. HealthyBusy keeps a BUSY session alive whatever
+    // this says, so shortening it cannot cut a turn short — it only shortens the wait before sleep.
+    expect(IDLE_TIMEOUT_SECONDS).toBe(180);
+    expect(IDLE_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(60);
+    expect(MAX_LIFETIME_SECONDS).toBeLessThanOrEqual(28800);
+    expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).toContain(
+      `LifecycleConfiguration: { IdleRuntimeSessionTimeout: 180, MaxLifetime: 28800 }`,
+    );
   });
 
   it("tells the truth about state: the mount is wiped per deploy, the S3 snapshot is what survives", () => {
