@@ -24,7 +24,7 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 
 ## Mental model
 
-- Two nouns, and they are not the same directory: the **agent** is `./fastagent/` — optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, config, machinery — and its **workspace** is the directory around it: what the agent works ON, its cwd, whose `AGENTS.md` is project context. (`--flat` collapses the two: the directory IS the agent.)
+- Two nouns, and they are never the same directory: the **agent** is `./fastagent/` — optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, config, machinery — and its **workspace** is the directory around it: what the agent works ON, its cwd, whose `AGENTS.md` is project context.
 - An `AGENTS.md` does not make a directory a FastAgent agent. A `fastagent.config.*` file does.
 - FastAgent can run the directory locally, embed it in an app, connect it to GitHub, Telegram, or Slack, expose it over HTTP, or put it behind a custom channel.
 - Do not invent a new project layout unless the user asks. Prefer the existing directory.
@@ -32,7 +32,7 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 ## Inspect before changing anything
 
 1. Check whether `fastagent.config.*` exists at the directory root or under `./fastagent/`. If it does, the directory is already an agent.
-2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` in the agent dir (`./fastagent/` by default; the directory itself for a `--flat` agent).
+2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` in the agent dir (`./fastagent/`).
 3. If code tools are present, check whether the agent's `package.json` sets `"type": "module"`.
 4. Ask before choosing a model provider, adding credentials, or moving an existing agent.
 
@@ -74,12 +74,11 @@ Run `init` **in the directory the agent must see and act on** — that directory
 
 The default directory is the current directory. `init`:
 
-- scaffolds `persona.md`, an example skill and tool, and config — all inside `./fastagent/` (zero files at the host root; there is no detection and no prompt);
-- never overwrites existing files;
+- scaffolds `persona.md`, an example skill and tool, and config — all inside `./fastagent/` (nothing is written outside it; there is no detection and no prompt);
 - keeps an existing `AGENTS.md` as project context;
-- refuses a directory that already has `fastagent.config.*` (at either root) or a non-empty `./fastagent/`.
+- refuses when `./fastagent/` already holds a `fastagent.config.*` (already an agent) or any other content.
 
-`--flat` lands the agent directly in the directory instead — use it only when the directory is ITSELF the agent (a standalone agent dir, a monorepo package). The placement is structural (the `fastagent/` directory name is the marker, never configured); to change it later, move the agent's files between the root and `./fastagent/`. Because that name is the marker, `--flat` into a directory named `fastagent` is refused — it would resolve as nested and serve with the parent as the workspace.
+There is no placement flag: the agent is always `./fastagent/`, and the directory around it is the workspace. Placement is structural — the directory NAME is the marker, never configured.
 
 Then run:
 

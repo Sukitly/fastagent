@@ -23,9 +23,9 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
 const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.config.*, .secrets/.env";
 
 /**
- * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the WORKSPACE ROOT
- * (flat: the dir itself; nested: `<dir>/fastagent` — nothing in the host tree ever triggers a
- * restart). Ignoring a directory prunes the whole subtree, so everything outside the allowlist —
+ * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR
+ * (`<dir>/fastagent` — so nothing in the surrounding workspace ever triggers a restart). Ignoring a
+ * directory prunes the whole subtree, so everything outside the allowlist —
  * `.state/` machine state, node_modules, .git, and any file/dir the agent writes as work product —
  * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
  * out of scope by design (keep it under tools/, or restart manually) — the startup log names the set.
@@ -55,7 +55,7 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
 /** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
 export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
   // The watch root is the WORKSPACE ROOT (structural — resolvePlacement): every restart-relevant code
-  // input lives under it in both placements, so a nested root's host tree costs no watchers at all.
+  // input lives under it, so the surrounding workspace costs no watchers at all.
   // The placement is assumed STATIC for the dev session (creating/removing `fastagent/` mid-session
   // is out of scope for watch re-sync).
   const ws = resolvePlacement(dir);

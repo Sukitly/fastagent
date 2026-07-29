@@ -35,9 +35,11 @@ export interface StartOptions {
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const dir = resolve(dirArg);
+  // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
+  // the directory being an agent (which is a runtime/environment failure, exit 1).
+  const portFlag = parsePort(opts.port, "--port", "flag");
   const ws = failStartupOn(() => resolvePlacement(dir));
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
-  const portFlag = parsePort(opts.port, "--port", "flag");
   loadDotEnv(ws.agentDir);
   installProxyFetch();
   await resolveFirstRunModel(ws.agentDir, opts);

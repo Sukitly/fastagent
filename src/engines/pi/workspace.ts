@@ -85,8 +85,7 @@ export interface AgentAssembly {
   modelSpec: string;
   /** Absolute agent dir — definition + config + machinery live here (resolvePlacement().agentDir). */
   agentDir: string;
-  /** Absolute workspace — the agent's cwd / ②-context walk start (= the agent dir when flat; its
-   *  parent when the agent is a nested `fastagent/`). `agentDir !== workspace` is the only discriminant. */
+  /** Absolute workspace — the agent dir's parent: the agent's cwd and the start of the ②-context walk. */
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <root>/.state). */
   stateRoot: string;
@@ -104,9 +103,9 @@ export async function resolveAgentAssembly(
   dir: string,
   options: { model?: string; authPath?: string } = {},
 ): Promise<AgentAssembly> {
-  // Placement is structural (resolvePlacement): the ROOT carries definition + config + machinery; the
-  // WORKSPACE (= root when flat, the parent when nested) is what the agent works on — its cwd and
-  // the start of the ②-context walk (a nested agent reads the host repo's AGENTS.md from there).
+  // Placement is structural (resolvePlacement): the AGENT DIR carries definition + config + machinery;
+  // its parent — the WORKSPACE — is what the agent works on: its cwd and the start of the ②-context
+  // walk (that is where it reads the project's AGENTS.md from).
   const { agentDir, workspace } = resolvePlacement(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
   const modelSpec = resolveModelSpec(options.model, config);
@@ -164,7 +163,7 @@ export async function createPiAgentFromWorkspace(
   modelSpec: string;
   /** Absolute agent dir in use — channels/tools/persona come from here. */
   agentDir: string;
-  /** Absolute workspace in use — the agent's cwd (= the agent dir when flat). */
+  /** Absolute workspace in use — the agent's cwd (the agent dir's parent). */
   workspace: string;
   /** Absolute state root in use (FASTAGENT_STATE_DIR > <root>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;

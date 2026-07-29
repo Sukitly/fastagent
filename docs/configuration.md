@@ -177,10 +177,9 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ### When the repo already owns `tools/` or `channels/`
 
-Nothing to do — the default placement (the whole agent in `./fastagent/`) means FastAgent scans
-the agent's own directories, never the host repo's names (the placement is structural — the
-`fastagent/` directory is the marker, nothing is configured). Only a `--flat` agent scans the
-directory root itself. Within the agent, a broken tool is reported and skipped, while
+Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,
+never the workspace's names (the placement is structural — the `fastagent/` directory name is the
+marker, nothing is configured). Within the agent, a broken tool is reported and skipped, while
 a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
 programmatic tools outside the agent, declare them with `config.tools`.
 

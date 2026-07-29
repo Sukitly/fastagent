@@ -56,7 +56,7 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** That is the default: `init` always nests the WHOLE agent into `./fastagent/` — zero files at the host root, so the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context (the placement is structural, marked by the directory itself, never configured or detected). Use `--flat` only when the directory is ITSELF the agent (a standalone agent dir, a monorepo package).
+**Initializing inside an existing project?** That is the only mode: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. The placement is structural, marked by the directory name itself, never configured or detected.
 
 A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a

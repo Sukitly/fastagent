@@ -58,20 +58,20 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. `/data` matches the Fly recipe. */
 const MOUNT = "/data";
 
-/** The `RAILWAY_DOCKERFILE_PATH` value for a nested agent — repo-root-anchored with a leading
- *  slash, the form Railway's builds/dockerfiles docs use for a Dockerfile in another directory. The
- *  config file's `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own
- *  convention); two mechanisms, two documented spellings, one exported fact each. */
-export const NESTED_DOCKERFILE_PATH_VAR = `/${AGENT_DIR}/Dockerfile`;
+/** The `RAILWAY_DOCKERFILE_PATH` value — repo-root-anchored with a leading slash, the form Railway's
+ *  builds/dockerfiles docs use for a Dockerfile in another directory. The config file's
+ *  `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own convention); two
+ *  mechanisms, two documented spellings, one exported fact each. */
+export const DOCKERFILE_PATH_VAR = `/${AGENT_DIR}/Dockerfile`;
 
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
-function railwayJson(nested?: boolean): string {
+function railwayJson(): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
-      // dockerfilePath is relative to the workspace root (`railway up`'s upload context) in BOTH layouts.
-      build: { builder: "DOCKERFILE", dockerfilePath: nested ? `${AGENT_DIR}/Dockerfile` : "Dockerfile" },
+      // dockerfilePath is relative to the workspace root (`railway up`'s upload context).
+      build: { builder: "DOCKERFILE", dockerfilePath: `${AGENT_DIR}/Dockerfile` },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -82,17 +82,14 @@ function railwayJson(nested?: boolean): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, modelAuth, channels } = input;
-  // Nested: railway.json is namespaced under the agent dir too (the host repo may carry its own
+  // railway.json is namespaced under the agent dir too (the workspace may carry its own
   // railway.toml/json for the product). Railway reads config-as-code from the repo root by default and
   // pointing it at a custom path is DASHBOARD-ONLY — so the BUILD entry travels as the scriptable
   // RAILWAY_DOCKERFILE_PATH service variable instead (Railway's documented non-root-Dockerfile route),
   // and the config-as-code pointer degrades to an OPTIONAL enhancement: the /health gate (Railway's
   // default restart policy already matches the file's ON_FAILURE).
-  const configPath = input.nested ? `${AGENT_DIR}/railway.json` : "railway.json";
-  const artifacts: Artifact[] = [
-    { path: configPath, content: railwayJson(input.nested) },
-    ...containerArtifacts(input),
-  ];
+  const configPath = `${AGENT_DIR}/railway.json`;
+  const artifacts: Artifact[] = [{ path: configPath, content: railwayJson() }, ...containerArtifacts(input)];
 
   const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets, input.longConnectionChannels);
   const requiredSecrets = secrets.filter((secret) => secret.required);
@@ -123,15 +120,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `railway volume add --mount-path ${MOUNT}`,
     ``,
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
-    ...(input.nested
-      ? [
-          `# RAILWAY_DOCKERFILE_PATH points the build at the workspace's Dockerfile — a service variable,`,
-          `# Railway's documented route to a non-root Dockerfile (no dashboard step needed for the build).`,
-        ]
-      : []),
-    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets${
-      input.nested ? ` RAILWAY_DOCKERFILE_PATH=${NESTED_DOCKERFILE_PATH_VAR}` : ""
-    }`,
+    `# RAILWAY_DOCKERFILE_PATH points the build at the agent's Dockerfile — a service variable,`,
+    `# Railway's documented route to a non-root Dockerfile (no dashboard step needed for the build).`,
+    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets RAILWAY_DOCKERFILE_PATH=${DOCKERFILE_PATH_VAR}`,
   ];
 
   if (requiredSecrets.length > 0) {
@@ -160,16 +151,14 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
 
-  if (input.nested) {
-    runbook.push(
-      ``,
-      `# OPTIONAL — nested: the build already uses the workspace Dockerfile via RAILWAY_DOCKERFILE_PATH`,
-      `# (set above), and Railway's default restart policy equals what ${configPath} declares (ON_FAILURE).`,
-      `# Pointing the service at ${configPath} (Service → Settings → Config-as-code — dashboard-only) adds`,
-      `# the /health healthcheck gate: a boot-crashing deploy is marked FAILED instead of going live dead.`,
-      `# (Zero-downtime switching doesn't apply either way — the ${MOUNT} volume allows one active deployment.)`,
-    );
-  }
+  runbook.push(
+    ``,
+    `# OPTIONAL — the build already uses the agent's Dockerfile via RAILWAY_DOCKERFILE_PATH (set above),`,
+    `# and Railway's default restart policy equals what ${configPath} declares (ON_FAILURE).`,
+    `# Pointing the service at ${configPath} (Service → Settings → Config-as-code — dashboard-only) adds`,
+    `# the /health healthcheck gate: a boot-crashing deploy is marked FAILED instead of going live dead.`,
+    `# (Zero-downtime switching doesn't apply either way — the ${MOUNT} volume allows one active deployment.)`,
+  );
   runbook.push(
     ``,
     `# Deploy — uploads this dir and builds the Dockerfile on Railway (no local Docker needed). This is`,

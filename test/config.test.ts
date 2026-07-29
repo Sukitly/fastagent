@@ -50,73 +50,31 @@ describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bu
 });
 
 describe("config: resolvePlacement (structural placement resolution)", () => {
-  it("flat: a config at the dir root → root = workspace = dir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-flat-"));
+  it("the agent is the ./fastagent/ dir; the workspace is the tree around it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await mkdir(join(dir, "fastagent"));
+    const ws = resolvePlacement(dir);
+    expect(ws).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
+    // Entry-point-invariant: invoked from INSIDE the agent dir, the SAME pair resolves. The name is
+    // the marker, so no file is read — a config-less agent dir resolves exactly the same.
+    expect(resolvePlacement(join(dir, "fastagent"))).toEqual(ws);
+  });
+
+  it("a config outside the agent dir is NOT a marker — placement is the directory NAME", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-strayconfig-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
-    const ws = resolvePlacement(dir);
-    expect(ws.agentDir).toBe(dir);
-    expect(ws.workspace).toBe(dir);
-  });
-
-  it("nested: a config in ./fastagent/ → root = the nested dir, workspace = the host dir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-nested-"));
+    expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
+    // …and it changes nothing once a real agent dir exists beside it.
     await mkdir(join(dir, "fastagent"));
-    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
-    const ws = resolvePlacement(dir);
-    expect(ws.agentDir).toBe(join(dir, "fastagent"));
-    expect(ws.workspace).toBe(dir);
-    // Invoked from INSIDE the nested root: the SAME workspace resolves (workspace = the parent).
-    const inner = resolvePlacement(join(dir, "fastagent"));
-    expect(inner).toEqual(ws);
+    expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
   });
 
-  it("zero-config: no config anywhere → flat (a directory is an agent)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-zero-"));
-    const ws = resolvePlacement(dir);
-    expect(ws).toEqual({ agentDir: dir, workspace: dir });
-  });
-
-  it("a config at BOTH roots is ambiguous → throws IDENTICALLY from both entry points", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-both-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
-    await mkdir(join(dir, "fastagent"));
-    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
-    expect(() => resolvePlacement(dir)).toThrow(/ambiguous/);
-    // Entry-point-invariant: invoked from INSIDE fastagent/, the same conflict must refuse the same
-    // way — never silently resolve nested just because of where the command ran.
-    expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/ambiguous/);
-  });
-
-  it("a config-less fastagent/ that READS as a workspace fails loudly (never a silent flat downgrade)", async () => {
-    // A nested workspace whose config was deleted: resolving the host dir as "flat zero-config"
-    // would silently lose persona/skills — refuse with the way out (restore config, or init fresh).
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-configless-"));
-    await mkdir(join(dir, "fastagent"));
-    await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
-    expect(() => resolvePlacement(dir)).toThrow(/fastagent\.config.*fastagent init/s);
-    // Same refusal from inside the directory.
-    expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/fastagent\.config.*fastagent init/s);
-  });
-
-  it("a fastagent/ that does NOT read as a workspace stays zero-config flat (a directory is an agent)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-unrelated-"));
-    await mkdir(join(dir, "fastagent"));
-    await writeFile(join(dir, "fastagent", "notes.txt"), "unrelated\n");
-    expect(resolvePlacement(dir)).toEqual({ agentDir: dir, workspace: dir });
-  });
-
-  it("a package.json alone does NOT make a fastagent/ read as a workspace (an unrelated clone/package)", async () => {
-    // The config-less guard keys on the DEFINITION's names only: `package.json` says nothing about
-    // fastagent, so an unrelated `fastagent/` (a vendored clone, a monorepo package) must not
-    // hard-block every command run in its parent.
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-pkgonly-"));
-    await mkdir(join(dir, "fastagent"));
-    await writeFile(join(dir, "fastagent", "package.json"), "{}\n");
-    expect(resolvePlacement(dir)).toEqual({ agentDir: dir, workspace: dir });
-    expect(resolvePlacement(join(dir, "fastagent"))).toEqual({
-      agentDir: join(dir, "fastagent"),
-      workspace: join(dir, "fastagent"),
-    });
+  it("no ./fastagent/ → not an agent: refuse with the way out, never guess", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-none-"));
+    expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent.*fastagent init/s);
+    // A FILE named fastagent is not an agent dir either (a stray script must not become a placement).
+    await writeFile(join(dir, "fastagent"), "#!/bin/sh\n");
+    expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
   });
 });
 
@@ -364,82 +322,91 @@ describe("config: resolveModel", () => {
   });
 });
 
+/** A workspace with an agent in it (`<tmp>/fastagent/`), as `init` produces it. */
+async function agentWorkspace(): Promise<{ host: string; agent: string }> {
+  const host = await mkdtemp(join(tmpdir(), "fa-ws-"));
+  const agent = join(host, "fastagent");
+  await mkdir(agent);
+  return { host, agent };
+}
+
 describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the engine side)", () => {
   it("assembles config + definition and returns everything the entrypoint needs; flag beats config", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-configured-"));
-    await writeFile(join(dir, "AGENTS.md"), "# Test Agent\nBe concise.\n");
+    const { host, agent } = await agentWorkspace();
+    await writeFile(join(host, "AGENTS.md"), "# Test Agent\nBe concise.\n");
     await writeFile(
-      join(dir, "fastagent.config.mjs"),
+      join(agent, "fastagent.config.mjs"),
       `export default { model: "openai-codex/gpt-5.5", http: { port: 9999 } };`,
     );
 
-    const ws = await createPiAgentFromWorkspace(dir);
+    const ws = await createPiAgentFromWorkspace(host);
     expect(ws.modelSpec).toBe("openai-codex/gpt-5.5"); // from config
     expect(ws.configPath).toMatch(/fastagent\.config\.mjs$/);
     expect(ws.config.http?.port).toBe(9999);
     expect(typeof ws.agent.invoke).toBe("function");
-    expect(ws.definition.dir).toBe(dir);
+    expect(ws.definition.dir).toBe(agent);
+    expect(ws.workspace).toBe(host);
 
-    const overridden = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.4" });
+    const overridden = await createPiAgentFromWorkspace(host, { model: "openai-codex/gpt-5.4" });
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag wins
   });
 
-  it("L3 creates workspace state: .state/.secrets self-ignore for library callers as well as the CLI", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await createPiAgentFromWorkspace(dir);
+  it("L3 creates agent state: .state/.secrets self-ignore for library callers as well as the CLI", async () => {
+    const { host, agent } = await agentWorkspace();
+    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await createPiAgentFromWorkspace(host);
     const { readFile } = await import("node:fs/promises");
-    expect(await readFile(join(dir, ".state", ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(agent, ".state", ".gitignore"), "utf8")).toBe("*\n");
     // .secrets carries the traveling variant: template + protection stay committable.
-    const secrets = await readFile(join(dir, ".secrets", ".gitignore"), "utf8");
+    const secrets = await readFile(join(agent, ".secrets", ".gitignore"), "utf8");
     expect(secrets).toMatch(/^\*$/m);
     expect(secrets).toMatch(/^!\.env\.example$/m);
   });
 
-  it("sessionsDir overrides the default <root>/.state/sessions (start's deploy posture)", async () => {
-    // dev defaults sessions under <root>/.state/sessions; start points them elsewhere (a mounted
+  it("sessionsDir overrides the default <agentDir>/.state/sessions (start's deploy posture)", async () => {
+    // dev defaults sessions under <agentDir>/.state/sessions; start points them elsewhere (a mounted
     // volume) so a redeploy that replaces the dir does not wipe conversations. Lock that the override
     // wins and the default lands under .state (the single opener both commands drive).
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    const { host, agent } = await agentWorkspace();
+    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));
-    const overridden = await createPiAgentFromWorkspace(dir, { sessionsDir: ext });
+    const overridden = await createPiAgentFromWorkspace(host, { sessionsDir: ext });
     expect(overridden.sessionsDir).toBe(ext);
-    const defaulted = await createPiAgentFromWorkspace(dir);
-    expect(defaulted.sessionsDir).toBe(join(dir, ".state", "sessions"));
+    const defaulted = await createPiAgentFromWorkspace(host);
+    expect(defaulted.sessionsDir).toBe(join(agent, ".state", "sessions"));
   });
 
-  it("authPath defaults to the project-level <root>/.secrets/auth.json; the override wins", async () => {
+  it("authPath defaults to the project-level <agentDir>/.secrets/auth.json; the override wins", async () => {
     // The feature: each project carries its own credential (own OAuth refresh lifecycle), not a shared
     // global file. Lock that the opener defaults project-level and an explicit path (e.g. the shared
     // global one) overrides — the same precedence shape as sessionsDir.
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    const defaulted = await createPiAgentFromWorkspace(dir);
-    expect(defaulted.authPath).toBe(join(dir, ".secrets", "auth.json"));
+    const { host, agent } = await agentWorkspace();
+    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    const defaulted = await createPiAgentFromWorkspace(host);
+    expect(defaulted.authPath).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");
-    const overridden = await createPiAgentFromWorkspace(dir, { authPath: shared });
+    const overridden = await createPiAgentFromWorkspace(host, { authPath: shared });
     expect(overridden.authPath).toBe(shared);
   });
 
   it("self-ignores .secrets when auth defaults in-tree even though sessionsDir is on a volume", async () => {
     // The leak this guards: `start --sessions-dir /vol` overrides sessions but leaves the credential
-    // file at the default <root>/.secrets/auth.json. The self-ignore must still fire so an adapted
-    // (no root .gitignore) agent dir never ships OAuth/API-key state.
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    // file at the default <agentDir>/.secrets/auth.json. The self-ignore must still fire so an agent
+    // dir with no .gitignore never ships OAuth/API-key state.
+    const { host, agent } = await agentWorkspace();
+    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     const vol = await mkdtemp(join(tmpdir(), "fa-sessions-"));
-    await createPiAgentFromWorkspace(dir, { sessionsDir: vol });
+    await createPiAgentFromWorkspace(host, { sessionsDir: vol });
     const { readFile } = await import("node:fs/promises");
-    expect(await readFile(join(dir, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
+    expect(await readFile(join(agent, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    const { host } = await agentWorkspace();
     const saved = process.env.FASTAGENT_MODEL;
     delete process.env.FASTAGENT_MODEL;
     try {
-      await expect(createPiAgentFromWorkspace(dir)).rejects.toThrow(/missing model/);
+      await expect(createPiAgentFromWorkspace(host)).rejects.toThrow(/missing model/);
     } finally {
       if (saved !== undefined) process.env.FASTAGENT_MODEL = saved;
     }

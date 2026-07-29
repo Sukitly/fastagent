@@ -15,8 +15,7 @@ export async function runChat(dirArg: string, opts: { model?: string; authPath?:
   // credential-annotated catalog and inline login apply here too.
   await resolveFirstRunModel(ws.agentDir, { model: opts.model, authPath: opts.authPath });
   // Run the chat process AT the workspace: pi resolves a session's cwd as `header.cwd ?? process.cwd()`,
-  // so aligning process.cwd() with the workspace keeps a cwd-less session on it (= the workspace root
-  // when flat; the host tree when nested). Paths are absolute.
+  // so aligning process.cwd() with the workspace keeps a cwd-less session on it. Paths are absolute.
   process.chdir(ws.workspace);
   // Lazy-import: chat pulls pi's interactive TUI module graph; headless start/dev never need it.
   const { runPiChat } = await import("../../engines/pi/chat.ts");

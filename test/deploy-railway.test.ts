@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { planRailwayDeploy } from "../src/deploy/railway/plan.ts";
 
-const json = (p: ReturnType<typeof planRailwayDeploy>) => p.artifacts.find((a) => a.path === "railway.json")!.content;
+const json = (p: ReturnType<typeof planRailwayDeploy>) =>
+  p.artifacts.find((a) => a.path === "fastagent/railway.json")!.content;
 const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
@@ -24,8 +25,8 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
   });
 
-  it("nested: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
-    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], nested: true });
+  it("railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
+    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
       "fastagent/Dockerfile",
@@ -44,14 +45,14 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
   });
 
-  it("flat: no RAILWAY_DOCKERFILE_PATH (the root Dockerfile is auto-detected)", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }));
-    expect(out).not.toContain("RAILWAY_DOCKERFILE_PATH");
-  });
-
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts;
-    expect(artifacts.map((a) => a.path)).toEqual(["railway.json", "Dockerfile", ".dockerignore"]);
+    expect(artifacts.map((a) => a.path)).toEqual([
+      "fastagent/railway.json",
+      "fastagent/Dockerfile",
+      ".dockerignore",
+      "fastagent/Dockerfile.dockerignore",
+    ]);
     // .git is deliberately SHIPPED (the agent's pull/push loop needs it) — the exclusion must not
     // creep back in silently; machinery/secret excludes are the hard contract instead.
     const dockerignore = artifacts.find((a) => a.path === ".dockerignore")!.content;

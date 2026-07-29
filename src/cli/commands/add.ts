@@ -34,7 +34,7 @@ export async function runAddChannel(
   opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
-  // AGENT DIR (`fastagent/` when nested), the same place dev/start discover channels/.
+  // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
   const { agentDir: target } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
@@ -85,7 +85,7 @@ export async function runAddChannel(
   }
   // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
   // written into `.secrets/.env` — make the secrets dir exist and self-ignore FIRST, so the CLI never
-  // materializes a secret into a committable file (the nested .gitignore is authoritative over any
+  // materializes a secret into a committable file (the .secrets/.gitignore is authoritative over any
   // root-level negation — git's nested-ignore precedence).
   await ensureSecretsDirSelfIgnored(target, resolveSecretsDir(target)).catch(failStartup);
   // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
@@ -289,7 +289,7 @@ export async function runAddSkill(
         `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
   }
-  // Skills are agent surface — vendored into `<agent dir>/skills` (`fastagent/skills` when nested).
+  // Skills are agent surface — vendored into the agent dir's `skills/`.
   const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);

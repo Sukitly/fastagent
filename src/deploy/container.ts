@@ -4,12 +4,10 @@
  * runs `fastagent start /app` on `$PORT` with machinery under `$FASTAGENT_STATE_DIR` /
  * `$FASTAGENT_SECRETS_DIR` — standard container conventions, no host coupling.
  *
- * ONE deploy semantic for both layouts: bake the WORKSPACE as the image (`COPY . .` — what you see is
- * what ships). Flat: the agent IS the workspace. Nested: the workspace is the surrounding tree, with
- * the agent at `./fastagent` — the resolver in the image finds it exactly like dev does, so the two
- * layouts share this generator end to end; the only differences are where deps install (`/app` vs
- * `/app/fastagent`) and where the Dockerfile itself lives (namespaced under `fastagent/` so it never
- * collides with the host repo's own).
+ * ONE deploy semantic: bake the WORKSPACE as the image (`COPY . .` — what you see is what ships),
+ * with the agent at `./fastagent` inside it. The resolver in the image finds it exactly like dev does.
+ * Deps install under `/app/fastagent`, and the Dockerfile lives there too — namespaced so it never
+ * collides with one the workspace already owns.
  */
 import { AGENT_DIR } from "../paths.ts";
 
@@ -46,10 +44,6 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
-  /** Nested layout: the agent lives at `./fastagent` inside the baked workspace. The runtime
-   *  facts above (hasPackageJson/runtime/hasLockfile) describe THE WORKSPACE (its package.json drives
-   *  the image's install step), never the host repo's — whose manifest belongs to the host's own deploy. */
-  nested?: boolean;
   /** Whether the baked workspace ships a `.git` (preflight fact). When true, preflight has already
    *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
    *  their runbook's freshness/write-back guidance from the same fact. */
@@ -67,12 +61,10 @@ function aptLayer(packages?: string[]): string {
 }
 
 function dockerfile(input: ContainerInput): string {
-  // The agent prefix inside the image: deps install (and the local bin lives) here. undefined =
-  // flat (the agent IS /app) — the emitted lines then carry no noisy "./." segments.
-  const ws = input.nested ? AGENT_DIR : undefined;
-  const layoutNote = input.nested
-    ? `Nested: the whole directory is the agent's workspace; the agent lives in fastagent/.`
-    : `The directory IS the agent — no build step.`;
+  // The agent prefix inside the image: the whole workspace is baked at /app, and deps install (and
+  // the local bin lives) under the agent dir inside it.
+  const ws = AGENT_DIR;
+  const layoutNote = `The whole directory is the agent's workspace; the agent itself lives in ${AGENT_DIR}/.`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
   // different base is the operator's own Dockerfile (kept if present). deploy.apt is package-name-validated.
@@ -105,8 +97,8 @@ ${apt}WORKDIR /app
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
   // we can't tell a repo-as-agent from a purpose-built agent, so the safe default keeps everything.
-  // Nested installs ONLY the agent's deps — the host repo's own deps are the agent's runtime
-  // concern (it can install them in its workspace when its job needs them).
+  // Only the AGENT's deps are installed — the workspace's own deps are the agent's runtime concern
+  // (it can install them in its workspace when its job needs them).
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to a plain `bun install`
     // (resolves at build time — not reproducible; the CLI warns to commit the lockfile).
@@ -114,17 +106,10 @@ ${apt}WORKDIR /app
     // `bunx fastagent` would fall back to installing the npm package named `fastagent`, which is an
     // unrelated third-party package (ours is the scoped @fastagent-sh/fastagent).
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
-    if (ws) {
-      return `${head}COPY ${ws}/package.json ${ws}/bun.lock* ./${ws}/
+    return `${head}COPY ${ws}/package.json ${ws}/bun.lock* ./${ws}/
 RUN cd ${ws} && ${install}
 COPY . .
 CMD ["sh", "-c", "cd ${ws} && bun run fastagent start /app"]
-`;
-    }
-    return `${head}COPY package.json bun.lock* ./
-RUN ${install}
-COPY . .
-CMD ["bun", "run", "fastagent", "start", "/app"]
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent);
@@ -135,17 +120,10 @@ CMD ["bun", "run", "fastagent", "start", "/app"]
   // `fastagent` when the dep is absent — an unrelated third-party package (ours is scoped). The local
   // path fails fast and visibly instead.
   const install = input.hasLockfile ? "npm ci" : "npm install";
-  if (ws) {
-    return `${head}COPY ${ws}/package.json ${ws}/package-lock.json* ./${ws}/
+  return `${head}COPY ${ws}/package.json ${ws}/package-lock.json* ./${ws}/
 RUN cd ${ws} && ${install}
 COPY . .
 CMD ["./${ws}/node_modules/.bin/fastagent", "start", "/app"]
-`;
-  }
-  return `${head}COPY package.json package-lock.json* ./
-RUN ${install}
-COPY . .
-CMD ["./node_modules/.bin/fastagent", "start", "/app"]
 `;
 }
 
@@ -173,26 +151,19 @@ const DOCKERIGNORE = `**/node_modules
 `;
 
 /**
- * The Dockerfile + ignore artifacts — spread into any host's artifact list. Nested: the Dockerfile
- * is namespaced under the agent dir (`fastagent/Dockerfile`) so it never collides with the host
- * repo's own. The ignore ships in TWO forms because context packing is host-CLI-owned and
+ * The Dockerfile + ignore artifacts — spread into any host's artifact list. The Dockerfile is
+ * namespaced under the agent dir (`fastagent/Dockerfile`) so it never collides with one the workspace
+ * already owns. The ignore ships in TWO forms because context packing is host-CLI-owned and
  * inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own context packers
- * reliably read (kept if the host already has one — preflight then warns specifically about the
- * machinery/secret excludes it must carry) — and (2) a per-Dockerfile
- * `fastagent/Dockerfile.dockerignore` for plain docker/buildx builds. This root file is the ONE
- * host-tree write the nested layout ever makes, and only at deploy time — without it the host
- * CLI's packer would bake `.secrets/` into the image, which is never acceptable.
+ * reliably read (kept if the workspace already has one — preflight then checks the machinery/secret
+ * excludes it must carry) — and (2) a per-Dockerfile `fastagent/Dockerfile.dockerignore` for plain
+ * docker/buildx builds. That root file is the ONE write deploy ever makes outside the agent dir, and
+ * only at deploy time — without it the host CLI's packer would bake `.secrets/` into the image.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
-  if (input.nested) {
-    return [
-      { path: `${AGENT_DIR}/Dockerfile`, content: dockerfile(input) },
-      { path: ".dockerignore", content: DOCKERIGNORE },
-      { path: `${AGENT_DIR}/Dockerfile.dockerignore`, content: DOCKERIGNORE },
-    ];
-  }
   return [
-    { path: "Dockerfile", content: dockerfile(input) },
+    { path: `${AGENT_DIR}/Dockerfile`, content: dockerfile(input) },
     { path: ".dockerignore", content: DOCKERIGNORE },
+    { path: `${AGENT_DIR}/Dockerfile.dockerignore`, content: DOCKERIGNORE },
   ];
 }

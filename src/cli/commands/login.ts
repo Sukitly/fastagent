@@ -2,18 +2,21 @@
  * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
  * (`<agentDir>/.secrets/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`. The
  * positional is the PROVIDER (not a dir), so the agent resolves from cwd — `cd` into your agent
- * before logging in (running it from $HOME writes the global `~/.fastagent/.secrets/auth.json`).
+ * before logging in. OUTSIDE an agent there is no project credential to write, so the target is the
+ * user-global `~/.fastagent/.secrets/auth.json` (which is what running it from $HOME has always
+ * meant); the "saved to …" line names the file either way.
  *
  * Creates and self-ignores `<root>/.secrets/` (the credential's gitignored home) BEFORE the auth flow,
  * so the secret can never land untracked — a flow that then fails (bad provider, abort) leaves that
  * empty secrets dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
+import { homedir } from "node:os";
 import { loadDotEnv } from "../../env.ts";
-import { resolveAuthPath, resolveSecretsDir, resolvePlacement } from "../../engines/pi/config.ts";
+import { findAgentDir, resolveAuthPath, resolveSecretsDir } from "../../engines/pi/config.ts";
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
@@ -23,7 +26,7 @@ export interface LoginOptions {
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
-  const { agentDir: loginDir } = failStartupOn(() => resolvePlacement(process.cwd()));
+  const loginDir = findAgentDir(process.cwd()) ?? homedir();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const secretsDir = resolveSecretsDir(loginDir);

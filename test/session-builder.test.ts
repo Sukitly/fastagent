@@ -10,9 +10,17 @@ import { buildWorkspaceSessionRuntime } from "../src/engines/pi/session-builder.
 // discovery. buildWorkspaceSessionRuntime is split out precisely so that injection is inspectable without a
 // TTY. In-memory sessions keep the test from writing to the machine's pi session store. A raw
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
+/** A fresh AGENT dir (`<tmp>/fastagent/`). Passing it to the builder resolves to itself, with the
+ *  temp dir as the workspace — the same placement `init` produces, entered from the inside. */
+async function freshAgentDir(prefix: string): Promise<string> {
+  const dir = join(await mkdtemp(join(tmpdir(), prefix)), "fastagent");
+  await mkdir(dir);
+  return dir;
+}
+
 describe("session builder: buildWorkspaceSessionRuntime injects fastagent's assembled agent into pi's session", () => {
   it("binds the chat session manager to ordinary configured defineTool tools", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-session-tool-"));
+    const dir = await freshAgentDir("fa-chat-session-tool-");
     const observedKey = "__fastagent_chat_tool_session_test__";
     const piUrl = new URL("../src/pi.ts", import.meta.url).href;
     try {
@@ -61,7 +69,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
   });
 
   it("emulates deferral: deferred tools start inactive, search_tools mounts and activates via pi's session", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-defer-"));
+    const dir = await freshAgentDir("fa-chat-defer-");
     try {
       await writeFile(
         join(dir, "fastagent.config.mjs"),
@@ -133,7 +141,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
   });
 
   it("injects the definition's prompt + skills, the config model, custom tools, definition-only", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-"));
+    const dir = await freshAgentDir("fa-chat-");
     try {
       await writeFile(join(dir, "AGENTS.md"), "# Test Agent\nMAGIC_CHAT_MARKER_91. Be terse.\n");
       await writeFile(
@@ -215,7 +223,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("resolves the nested placement: persona/tools from fastagent/, ② context walked from the workspace", async () => {
+  it("resolves the placement from the workspace: persona/tools from fastagent/, ② context from the workspace", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-chat-nested-"));
     try {
       await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workspace
@@ -245,7 +253,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
   it("suppresses pi's machine-global APPEND_SYSTEM.md so chat matches what dev/start serve", async () => {
     // getAgentDir() honors PI_CODING_AGENT_DIR; point it at a temp agent dir holding an append
     // prompt. dev/start never read that file, so chat must not either, or fidelity breaks.
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-append-"));
+    const dir = await freshAgentDir("fa-chat-append-");
     const agentDir = await mkdtemp(join(tmpdir(), "fa-agentdir-"));
     const prev = process.env.PI_CODING_AGENT_DIR;
     try {
@@ -271,7 +279,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
   });
 
   it("wires auth to the workspace credential file (not ~/.pi) and self-ignores the secrets dir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-sb-auth-"));
+    const dir = await freshAgentDir("fa-sb-auth-");
     try {
       await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
       // A credential in the PROJECT-level auth.json — the same file dev/start/login use.
@@ -298,7 +306,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
   });
 
   it("honors config.thinkingLevel like serving does (fidelity)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-sb-think-"));
+    const dir = await freshAgentDir("fa-sb-think-");
     try {
       await writeFile(
         join(dir, "fastagent.config.mjs"),
@@ -317,8 +325,8 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
 
   it("rejects cross-workspace session switches because chat env is workspace-scoped", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-chat-scope-"));
-    const dir = join(root, "agent-a");
-    const other = join(root, "agent-b");
+    const dir = join(root, "agent-a", "fastagent");
+    const other = join(root, "agent-b", "fastagent");
     const sessionsDir = join(root, "sessions");
     try {
       await mkdir(dir, { recursive: true });
@@ -357,7 +365,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     // invariant, so emulate it here. Without it, a cwd-less session would fall back to pi's
     // process.cwd() and trip the cross-workspace teardown path on import AND on /fork.
     const root = await mkdtemp(join(tmpdir(), "fa-chat-legacy-"));
-    const dir = join(root, "agent");
+    const dir = join(root, "agent", "fastagent");
     const sessionsDir = join(root, "sessions");
     const originalCwd = process.cwd();
     try {

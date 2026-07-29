@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
 import { modelTravelIssue } from "../src/deploy/preflight.ts";
 
-const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
-const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;
+const flyToml = (p: ReturnType<typeof planFlyDeploy>) =>
+  p.artifacts.find((a) => a.path === "fastagent/fly.toml")!.content;
+const dockerfile = (p: ReturnType<typeof planFlyDeploy>) =>
+  p.artifacts.find((a) => a.path === "fastagent/Dockerfile")!.content;
 const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile, default autostop). */
@@ -166,11 +168,11 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(docker).toContain("npm i -g @fastagent-sh/fastagent");
   });
 
-  it("nested: artifacts namespaced under fastagent/, workspace deps installed, .git shipped, explicit deploy flags", () => {
-    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], nested: true });
-    // Artifacts never collide with the host repo's own deploy files.
+  it("artifacts namespaced under fastagent/, agent deps installed, .git shipped, explicit deploy flags", () => {
+    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [] });
+    // Artifacts never collide with the workspace's own deploy files.
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
-      ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the host has one)
+      ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the workspace has one)
       "fastagent/Dockerfile",
       "fastagent/Dockerfile.dockerignore",
       "fastagent/fly.toml",
@@ -199,14 +201,13 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
   });
 
-  it("nested: bun workspace uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
+  it("a bun agent uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
     const bun = planFlyDeploy({
       ...base,
       runtime: "bun",
       bunVersion: "1.3.13",
       modelAuth: undefined,
       channels: [],
-      nested: true,
     });
     const bunDf = bun.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
@@ -219,7 +220,6 @@ describe("deploy/fly: planFlyDeploy", () => {
       hasPackageJson: false,
       modelAuth: undefined,
       channels: [],
-      nested: true,
     });
     const mdDf = md.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(mdDf).toContain("FROM node:22-slim");
@@ -230,14 +230,16 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
     expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toMatch(
-      /RUN npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
+      /cd fastagent && npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
     );
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(/RUN npm ci\n/);
+    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(
+      /cd fastagent && npm ci\n/,
+    );
   });
 
   it("code-workspace CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
     const npm = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
-    expect(npm).toContain('CMD ["./node_modules/.bin/fastagent", "start", "/app"]');
+    expect(npm).toContain('CMD ["./fastagent/node_modules/.bin/fastagent", "start", "/app"]');
     expect(npm).not.toContain("npx");
   });
 
@@ -248,14 +250,14 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bun).toContain("FROM oven/bun:1.3.13");
     expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
     // The LOCAL bin, never the registry — the npm package named `fastagent` is an unrelated third party.
-    expect(bun).toContain('CMD ["bun", "run", "fastagent", "start", "/app"]');
+    expect(bun).toContain('CMD ["sh", "-c", "cd fastagent && bun run fastagent start /app"]');
     expect(bun).not.toContain("node:22-slim");
     // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
     const unpinned = dockerfile(
       planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", hasLockfile: false }),
     );
     expect(unpinned).toContain("FROM oven/bun:1\n");
-    expect(unpinned).toMatch(/RUN bun install\n/); // no --frozen-lockfile without a lockfile
+    expect(unpinned).toMatch(/cd fastagent && bun install\n/); // no --frozen-lockfile without a lockfile
   });
 
   it("flags a model that won't travel — config.model is the deployed box's only source", () => {

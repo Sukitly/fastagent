@@ -26,9 +26,10 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"] });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
-      "fastagent.compose.yml",
-      "Dockerfile",
+      "fastagent/fastagent.compose.yml",
+      "fastagent/Dockerfile",
       ".dockerignore",
+      "fastagent/Dockerfile.dockerignore",
     ]);
 
     const yaml = compose(plan);
@@ -98,13 +99,8 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("sk-");
   });
 
-  it("namespaces nested artifacts under fastagent/ and builds from the workspace root", () => {
-    const plan = planDockerDeploy({
-      ...base,
-      modelAuth: undefined,
-      channels: [],
-      nested: true,
-    });
+  it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {
+    const plan = planDockerDeploy({ ...base, modelAuth: undefined, channels: [] });
     expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
       ".dockerignore",
       "fastagent/Dockerfile",
@@ -114,13 +110,13 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(plan.composePath).toBe("fastagent/fastagent.compose.yml");
     expect(compose(plan)).toContain("context: ..");
     expect(compose(plan)).toContain("dockerfile: fastagent/Dockerfile");
-    expect(runbook(plan)).toContain("run from the WORKSPACE ROOT");
+    expect(runbook(plan)).toContain("Run from the WORKSPACE ROOT");
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram", "github"] }));
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
-    expect(out).toContain("docker compose -f fastagent.compose.yml up -d --build");
+    expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");
     expect(out).toContain("Public ingress is operator-owned");

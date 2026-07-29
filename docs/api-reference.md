@@ -142,7 +142,7 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the workspace root — `createPiAgentFromWorkspace` does this for a nested `fastagent/` root.
+Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromWorkspace` always does this, passing the agent dir's parent.
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
@@ -159,7 +159,7 @@ function createPiAgentFromWorkspace(
   configPath?: string;
   modelSpec: string;
   agentDir: string; // where the agent lives
-  workspace: string; // the agent's cwd (= the agent dir when flat; its parent when the agent is a nested fastagent/)
+  workspace: string; // the agent's cwd — the agent dir's parent
   stateRoot: string;
   sessionsDir: string;
   authPath: string;

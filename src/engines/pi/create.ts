@@ -70,7 +70,7 @@ export async function resolveAgentTools(
   toolFailures: ModuleLoadFailure[];
 }> {
   // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the workspace the agent operates
-  // on); discovered `tools/` come from `root` (the workspace's own surface). They coincide when flat.
+  // on); discovered `tools/` come from `root` (the agent's own surface).
   const discovered = await loadTools(root);
   const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
   // The built-in `search_tools` loader mounts here — the one place the workspace's full tool set is
@@ -131,7 +131,7 @@ export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } 
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
-  // (the nested×code-repo cell's persona; core.md §11), keeping the tools list + guidelines below.
+  // (core.md §11), keeping the tools list + guidelines below.
   const identity =
     options.persona?.trim() ||
     "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
@@ -331,9 +331,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   tools?: FastagentTool[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
-   * ② project context (AGENTS.md). Defaults to `dir` (flat: the definition dir is also the run root).
-   * Set it to the enclosing repo so a coding agent whose definition lives in `dir` operates on — and
-   * reads the AGENTS.md of — that repo (core.md scenario grid).
+   * ② project context (AGENTS.md). Defaults to `dir`. Set it to the enclosing repo so a coding agent
+   * whose definition lives in `dir` operates on — and reads the AGENTS.md of — that repo (core.md
+   * scenario grid); that is what the CLI's opener does with the workspace.
    */
   cwd?: string;
   /** Extra providers registered on top of the built-ins (your own gateway / self-hosted endpoint). */

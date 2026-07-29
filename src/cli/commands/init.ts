@@ -1,55 +1,43 @@
 /**
  * `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. Placement is not a
- * decision: the agent goes into `./fastagent/` (the surrounding tree gets zero writes); `--flat` lands it
- * directly in the directory instead (for a directory that IS the agent — a standalone agent dir, a
- * monorepo package). Deliberately no detection and no prompt — non-interactive executors (coding
- * agents) get ONE deterministic behavior they can read and override.
+ * decision and has no variants: the agent goes into `./fastagent/`, and the directory around it — which
+ * gets zero writes — is the workspace it works on. Deliberately no detection and no prompt —
+ * non-interactive executors (coding agents) get ONE deterministic behavior they can read.
  */
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
-import { nextStepCd, scaffoldWorkspace } from "../../scaffold/init.ts";
+import { resolve } from "node:path";
+import { AGENT_DIR } from "../../engines/pi/config.ts";
+import { nextStepCd, scaffoldAgent } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
 
 export interface InitOptions {
   minimal: boolean;
   /** false ⇔ `--no-install`. */
   install: boolean;
-  flat: boolean;
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const { complete, agentDir, created, skipped, patched, warnings } = await scaffoldWorkspace(dir, {
-    minimal: opts.minimal,
-    flat: opts.flat,
-  }).catch(failStartup);
-  const nested = agentDir !== ".";
-  console.error(
-    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}${nested ? ` — workspace in ./${agentDir}/` : ""}`,
-  );
-  if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
-  if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
-  if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing fastagent excludes appended)`);
-  for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
+  const { complete, created } = await scaffoldAgent(dir, { minimal: opts.minimal }).catch(failStartup);
+  console.error(`[fastagent] initialized ${dir}${complete ? "" : " (minimal)"} — agent in ./${AGENT_DIR}/`);
+  console.error(`  created: ${created.join(", ")}`);
 
-  // Install deps only for a complete agent whose package.json we just wrote (a kept one is not ours).
-  // The manifest lives in the agent dir (./fastagent by default), so the install runs there —
-  // never against a host repo's own package.json.
-  const rootDir = resolve(dir, agentDir);
-  const willInstall = complete && opts.install && created.includes(join(agentDir, "package.json"));
+  // The manifest lives in the agent dir, so the install runs there — never against the workspace's
+  // own package.json (the workspace's deps are its own concern).
+  const agentDir = resolve(dir, AGENT_DIR);
+  const willInstall = complete && opts.install;
   let installFailed = false;
   if (willInstall) {
-    console.error(`[fastagent] installing dependencies (npm install${nested ? ` in ${agentDir}` : ""})…`);
-    installFailed = (await npmInstall(rootDir)) !== 0;
+    console.error(`[fastagent] installing dependencies (npm install in ${AGENT_DIR})…`);
+    installFailed = (await npmInstall(agentDir)) !== 0;
     if (installFailed)
-      console.error(`[fastagent] warn: npm install failed — run it manually in ${rootDir} before \`fastagent dev\``);
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${agentDir} before \`fastagent dev\``);
   }
 
   console.error(`  next steps:`);
   const cdTarget = nextStepCd(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
-  if (complete && (!opts.install || installFailed))
-    console.error(`    ${nested ? `(cd ${agentDir} && npm install)` : "npm install"}`);
+  if (complete && (!opts.install || installFailed)) console.error(`    (cd ${AGENT_DIR} && npm install)`);
   console.error(`    fastagent dev   # serve locally and iterate`);
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }

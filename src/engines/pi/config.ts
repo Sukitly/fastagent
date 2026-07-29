@@ -3,10 +3,9 @@
  * (resolveModel, resolveModelSpec). One concern: everything about fastagent.config.ts.
  *
  * Red line: config describes deployment/runtime choices, never authored identity or expertise (those
- * live in persona.md + skills, with AGENTS.md as project context). In a FLAT agent, deleting the
- * config still leaves a zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL;
- * in a nested `fastagent/` agent the config doubles as the structural marker (resolvePlacement),
- * so deleting it un-declares the agent.
+ * live in persona.md + skills, with AGENTS.md as project context). The config is never structural:
+ * deleting it leaves a zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
+ * What makes a directory an agent is its NAME (`fastagent/` — see resolvePlacement).
  */
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -92,9 +91,8 @@ function validateStringList(value: unknown, key: string, shape: RegExp, desc: st
   }
 }
 
-/** The config filenames that make a directory a fastagent agent, in load precedence. ONE source: the
- *  loader (below) and `scaffoldWorkspace`'s already-an-agent refusal both read this, so "is there a
- *  config?" can't diverge between them when the set changes. */
+/** The config filenames, in load precedence. ONE source: the loader (below) and `scaffoldAgent`'s
+ *  already-an-agent refusal both read this, so "is there a config?" can't diverge between them. */
 export const AGENT_CONFIG_NAMES = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"] as const;
 
 /** Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config; a wrong-shape file throws. */
@@ -198,67 +196,39 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
 }
 
 export interface ResolvedPlacement {
-  /** The AGENT directory — where the definition (persona.md/skills/tools/channels/schedules), the
-   *  config, and the machinery dirs (`.secrets/`, `.state/`, `.cache/`) live. Absolute. */
+  /** The AGENT directory — the `fastagent/` dir holding the definition (persona.md/skills/tools/
+   *  channels/schedules), the config, and the machinery dirs (`.secrets/`, `.state/`). Absolute. */
   agentDir: string;
-  /** The WORKSPACE — what the agent works ON (its cwd; the ② context walk starts here): the parent
-   *  directory when the agent sits in a nested `fastagent/`, the agent dir itself otherwise.
-   *  Absolute. `agentDir !== workspace` is the ONLY discriminant — the nested placement has no mode
-   *  name. The naming follows git: the repository sits at the root of its working tree, and the word
-   *  for WORK belongs to the tree, not to the tool's own directory. */
+  /** The WORKSPACE — what the agent works ON: its parent directory, which is the agent's cwd and the
+   *  start of the ② context walk. Absolute. The naming follows git: the repository sits at the root
+   *  of its working tree, and the word for WORK belongs to the tree, not to the tool's own directory. */
   workspace: string;
 }
 
+/** The agent dir for `dir`, or undefined when there is none: `dir` itself if it IS a `fastagent/`
+ *  dir, else `<dir>/fastagent/`. The name is the marker — nothing is read, nothing is configured. */
+export function findAgentDir(dir: string): string | undefined {
+  const base = resolve(dir);
+  if (basename(base) === AGENT_DIR) return base;
+  const nested = join(base, AGENT_DIR);
+  return statSync(nested, { throwIfNoEntry: false })?.isDirectory() ? nested : undefined;
+}
+
 /**
- * Resolve a directory into its placement: STRUCTURAL, never configured. `<dir>` carrying a
- * fastagent.config.* is a flat agent (agentDir = workspace = dir); `<dir>/fastagent/` carrying one is
- * the nested default (agentDir = the `fastagent` dir, workspace = dir — the surrounding tree stays
- * untouched). Both at once is ambiguous → throw (fail visibly, never guess) — the SAME refusal from
- * BOTH entry points (the workspace dir and inside `fastagent/`), so where you invoke from can never
- * change what an agent means. Neither = zero-config, treated as flat — "a directory is an agent"
- * stays the default — EXCEPT when a config-less `<dir>/fastagent/` still READS as an agent
- * (persona/skills/tools…): the config is the nested agent's structural marker, so silently degrading
- * to "the workspace dir is a flat zero-config agent" would make the authored persona/skills vanish
- * without a trace → throw with the way out instead. Invoked from INSIDE a nested agent dir (cwd =
- * `<dir>/fastagent`), the same agent resolves with workspace = the parent, so both invocation points
- * behave identically. The ONE owner of this rule — every command and opener resolves through here.
+ * Resolve a directory into its placement — the ONE owner of the rule, and it has exactly one shape:
+ * the agent lives in a directory named `fastagent/`, and the directory around it is the workspace.
+ * Placement is STRUCTURAL (the name is the marker), never configured and never detected, so the
+ * answer cannot depend on file contents or on where you invoked from: `<dir>` and `<dir>/fastagent`
+ * resolve identically. A directory with no `fastagent/` is not an agent → throw (fail visibly).
  */
 export function resolvePlacement(dir: string): ResolvedPlacement {
-  const base = resolve(dir);
-  const hasConfig = (d: string): boolean => AGENT_CONFIG_NAMES.some((name) => existsSync(join(d, name)));
-  // What makes a config-less dir READ as an agent: the definition's own convention names. Broad
-  // on purpose — a false hit fails loudly with a two-way remedy, a miss loses authored content
-  // silently. NOT `package.json`: it is the one name here that says nothing about fastagent, so an
-  // unrelated `fastagent/` (a vendored clone, a monorepo package) would hard-block every command in
-  // its parent — while a real agent that lost its config still trips one of these five.
-  const looksLikeAgent = (d: string): boolean =>
-    ["persona.md", "skills", "tools", "channels", "schedules"].some((n) => existsSync(join(d, n)));
-  const ambiguity = (ws: string): Error =>
-    new Error(
-      `${ws} has a fastagent config at BOTH the directory root and ./${AGENT_DIR}/ — ambiguous; keep exactly one agent`,
+  const agentDir = findAgentDir(dir);
+  if (!agentDir) {
+    throw new Error(
+      `${resolve(dir)} is not a fastagent agent — no ./${AGENT_DIR}/ directory here; run \`fastagent init\` to scaffold one`,
     );
-  const configless = (faDir: string): Error =>
-    new Error(
-      `${faDir} looks like a fastagent agent (persona/skills/tools…) but has no fastagent.config.* — ` +
-        `the config is the agent's structural marker. Restore its fastagent.config.mjs, or move the ` +
-        `directory away and run \`fastagent init\` to scaffold a fresh agent`,
-    );
-  if (basename(base) === AGENT_DIR) {
-    if (hasConfig(base)) {
-      // Entry-point-invariant ambiguity: a flat config on the PARENT is the same both-dirs conflict
-      // seen from the workspace dir — refuse identically, never resolve differently by entry.
-      if (hasConfig(dirname(base))) throw ambiguity(dirname(base));
-      return { agentDir: base, workspace: dirname(base) };
-    }
-    if (looksLikeAgent(base)) throw configless(base);
   }
-  const flat = hasConfig(base);
-  const nestedDir = join(base, AGENT_DIR);
-  const nested = hasConfig(nestedDir);
-  if (flat && nested) throw ambiguity(base);
-  if (nested) return { agentDir: nestedDir, workspace: base };
-  if (!flat && existsSync(nestedDir) && looksLikeAgent(nestedDir)) throw configless(nestedDir);
-  return { agentDir: base, workspace: base };
+  return { agentDir, workspace: dirname(agentDir) };
 }
 
 /** The provider prefix of a "provider/modelId" spec. A spec without "/" returns whole — downstream

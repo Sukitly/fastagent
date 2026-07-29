@@ -320,7 +320,12 @@ describe("session control (Phase 1): observation plane", () => {
     const { join } = await import("node:path");
     const dir = await mkdtemp(join(tmpdir(), "fa-sc-ws-"));
     try {
-      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(dir, "fastagent"));
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
       const opened = await createPiAgentFromWorkspace(dir, { sessionControl: true });
       expect(opened.sessionControl).toBeDefined();
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
@@ -1118,7 +1123,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const { join } = await import("node:path");
     const dir = await mkdtemp(join(tmpdir(), "fa-sc-tap-"));
     try {
-      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(dir, "fastagent"));
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
       const seen: string[] = [];
       const opened = await createPiAgentFromWorkspace(dir, {
         sessionControl: true,

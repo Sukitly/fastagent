@@ -1,6 +1,6 @@
 /**
- * Scaffold template ACCESS (data, not logic): readers for the real files `init`/`add` write into a
- * workspace, plus the parametric pieces. Base workspace templates live under ./templates/; each
+ * Scaffold template ACCESS (data, not logic): readers for the real files `init`/`add` write into an
+ * agent dir, plus the parametric pieces. Base agent templates live under ./templates/; each
  * channel's bundle lives WITH the channel at ../channels/<kind>/scaffold/ (so a channel owns its
  * starter kit and could ship as its own package). Both trees are excluded from this package's tsc +
  * biome (they import the published @fastagent-sh/fastagent, not this source) and copied into dist/ by the build.
@@ -8,18 +8,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
-/** Read a base workspace template (src/scaffold/templates/<name>). */
+/** Read a base agent template (src/scaffold/templates/<name>). */
 export const baseTemplate = (name: string): string =>
   readFileSync(new URL(`./templates/${name}`, import.meta.url), "utf8");
-
-/** The persona template; for a nested `fastagent/` root a locator note is appended (anchor-free — no
- *  silent-miss risk) so the self-iteration guidance ("write skills beside this file") points into the
- *  `fastagent/` workspace — a skill written to the host root's `skills/` would never be scanned. */
-export function personaTemplate(nested = false): string {
-  const base = baseTemplate("persona.md");
-  if (!nested) return base;
-  return `${base}\nNote: your whole definition lives in \`fastagent/\` at the root of your workspace — this file is \`fastagent/persona.md\`, and a new skill goes to \`fastagent/skills/<name>/SKILL.md\` (a \`skills/\` outside \`fastagent/\` is not scanned). Everything OUTSIDE \`fastagent/\` is the project you work on, not your definition.\n`;
-}
 
 const channelScaffoldDir = (kind: string): URL => new URL(`../channels/${kind}/scaffold/`, import.meta.url);
 

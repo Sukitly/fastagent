@@ -31,12 +31,18 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { NESTED_DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import { DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveModelSpec, resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
+import {
+  AGENT_DIR,
+  loadConfig,
+  resolveModelSpec,
+  resolveStateRoot,
+  resolvePlacement,
+} from "../../engines/pi/config.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -62,11 +68,10 @@ export interface DeployOptions {
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
-  // ONE deploy semantic for both placements: bake the WORKSPACE (WYSIWYG). Artifacts land at the
-  // agent dir (= the workspace itself when flat; `fastagent/` when nested — plus the one
-  // workspace-root `.dockerignore` the packers require); host CLIs run from the workspace (the build context).
+  // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
+  // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
+  // from the workspace, which is the build context.
   const { agentDir, workspace } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
-  const nested = agentDir !== workspace;
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
@@ -86,7 +91,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   const pre = await preflightDeploy({
     agentDir,
     workspace,
-    nested,
     config,
     modelSpec,
     run: !!opts.run,
@@ -145,7 +149,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
     await writeArtifacts(workspace, plan.artifacts, {
       force: !!opts.force,
-      neverForce: nested ? [".dockerignore"] : [],
+      neverForce: [".dockerignore"],
     });
     if (opts.run) {
       return runDeployDocker({
@@ -197,20 +201,18 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     });
     await writeArtifacts(workspace, plan.artifacts, {
       force: !!opts.force,
-      neverForce: nested ? [".dockerignore"] : [],
+      neverForce: [".dockerignore"],
     });
     if (opts.run) {
-      if (nested) {
-        // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner
-        // sets (Railway's documented non-agentDir-Dockerfile route), and Railway's default restart policy
-        // already equals the file's ON_FAILURE — the dashboard-only Config-as-code pointer only adds
-        // the /health deploy gate (boot-crash visibility), so it is an OPTIONAL note, not a gate.
-        console.error(
-          `[fastagent] note: optional — point the service at fastagent/railway.json (Service → Settings → ` +
-            `Config-as-code, dashboard-only) so the /health healthcheck marks a boot-crashing deploy as FAILED; ` +
-            `the build already uses fastagent/Dockerfile via the RAILWAY_DOCKERFILE_PATH variable`,
-        );
-      }
+      // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner sets
+      // (Railway's documented non-root-Dockerfile route), and Railway's default restart policy already
+      // equals the file's ON_FAILURE — the dashboard-only Config-as-code pointer only adds the /health
+      // deploy gate (boot-crash visibility), so it is an OPTIONAL note, not a gate.
+      console.error(
+        `[fastagent] note: optional — point the service at fastagent/railway.json (Service → Settings → ` +
+          `Config-as-code, dashboard-only) so the /health healthcheck marks a boot-crashing deploy as FAILED; ` +
+          `the build already uses fastagent/Dockerfile via the RAILWAY_DOCKERFILE_PATH variable`,
+      );
       return runDeployRailway({
         agentDir,
         workspace,
@@ -221,7 +223,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
-        dockerfilePath: nested ? NESTED_DOCKERFILE_PATH_VAR : undefined,
+        dockerfilePath: DOCKERFILE_PATH_VAR,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -247,7 +249,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
   // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
   // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
-  // Nested: fly.toml lives in the agent dir (fastagent/fly.toml) — the host repo's own
+  // fly.toml lives in the agent dir (fastagent/fly.toml) — the workspace's own
   // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
   const flyTomlPath = join(agentDir, "fly.toml");
   const flyTomlExists = await exists(flyTomlPath);
@@ -300,13 +302,12 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   });
   await writeArtifacts(workspace, plan.artifacts, {
     force: !!opts.force,
-    neverForce: nested ? [".dockerignore"] : [],
+    neverForce: [".dockerignore"],
   });
   if (opts.run) {
     return runDeployFly({
       agentDir,
       workspace,
-      nested,
       appName,
       modelAuth,
       authPath,
@@ -333,11 +334,11 @@ async function writeArtifacts(
 ): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
-    // Host-owned paths (the agentDir .dockerignore for a nested agentDir): --force means "MY generated
-    // artifact is authoritative", which never licenses clobbering the HOST's file — keep it always.
+    // Workspace-owned paths (the root .dockerignore): --force means "MY generated artifact is
+    // authoritative", which never licenses clobbering the workspace's own file — keep it always.
     if (options.neverForce?.includes(a.path) && (await exists(abs))) {
       console.error(
-        `[fastagent] kept ${a.path} — the host repo's own file (never overwritten, even with --force); ` +
+        `[fastagent] kept ${a.path} — the workspace's own file (never overwritten, even with --force); ` +
           `see the preflight warnings for what it must contain`,
       );
       continue;
@@ -357,7 +358,7 @@ async function writeArtifacts(
       }
       continue;
     }
-    await mkdir(dirname(abs), { recursive: true }); // nested artifacts live under fastagent/
+    await mkdir(dirname(abs), { recursive: true }); // artifacts live under fastagent/
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
@@ -451,7 +452,6 @@ async function runDeployDocker(params: {
 async function runDeployFly(params: {
   agentDir: string;
   workspace: string;
-  nested: boolean;
   appName: string;
   modelAuth: string | undefined;
   authPath: string;
@@ -463,7 +463,6 @@ async function runDeployFly(params: {
   const {
     agentDir,
     workspace,
-    nested,
     appName,
     modelAuth,
     authPath,
@@ -505,8 +504,8 @@ async function runDeployFly(params: {
       missingSecrets,
       channels,
       longConnectionChannels,
-      flyConfig: nested ? "fastagent/fly.toml" : "fly.toml",
-      dockerfile: nested ? "fastagent/Dockerfile" : undefined,
+      flyConfig: `${AGENT_DIR}/fly.toml`,
+      dockerfile: `${AGENT_DIR}/Dockerfile`,
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
@@ -535,8 +534,8 @@ async function runDeployRailway(params: {
   longConnectionChannels: string[];
   extraSecrets: string[];
   intoLinked: boolean;
-  /** RAILWAY_DOCKERFILE_PATH for a nested agent; undefined for flat (root Dockerfile auto-detected). */
-  dockerfilePath?: string;
+  /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
+  dockerfilePath: string;
 }): Promise<void> {
   const {
     agentDir,

@@ -21,7 +21,8 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   secrets: {},
   missingSecrets: [],
   channels: [],
-  flyConfig: "fly.toml",
+  flyConfig: "fastagent/fly.toml",
+  dockerfile: "fastagent/Dockerfile",
   ...over,
 });
 
@@ -47,7 +48,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "volumes list -a bot --json",
       "volumes create data -a bot --region iad --size 1 --yes",
       "secrets import --stage -a bot",
-      "deploy -a bot -c fly.toml --remote-only --yes --ha=false",
+      "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
   });
@@ -214,7 +215,9 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(out).toEqual({ ok: true });
     expect(cmds()).not.toContain("apps create bot");
     expect(cmds()).not.toContain("volumes create data -a bot --region iad --size 1 --yes");
-    expect(cmds()).toContain("deploy -a bot -c fly.toml --remote-only --yes --ha=false");
+    expect(cmds()).toContain(
+      "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
+    );
   });
 
   it("gate: not logged in → stops before any side effect", async () => {

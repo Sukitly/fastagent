@@ -80,7 +80,7 @@ export async function loadModuleDir(
  */
 export function moduleLoadHint(error: NodeJS.ErrnoException): string {
   if (error.code === "ERR_MODULE_NOT_FOUND" || /Cannot find (package|module)/.test(error.message)) {
-    return "\n  (a dependency is not installed — run `npm install` in the workspace)";
+    return "\n  (a dependency is not installed — run `npm install` in the agent dir)";
   }
   if (/import statement outside a module|Unexpected token 'export'|ERR_REQUIRE_ESM/.test(error.message)) {
     return '\n  (this workspace must be ESM — set "type": "module" in package.json)';

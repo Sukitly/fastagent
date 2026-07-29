@@ -113,12 +113,11 @@ ${min}
 
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
-  const { appName, port, modelAuth, channels, nested } = input;
-  // Nested: every artifact is namespaced under the agent dir (fastagent/fly.toml,
-  // fastagent/Dockerfile) so the host repo's own deploy files are never touched; the runbook passes
-  // explicit -c/--dockerfile flags (unambiguous across flyctl versions — no reliance on
-  // config-relative path resolution).
-  const flyTomlPath = nested ? `${AGENT_DIR}/fly.toml` : "fly.toml";
+  const { appName, port, modelAuth, channels } = input;
+  // Every artifact is namespaced under the agent dir (fastagent/fly.toml, fastagent/Dockerfile) so
+  // the workspace's own deploy files are never touched; the runbook passes explicit -c/--dockerfile
+  // flags (unambiguous across flyctl versions — no reliance on config-relative path resolution).
+  const flyTomlPath = `${AGENT_DIR}/fly.toml`;
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
@@ -143,9 +142,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
-  const deployCmd = nested
-    ? `fly deploy . --config ${flyTomlPath} --dockerfile ${AGENT_DIR}/Dockerfile --app ${appName}`
-    : `fly deploy --app ${appName}`;
+  const deployCmd = `fly deploy . --config ${flyTomlPath} --dockerfile ${AGENT_DIR}/Dockerfile --app ${appName}`;
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: flyctl installed (https://fly.io/docs/flyctl/install) and \`fly auth login\`.`,
@@ -176,15 +173,13 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `# fly secrets set --app ${appName} ${optionalSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
-  if (nested) {
-    runbook.push(
-      ``,
-      `# Nested workspace: the build context is the WORKSPACE ROOT (the whole directory is baked as`,
-      `# the agent's cwd); the config/Dockerfile live under fastagent/ so they never collide with the`,
-      `# host repo's own deploy files. Run this from the workspace root:`,
-    );
-  }
-  runbook.push(deployCmd);
+  runbook.push(
+    ``,
+    `# The build context is the WORKSPACE ROOT (the whole directory is baked as the agent's cwd); the`,
+    `# config/Dockerfile live under ${AGENT_DIR}/ so they never collide with the workspace's own deploy`,
+    `# files. Run this from the workspace root:`,
+    deployCmd,
+  );
   if (input.shipsGit) {
     runbook.push(
       ``,

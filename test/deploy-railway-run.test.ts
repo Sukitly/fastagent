@@ -28,6 +28,7 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   missingSecrets: [],
   channels: [],
   intoLinked: false,
+  dockerfilePath: "/fastagent/Dockerfile",
   ...over,
 });
 
@@ -63,7 +64,8 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "status --json",
       "init --name bot",
       "add --service bot",
-      "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot", // first --service cmd, BEFORE the volume
+      "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets " +
+        "RAILWAY_DOCKERFILE_PATH=/fastagent/Dockerfile --service bot", // first --service cmd, BEFORE the volume
       "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
       "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
       "volume list --json",
@@ -74,9 +76,9 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
   });
 
-  it("nested: RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
+  it("RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
     // Railway's documented service-variable route to a non-root Dockerfile — without it the build
-    // auto-detects the host repo root (config-as-code could carry the path, but pointing Railway at
+    // auto-detects the workspace root (config-as-code could carry the path, but pointing Railway at
     // fastagent/railway.json is dashboard-only; the variable keeps --run a one-command deploy).
     const { railway, cmds } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };

@@ -1,19 +1,16 @@
 /**
- * Workspace path/ignore utilities — engine-neutral (pure fs/path + the `ignore` matcher). Shared by the
- * scaffold (init/add) and the engine's channel discovery, so they live here, not under engines/pi.
- * Also the home of the MACHINERY path resolution (`.state`/`.secrets` + their env overrides): env.ts
- * (the `.env` reader, neutral) and engines/pi/config.ts (which re-exports the public names) both
- * derive from it, so "where does machinery live" has ONE owner without pulling engine code into
- * neutral modules.
+ * Placement + machinery path resolution — engine-neutral (pure fs/path). The agent directory NAME and
+ * the machinery paths (`.state`/`.secrets` + their env overrides) live here, not under engines/pi,
+ * because the scaffold, env.ts (the neutral `.env` reader) and engines/pi/config.ts (which re-exports
+ * the public names) all derive from them: ONE owner, without pulling engine code into neutral modules.
  */
 import { realpathSync } from "node:fs";
-import { readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import ignore, { type Ignore } from "ignore";
 
 /**
- * The fixed name of a nested agent directory: `<workspace>/fastagent/`. Visible on purpose — the
+ * The fixed name of an agent directory: `<workspace>/fastagent/`. Visible on purpose — the
  * agent directory holds the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it
  * follows the repo convention for code (a plain directory), while fastagent's own machinery inside it
  * (`.secrets/`, `.state/`) keeps the dot prefix.
@@ -105,21 +102,4 @@ export async function assertInsideAgentDir(agentDir: string, name: string): Prom
         `use a real directory or a symlink that stays within it`,
     );
   }
-}
-
-/** Load `.gitignore` + `.fastagentignore` from `dir` into one matcher (case-sensitive), or undefined if none. */
-export async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
-  let rules = "";
-  for (const name of [".gitignore", ".fastagentignore"]) {
-    try {
-      rules += `\n${await readFile(join(dir, name), "utf8")}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
-      }
-    }
-  }
-  // ignorecase:false — the library defaults to case-INSENSITIVE, which would make a rule `README.md`
-  // also drop an authored `readme.md`. Match git on a case-sensitive filesystem, reproducibly.
-  return rules.trim() === "" ? undefined : ignore({ ignorecase: false }).add(rules);
 }

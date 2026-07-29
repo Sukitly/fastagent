@@ -46,13 +46,12 @@ export interface RailwayRunPlan {
    *  by default so `--run` only creates on an unlinked dir and never deploys into a pre-existing (possibly
    *  unrelated/production) project; the flag is the operator's explicit "yes, this project". */
   intoLinked: boolean;
-  /** `RAILWAY_DOCKERFILE_PATH` value — Railway's service-variable route to a non-root Dockerfile
-   *  (builds/dockerfiles docs), set with the machinery variables BEFORE the first `up`. The CLI passes
-   *  `/fastagent/Dockerfile` for a nested agent so the build never falls back to auto-detecting
-   *  the host repo root (the config-as-code file also carries the path, but pointing Railway at
-   *  `fastagent/railway.json` is dashboard-only — the variable is the scriptable way). Undefined for
-   *  flat: the root `Dockerfile` is auto-detected. */
-  dockerfilePath?: string;
+  /** `RAILWAY_DOCKERFILE_PATH` value (`/fastagent/Dockerfile`) — Railway's service-variable route to a
+   *  non-root Dockerfile (builds/dockerfiles docs), set with the machinery variables BEFORE the first
+   *  `up` so the build never falls back to auto-detecting the workspace root. The config-as-code file
+   *  also carries the path, but pointing Railway at `fastagent/railway.json` is dashboard-only — the
+   *  variable is the scriptable way. */
+  dockerfilePath: string;
 }
 
 /** Done (with the live URL), or a gate the operator must clear before re-running (printed + non-zero

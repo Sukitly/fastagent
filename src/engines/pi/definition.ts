@@ -55,9 +55,9 @@ export interface LoadedDefinition {
 
 export interface LoadAgentDefinitionOptions {
   /**
-   * Working directory whose ancestors are walked for context files (segment ②). Default = `agentDir`
-   * (flat: the agent dir is also the run root). The opener passes the run root so a coding agent that
-   * lives in `agentDir` picks up the host repo's AGENTS.md up the tree (core.md scenario grid).
+   * Working directory whose ancestors are walked for context files (segment ②). Default = `agentDir`.
+   * The opener passes the workspace instead, so an agent that lives in `agentDir` picks up the
+   * project's AGENTS.md up the tree (core.md scenario grid).
    */
   cwd?: string;
   env?: ExecutionEnv;
