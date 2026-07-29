@@ -265,6 +265,12 @@ describe("deploy agentcore: the plan", () => {
     });
   });
 
+  it("says in the artifact itself that it is a mirror, not an input", () => {
+    // `--run` zips fastagent's own copy of this source, so a kept/edited file would be a stale mirror
+    // of what runs — and the manual runbook, which zips this very file, would ship the OLD code.
+    expect(forwarderSource()).toContain("REGENERATED ON EVERY DEPLOY");
+  });
+
   it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
     const plan = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.

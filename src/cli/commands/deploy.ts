@@ -15,7 +15,12 @@ import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
-import { TEMPLATE_FILE, isGeneratedAgentcoreTemplate, planAgentcoreDeploy } from "../../deploy/agentcore/plan.ts";
+import {
+  FORWARDER_FILE,
+  TEMPLATE_FILE,
+  isGeneratedAgentcoreTemplate,
+  planAgentcoreDeploy,
+} from "../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun } from "../../deploy/agentcore/run.ts";
 import { isGeneratedDockerfile } from "../../deploy/container.ts";
 import {
@@ -314,6 +319,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     await writeArtifacts(target, plan.artifacts, {
       force: !!opts.force,
       neverForce: container.kitDir ? [".dockerignore"] : [],
+      alwaysWrite: [container.kitDir ? `${container.kitDir}/${FORWARDER_FILE}` : FORWARDER_FILE],
     });
     if (opts.run) {
       return runDeployAgentcore({
@@ -433,10 +439,19 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
 async function writeArtifacts(
   target: string,
   artifacts: { path: string; content: string }[],
-  options: { force: boolean; neverForce?: string[] },
+  options: { force: boolean; neverForce?: string[]; alwaysWrite?: string[] },
 ): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
+    // Pure BUILD OUTPUT, not a config file: the deployed package is built from fastagent's own source
+    // (deploy/agentcore/run.ts), so a kept copy would be a stale mirror of what is running — and the
+    // manual runbook, which zips this very file, would ship the OLD code. Always rewritten.
+    if (options.alwaysWrite?.includes(a.path)) {
+      await mkdir(dirname(abs), { recursive: true });
+      await writeFile(abs, a.content);
+      console.error(`[fastagent] wrote ${a.path}`);
+      continue;
+    }
     // Host-owned paths (the root .dockerignore in the agentDir layout): --force means "MY generated
     // artifact is authoritative", which never licenses clobbering the HOST's file — keep it always.
     if (options.neverForce?.includes(a.path) && (await exists(abs))) {

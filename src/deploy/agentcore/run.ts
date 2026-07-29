@@ -255,7 +255,9 @@ export async function deployAgentcoreRun(
       },
     ];
     for (const step of converge) {
-      if ((await aws(step.args)).code !== 0) {
+      // `capture` keeps the CLI's JSON off the deploy log: the exit code is the signal, and a failure
+      // gates with the step's name below.
+      if ((await aws(step.args, { capture: true })).code !== 0) {
         return gate(`could not ${step.label} on ${bucket} — refusing to store agent state in it; fix and re-run`);
       }
     }
