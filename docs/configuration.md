@@ -89,7 +89,7 @@ FastAgent resolves model credentials through the model provider layer. Common op
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global `~/.fastagent/.secrets/auth.json`). |
+| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run outside any agent for the global `~/.fastagent/.secrets/auth.json` — announced on stderr). |
 | Provider env vars | Good for servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Workspace `.env` | Local development secrets at `<agent dir>/.secrets/.env`, loaded by CLI commands. The `.secrets/` dir self-gitignores. |
 

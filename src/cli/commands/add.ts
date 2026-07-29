@@ -10,6 +10,7 @@ import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveSecretsDir, resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import { ensureSecretsDirSelfIgnored } from "../../engines/pi/definition.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -141,24 +142,35 @@ export async function runAddChannel(
   }
   const install =
     detectRuntime(channelHome, await readPackageJson(channelHome)).runtime === "bun" ? "bun install" : "npm install";
+  // Next steps are printed to someone standing in their CWD, usually the workspace — but every path
+  // and the install itself belong to the AGENT dir. Prefix them, or the install hits the workspace's
+  // manifest (the wrong one, or none) and the file paths point at nothing. `init` does the same.
+  const fromCwd = relative(process.cwd(), target);
+  const inAgent = (p: string): string => (fromCwd === "" ? p : join(fromCwd, p));
   console.error(`  next steps:`);
-  console.error(`    ${install}                      # if @fastagent-sh/fastagent is not installed yet`);
+  console.error(
+    `    ${fromCwd === "" ? install : `(cd ${fromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,
+  );
   for (const e of env) {
     if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
     if (dotEnv.written.includes(e.name)) {
       // Written, but its hint may still carry an action (github: paste the same value into the webhook
       // UI) — keep the variable visible instead of silently absorbing it.
-      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to .secrets/.env   # ${e.hint}`);
+      console.error(
+        `    ${e.name} — ${e.generate ? "generated and " : ""}written to ${inAgent(join(SECRETS_DIRNAME, ".env"))}   # ${e.hint}`,
+      );
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
     const action = e.required ? "set" : "optionally set";
-    console.error(`    ${action} ${e.name}${value} in .secrets/.env   # ${e.hint}`);
+    console.error(`    ${action} ${e.name}${value} in ${inAgent(join(SECRETS_DIRNAME, ".env"))}   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
   // knowledge) — resolve them to the real agent-dir-relative locations here.
   for (const s of steps) {
-    console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", "tools")}`);
+    console.error(
+      `    ${s.replace("{channel}", inAgent(relative(target, file))).replace("{tools}", inAgent("tools"))}`,
+    );
   }
   if (ingress === "websocket") {
     console.error(`    fastagent dev            # no public URL or tunnel required`);

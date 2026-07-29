@@ -90,7 +90,7 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
 fastagent login [provider] [--auth-path file] [--no-input]
 ```
 
-Authenticates a model provider and stores credentials in the **project-level** `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it from `$HOME` to write the global `~/.fastagent/.secrets/auth.json`). There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
+Authenticates a model provider and stores credentials in the **project-level** `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it OUTSIDE any agent — no `./fastagent/` in the current directory — to write the global `~/.fastagent/.secrets/auth.json`, which it announces on stderr). Inside an agent but not at its root (`fastagent/tools/`), it refuses and tells you where to `cd`. There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
 
 An API-key login is verified immediately with one minimal request (OAuth needs no check — completing
 the flow proves the credential): a definitive rejection (HTTP 401) removes the bad key and prompts
@@ -98,7 +98,7 @@ for it again on the spot (cancel to stop), so a mistyped key is corrected at log
 failing at the first invoke; an inconclusive failure (network, quota, permissions) keeps the key and
 prints the provider's message.
 
-**Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry, a shell env var, or `--auth-path`), or just `login`/run from `$HOME`. A leading `~` is expanded to your home dir in `--auth-path` and `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
+**Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry, a shell env var, or `--auth-path`), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `--auth-path` and `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
 
 ## `fastagent dev`
 
