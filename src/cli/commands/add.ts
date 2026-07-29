@@ -8,11 +8,11 @@ import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
-import { loadDotEnv } from "../../env.ts";
-import { resolveSecretsDir, resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
+import { dotEnvPath, loadDotEnv } from "../../env.ts";
+import { resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
-import { ensureSecretsDirSelfIgnored } from "../../engines/pi/definition.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
+import { guardCredentialHome } from "../shared.ts";
 import {
   type ChannelKind,
   type GroupBehavior,
@@ -87,13 +87,7 @@ export async function runAddChannel(
   // root-level negation — git's nested-ignore precedence). A FASTAGENT_SECRETS_DIR pointed outside the
   // agent is not ours to self-ignore, and the write below happens anyway — so say it, or the guarantee
   // above would be a claim the command does not keep.
-  const secretsDir = resolveSecretsDir(target);
-  if ((await ensureSecretsDirSelfIgnored(target, secretsDir).catch(failStartup)) === "outside") {
-    console.error(
-      `[fastagent] warn: FASTAGENT_SECRETS_DIR points outside the agent (${secretsDir}) — fastagent does not ` +
-        `write a .gitignore there, so make sure the generated secret below cannot be committed`,
-    );
-  }
+  await guardCredentialHome(target, dotEnvPath(target)).catch(failStartup);
   // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
   // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
   let created: Record<string, string> | undefined;

@@ -81,7 +81,9 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     await mkdir(empty);
     await writeFile(join(empty, "README.md"), "an unrelated checkout\n"); // not agent surface
     expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
-    expect(() => resolvePlacement(empty)).toThrow(/not a fastagent agent/);
+    // From INSIDE it the refusal differs on purpose: `init` refuses the reserved name too, so the
+    // generic "run `fastagent init`" would be advice the next guard rejects.
+    expect(() => resolvePlacement(empty)).toThrow(/reserved for agent directories.*cd \.\./s);
 
     // Any ONE authored surface is enough — a zero-config agent still resolves, from either end.
     await mkdir(join(empty, "tools"));
@@ -97,7 +99,7 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
     // Same rule on the basename branch: a path that only LOOKS like an agent dir refuses here
     // rather than resolving and failing later as a raw ENOENT from config/definition loading.
-    expect(() => resolvePlacement(join(dir, "missing", "fastagent"))).toThrow(/not a fastagent agent/);
+    expect(() => resolvePlacement(join(dir, "missing", "fastagent"))).toThrow(/reserved for agent directories/);
 
     // Standing INSIDE an agent (its tools/, skills/…) is the likeliest way to reach this refusal —
     // "run `fastagent init`" there would build the fastagent/fastagent trap, so it names the agent.

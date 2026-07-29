@@ -199,12 +199,13 @@ describe("init: scaffoldAgent", () => {
     const dir2 = await freshDir();
     await mkdir(join(dir2, "fastagent"), { recursive: true });
     await writeFile(join(dir2, "fastagent", "auth.json"), "{}\n"); // an unfinished agent, or something unrelated
-    await expect(scaffoldAgent(dir2)).rejects.toThrow(/already exists and is not empty/);
+    await expect(scaffoldAgent(dir2)).rejects.toThrow(/already holds auth\.json/); // names what blocks it
     expect(await exists(join(dir2, "fastagent", "persona.md"))).toBe(false); // side-effect-free refusal
 
+    // Finder noise and the standard commit-an-empty-dir placeholders are not someone's content.
     const dir3 = await freshDir();
     await mkdir(join(dir3, "fastagent"), { recursive: true });
-    await writeFile(join(dir3, "fastagent", ".DS_Store"), ""); // Finder noise ≠ occupied
+    for (const noise of [".DS_Store", ".gitkeep"]) await writeFile(join(dir3, "fastagent", noise), "");
     expect((await scaffoldAgent(dir3)).created).toContain(agentPath("persona.md"));
 
     // A config OUTSIDE fastagent/ is not a marker at all — placement is the directory NAME.

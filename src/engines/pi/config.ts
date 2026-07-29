@@ -260,12 +260,17 @@ export function resolvePlacement(dir: string): ResolvedPlacement {
     // Resolution never walks UP (that would make the answer depend on how deep you stand), but the
     // most likely way to land here is standing INSIDE an agent — in `fastagent/tools/`, say. Telling
     // that user to run `fastagent init` would send them to build `fastagent/fastagent/`, the one
-    // shape scaffolding refuses. Name the enclosing agent instead.
+    // shape scaffolding refuses. Name the enclosing agent instead. Third dead end, third way out: a
+    // directory NAMED `fastagent` that holds no definition cannot host one either (init refuses the
+    // reserved name), so the generic "run `fastagent init`" would be advice the next guard rejects.
     const enclosing = enclosingAgentDir(base);
     throw new Error(
       enclosing
         ? `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`
-        : `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory holding a definition here; ` +
+        : basename(base) === AGENT_DIR
+          ? `${base} is named "${AGENT_DIR}" but holds no definition — that name is reserved for agent ` +
+            `directories, so an agent cannot be scaffolded here. \`cd ..\` and run \`fastagent init\`, or rename it`
+          : `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory holding a definition here; ` +
             `run \`fastagent init\` to scaffold one`,
     );
   }

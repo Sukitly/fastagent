@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { log } from "./log.ts";
 import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
@@ -66,9 +68,17 @@ export function envExamplePath(agentDir: string): string {
  * corrupt/unreadable file) propagates, so a real problem surfaces instead of silently skipping.
  */
 export function loadDotEnv(agentDir: string): void {
+  const path = dotEnvPath(agentDir);
   try {
-    loadEnvFile(dotEnvPath(agentDir));
+    loadEnvFile(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  // A `.env` at the AGENT ROOT is the file habit puts there (the scaffold's .gitignore anticipates it),
+  // and nothing reads it. Left silent, the symptom is a channel missing its token — with no way back
+  // to the cause. Say where the values actually belong.
+  const stray = join(agentDir, ".env");
+  if (stray !== path && existsSync(stray)) {
+    log.warn(`[fastagent] ${stray} is NOT read — the agent's env lives at ${path}; move the values there`);
   }
 }

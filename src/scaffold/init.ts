@@ -155,19 +155,21 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   // unrelated, and landing persona.md beside it would be a silent mix. Only ENOENT reads as "empty" —
   // any other fault (EACCES…) must surface here rather than as a raw errno mid-write.
   // (AGENTS.md outside is NOT a marker — it is context, adopted untouched.)
+  // `.DS_Store`/`.gitkeep`/`.keep` are not evidence of anyone's content: Finder noise, and the standard
+  // way to commit an empty directory (someone reserving `fastagent/` in git ahead of init).
   const occupants = (
     await readdir(join(dir, root)).catch((e: NodeJS.ErrnoException) => {
       if (e.code === "ENOENT") return [] as string[];
       throw e;
     })
-  ).filter((f) => f !== ".DS_Store");
+  ).filter((f) => ![".DS_Store", ".gitkeep", ".keep"].includes(f));
   const config = occupants.filter((f) => (AGENT_CONFIG_NAMES as readonly string[]).includes(f));
   if (config.length > 0) {
     throw new Error(`"${join(dir, root)}" already has ${config.join(", ")} — already a fastagent agent`);
   }
   if (occupants.length > 0) {
     throw new Error(
-      `"${join(basename(dir), AGENT_DIR)}" already exists and is not empty — move it away first, ` +
+      `"${join(basename(dir), AGENT_DIR)}" already holds ${occupants.join(", ")} — move it away first, ` +
         `or run \`fastagent init\` in a different directory`,
     );
   }
