@@ -418,6 +418,11 @@ describe("cli papercuts", () => {
     expect(code).not.toBe(0);
     expect(stderr).toMatch(/no \.\/fastagent\/ here — logging in GLOBALLY/);
     await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
+
+    // …and it is silent when --auth-path outranks the fallback: an announcement naming a file the run
+    // does not write would be worse than none.
+    const directed = await run(["login", "no-such-provider", "--auth-path", join(cwd, "auth.json")], cwd, env);
+    expect(directed.stderr).not.toMatch(/logging in GLOBALLY/);
   });
 
   it("login fails fast in a non-TTY (a pipe/CI) instead of hanging on the interactive menu", async () => {

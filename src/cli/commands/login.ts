@@ -14,8 +14,8 @@
  */
 import { homedir } from "node:os";
 import { loadDotEnv } from "../../env.ts";
+import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { AGENT_DIR, findAgentDir, resolveAuthPath, resolveSecretsDir } from "../../engines/pi/config.ts";
-import { GLOBAL_HOME_DIR } from "../../paths.ts";
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -30,17 +30,20 @@ export interface LoginOptions {
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   const agentDir = findAgentDir(process.cwd());
-  if (!agentDir) {
-    console.error(
-      `[fastagent] no ./${AGENT_DIR}/ here — logging in GLOBALLY (~/${GLOBAL_HOME_DIR}/.secrets/auth.json). ` +
-        `An agent reads its own .secrets/auth.json: \`cd\` into one first, or point it here with --auth-path.`,
-    );
-  }
   const loginDir = agentDir ?? homedir();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const secretsDir = resolveSecretsDir(loginDir);
   const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
+  // Announce the GLOBAL fallback — but only once the real target is known: `--auth-path`/
+  // FASTAGENT_AUTH_PATH outrank the fallback, and an announcement contradicting the file actually
+  // written would be worse than none. The point is that this credential is not the one an agent reads.
+  if (!agentDir && authPath === GLOBAL_AUTH_PATH) {
+    console.error(
+      `[fastagent] no ./${AGENT_DIR}/ here — logging in GLOBALLY (${authPath}). An agent reads its own ` +
+        `.secrets/auth.json: \`cd\` into one first, or point this run at it with --auth-path.`,
+    );
+  }
   // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
   // in the opener): on an adapted project dir, a `login` before the first dev/start would otherwise
   // leave the secret untracked-but-committable. Unlike the opener (which always guards the machinery

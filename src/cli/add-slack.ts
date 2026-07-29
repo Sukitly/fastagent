@@ -24,7 +24,7 @@ async function promptValue(message: string, hidden = false, initialValue?: strin
 
 /** Interactive single-workspace internal-app creation + installation. Safe to re-run after interruption. */
 export async function onboardSlackInternalApp(input: {
-  /** The workspace ROOT — credentials land in `<target>/.secrets/.env` (the caller has already
+  /** The AGENT DIR — credentials land in `<target>/.secrets/.env` (the caller has already
    *  ensured the secrets dir self-ignores). */
   target: string;
   stateRoot: string;

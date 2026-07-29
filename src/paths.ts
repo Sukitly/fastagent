@@ -35,11 +35,13 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
 }
 
 /**
- * The machinery home for an agent dir: the dir itself — EXCEPT when it is the user's HOME
- * directory (`fastagent login` run from `~`): machinery then lives under the user-global
- * `~/.fastagent/` (so `~/.secrets` / `~/.state` are never created). The global home carries the same
- * unified shape inside it (`~/.fastagent/.secrets/auth.json` — GLOBAL_AUTH_PATH in auth.ts).
- * Canonical comparison: `dir` arrives realpath-resolved (process.cwd()), homedir() may be a symlink.
+ * The machinery home for an agent dir: the dir itself — EXCEPT when it IS the user's home directory,
+ * where machinery lives under the user-global `~/.fastagent/` instead (so `~/.secrets` / `~/.state`
+ * are never created). Placement resolution never yields `$HOME` as an agent dir, so the one caller
+ * that reaches this branch is `login`'s outside-any-agent fallback, which passes `homedir()`
+ * explicitly. The global home carries the same shape inside it (`~/.fastagent/.secrets/auth.json` —
+ * GLOBAL_AUTH_PATH in auth.ts). Canonical comparison: `dir` arrives realpath-resolved
+ * (process.cwd()), homedir() may be a symlink.
  */
 function machineryHome(dir: string): string {
   const canonical = (p: string): string => {
