@@ -90,11 +90,11 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     skill("GLOSSARY.md"),
     skill("LICENSE"),
     { rel: join(root, "fastagent.config.mjs"), content: baseTemplate("fastagent.config.mjs") },
+    // The agent's own .gitignore covers everything fastagent creates (machinery dirs, a stray .env).
+    // It is scaffolded ONCE and owned by the author from then on — no command rewrites or verifies it.
     { rel: join(root, ".gitignore"), content: baseTemplate("gitignore") },
-    // `.secrets/`: real values (.env, auth.json) live here, never committed; the template and the
-    // protection itself are un-ignored so both travel with the agent (see templates).
+    // `.secrets/`: real values (.env, auth.json) live here; only the template is committable.
     { rel: join(root, SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
-    { rel: join(root, SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
   ];
   if (!minimal) {
     files.push(

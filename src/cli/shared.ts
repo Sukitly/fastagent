@@ -17,52 +17,14 @@ import {
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
-  resolveSecretsDir,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { ensureSecretsDirSelfIgnored, isGlobalMachineryPath, isUnderDir } from "../engines/pi/definition.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
 import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
-
-/**
- * The secret-leak policy, in one place for every command that WRITES one — `fastagent login`, the
- * first-run inline login below, and `add <channel>` (whose generated webhook tokens are the same class
- * of value, written to `.secrets/.env`). Given the file about to land: PROTECT the directory fastagent
- * owns — the resolved `.secrets/`, self-ignored and verified — and merely ANNOUNCE anywhere else.
- *
- * Deliberately not "ensure": a secret steered elsewhere by `--auth-path`/`FASTAGENT_AUTH_PATH` lands
- * in a directory the operator named and manages, where writing a `*`-ignoring `.gitignore` would hide
- * their files and VERIFYING one they already wrote would abort the command over a directory that is
- * none of our business. The user gets the fact and owns the decision.
- *
- * `anchorDir` is usually the agent dir, but `$HOME` is a legal anchor too (`login` outside any agent):
- * its machinery home is fastagent's own, needs no `.gitignore`, and is silently skipped.
- */
-export async function guardCredentialHome(anchorDir: string, secretPath: string): Promise<void> {
-  const secretsDir = resolveSecretsDir(anchorDir);
-  const warn = (text: string): void => console.error(`[fastagent] warn: ${text}`);
-  // Decided on the TARGET first, through the guard's own predicate: fastagent's user-global machinery
-  // home needs no `.gitignore`. Pointing `--auth-path` at it from inside an agent is the DOCUMENTED way
-  // to share one account across projects — warning about it would be advice against our own docs.
-  if (isGlobalMachineryPath(secretPath)) return;
-  if (!isUnderDir(secretPath, secretsDir)) {
-    warn(
-      `${secretPath} is outside fastagent's secrets dir (${secretsDir}) — no .gitignore is written ` +
-        `there, so make sure the secret cannot be committed`,
-    );
-    return; // don't create an empty `.secrets/` for a secret that is not going into it
-  }
-  if ((await ensureSecretsDirSelfIgnored(anchorDir, secretsDir)) === "outside") {
-    warn(
-      `${secretsDir} is outside the agent — fastagent does not write a .gitignore there, so make sure ` +
-        `the secret cannot be committed`,
-    );
-  }
-}
 
 /**
  * ONE padded label writer for the startup report (`dev`/`start`), matching `info`'s: hand-spaced
@@ -136,7 +98,7 @@ export async function resolveFirstRunModel(
 
   const authPath = resolveAuthPath(agentDir, options.authPath);
   const models = createPiModels({ authPath });
-  const chosen = await pickWithCredentials(agentDir, models, authPath);
+  const chosen = await pickWithCredentials(models, authPath);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(agentDir, configPath, chosen);
@@ -148,7 +110,7 @@ export async function resolveFirstRunModel(
  * independent of credentials), or the inline login for the rest. Returns the chosen spec, or
  * undefined when the pick should be discarded (picker cancel, login cancel, a failed auth probe).
  */
-async function pickWithCredentials(agentDir: string, models: Models, authPath: string): Promise<string | undefined> {
+async function pickWithCredentials(models: Models, authPath: string): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
@@ -183,9 +145,6 @@ async function pickWithCredentials(agentDir: string, models: Models, authPath: s
     return chosen;
   }
 
-  // Inline login: the SAME leak policy `fastagent login` runs, through the same helper — a credential
-  // is a credential whichever command mints it.
-  await guardCredentialHome(agentDir, authPath);
   try {
     // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
     // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.

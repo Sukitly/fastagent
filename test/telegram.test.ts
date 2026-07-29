@@ -150,7 +150,6 @@ describe("durable group buffer (single-process restarts)", () => {
     // durable by the time the 200 exists — an ACKed update is never redelivered
     const onDisk = JSON.parse(readFileSync(join(state, "buffers.json"), "utf8")) as Record<string, unknown[]>;
     expect(onDisk["-100"]?.length).toBe(1);
-    expect(readFileSync(join(state, ".gitignore"), "utf8")).toBe("*\n"); // the state home self-ignores
     // "restart": a NEW channel instance over the same state dir
     const a2 = replyingAgent("second");
     const ch2 = telegramChannel(a2.agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state });

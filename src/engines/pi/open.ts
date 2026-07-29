@@ -18,7 +18,6 @@ import {
   loadConfig,
   resolveAuthPath,
   resolveModelSpec,
-  resolveSecretsDir,
   resolveStateRoot,
   resolvePlacement,
 } from "./config.ts";
@@ -29,7 +28,7 @@ import { type PiBoundaryWiring, createPiSessionControl } from "./session-control
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type LoadedDefinition, ensureSecretsDirSelfIgnored, ensureStateRootSelfIgnored } from "./definition.ts";
+import type { LoadedDefinition } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
@@ -37,14 +36,14 @@ export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /**
-   * Session store directory. Default `<agentDir>/.state/sessions` (self-gitignored machine state). `start`
+   * Session store directory. Default `<agentDir>/.state/sessions` (machine state). `start`
    * overrides it (--sessions-dir / FASTAGENT_SESSIONS_DIR / a mounted volume) so production continuity
    * survives redeploys.
    */
   sessionsDir?: string;
   /**
    * Credentials file override. Default `<agentDir>/.secrets/auth.json` (project-level, under the
-   * self-gitignored `.secrets/`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
+   * `.secrets/`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
    * the global `~/.fastagent/.secrets/auth.json` to share one credential across projects.
    */
   authPath?: string;
@@ -125,15 +124,6 @@ export async function resolveAgentAssembly(
   // The credentials file: project-level by default (under `<agentDir>/.secrets`); only resolved here, never
   // created (a missing file reads as not-configured — `fastagent login` creates it).
   const authPath = resolveAuthPath(agentDir, options.authPath);
-  // Self-ignore the machinery dirs iff they land in-tree. HERE, not in the serving opener: every
-  // consumer of this assembly can WRITE under them (serving: sessions/channels; the session builder:
-  // pi's `/login` writing auth.json), so resolving an agent must make them leak-safe.
-  await ensureStateRootSelfIgnored(agentDir, stateRoot);
-  // The guard's "outside" outcome is deliberately NOT surfaced here, unlike in `login`/`add`: an
-  // out-of-agent secrets dir is the normal DEPLOYED posture (FASTAGENT_SECRETS_DIR at the volume), so
-  // warning would fire on every production boot. The commands that MINT a secret locally warn; the
-  // opener, which only resolves one, does not.
-  await ensureSecretsDirSelfIgnored(agentDir, resolveSecretsDir(agentDir));
   return {
     config,
     configPath,

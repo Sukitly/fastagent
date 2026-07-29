@@ -8,9 +8,9 @@
  * `dev`/`start` in a real agent would read, and a silent scope switch is exactly the surprise this
  * command must not ship.
  *
- * Creates and self-ignores `<root>/.secrets/` (the credential's gitignored home) BEFORE the auth flow,
- * so the secret can never land untracked — a flow that then fails (bad provider, abort) leaves that
- * empty secrets dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
+ * fastagent writes no `.gitignore` here or anywhere else at runtime: `init` scaffolds the agent's one
+ * ignore file (covering `.secrets/`) and the author owns it from then on. The credential store creates
+ * its own directory, mode 0700.
  */
 import { homedir } from "node:os";
 import { basename } from "node:path";
@@ -25,7 +25,7 @@ import {
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
-import { guardCredentialHome, isInteractive, loginWithKeyCheck } from "../shared.ts";
+import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
   authPath?: string;
@@ -59,16 +59,10 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
         `.secrets/auth.json: \`cd\` into one first, or point this run at it with --auth-path.`,
     );
   }
-  // login is the command that CREATES the credential file, so the leak guard binds HERE too, not only
-  // in the opener: a `login` before the first dev/start would otherwise leave the secret
-  // untracked-but-committable. The policy (what fastagent protects vs merely announces) lives in
-  // guardCredentialHome — one owner, shared with the first-run inline login.
-  await guardCredentialHome(loginDir, authPath);
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
   // prompts for a key). In a non-TTY (a pipe, CI, a coding-agent shell) the menu can't receive keystrokes
   // and would hang; --no-input asks for the same posture explicitly. Fail fast with the reason instead
-  // of stalling on an unanswerable prompt. (After the secret-hygiene self-ignore above, which is cheap
-  // prep, so a later terminal login is safe.)
+  // of stalling on an unanswerable prompt.
   if (opts.input === false || !isInteractive()) {
     failStartup(
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),

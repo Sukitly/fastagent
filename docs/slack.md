@@ -188,7 +188,7 @@ The next answered turn in that place receives a bounded sender-prefixed block. C
 4. retain it on failure/crash, and retain messages that arrive while the turn is running.
 
 This mode deliberately lets the app read messages in channels where it is installed. Use `mentions` when
-that permission or retention boundary is inappropriate. State is local to the deployment and self-ignored
+that permission or retention boundary is inappropriate. State is local to the deployment and gitignored
 from git, but operators still own retention/privacy policy.
 
 ## Inbound files

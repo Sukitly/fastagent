@@ -279,7 +279,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("wires auth to the workspace credential file (not ~/.pi) and self-ignores the secrets dir", async () => {
+  it("wires auth to the agent's credential file (not ~/.pi), touching no .gitignore", async () => {
     const dir = await freshAgentDir("fa-sb-auth-");
     try {
       await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
@@ -295,9 +295,9 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
         // The session's model hub reads the workspace store: the stored credential is visible.
         const creds = await rt.session.modelRuntime.listCredentials();
         expect(creds.some((c) => c.providerId === "openai" && c.type === "api_key")).toBe(true);
-        // The secrets dir is leak-safe on this path too: pi's /login writes auth.json here, so the
-        // shared front half must have self-ignored it (the serving opener's guard, now shared).
-        expect(existsSync(join(dir, ".secrets", ".gitignore"))).toBe(true);
+        // …and building a resident session writes nothing about git: the agent's .gitignore is the
+        // author's file, scaffolded once by `init`.
+        expect(existsSync(join(dir, ".secrets", ".gitignore"))).toBe(false);
       } finally {
         rt.session.dispose?.();
       }

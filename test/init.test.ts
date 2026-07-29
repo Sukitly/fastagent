@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromDir } from "../src/index.ts";
-import { ensureSecretsDirSelfIgnored, loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { displayPath, scaffoldAgent } from "../src/scaffold/init.ts";
 
 /** A path inside the scaffolded agent dir, as scaffoldAgent reports it (relative to the workspace). */
@@ -22,6 +23,15 @@ async function exists(p: string): Promise<boolean> {
 }
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+/** Run a command to completion in `cwd`; returns its exit code (git is the oracle for ignore rules). */
+function run(cmd: string, args: string[], cwd: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { cwd, stdio: "ignore" });
+    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", () => resolve(1));
+  });
+}
 /** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
 function cliInit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve) => {
@@ -58,7 +68,6 @@ describe("init: scaffoldAgent", () => {
         agentPath("package.json"),
         agentPath(".gitignore"),
         agentPath(".secrets", ".env.example"),
-        agentPath(".secrets", ".gitignore"),
       ].sort(),
     );
     // THE point of the placement: the workspace gained exactly one entry — `fastagent/` — and nothing else.
@@ -73,13 +82,10 @@ describe("init: scaffoldAgent", () => {
     expect(ig.ignores(".env.local")).toBe(true);
     expect(ig.ignores(".env.example")).toBe(false);
 
-    // `.secrets/` self-ignores: everything but the template + the protection itself stays local.
-    const secretsIgnore = await readFile(join(dir, "fastagent", ".secrets", ".gitignore"), "utf8");
-    expect(secretsIgnore).toMatch(/^\*$/m);
-    expect(secretsIgnore).toMatch(/^!\.gitignore$/m);
-    expect(secretsIgnore).toMatch(/^!\.env\.example$/m);
-    // The agent self-contains its deps + ignores (they travel with the directory).
+    // ONE .gitignore, at the agent root, covering everything fastagent creates (the git-oracle test
+    // below proves it against real git); it travels with the directory.
     expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
+    expect(existsSync(join(dir, "fastagent", ".secrets", ".gitignore"))).toBe(false); // no second file
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
     // frames auth as a choice (`fastagent login` OR a provider API key), never implying a key is required.
@@ -115,15 +121,28 @@ describe("init: scaffoldAgent", () => {
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Project spec");
   });
 
-  it("the scaffolded .secrets/.gitignore satisfies the runtime's own leak verification", async () => {
-    // Two copies of the credential-protection rule exist by design: the scaffold template (so the
-    // protection is there before fastagent's first write) and SECRETS_GITIGNORE (written by the guard
-    // itself). ensureSecretsDirSelfIgnored VERIFIES an existing file, so running it over the
-    // scaffolded one is the check that the two cannot drift apart silently.
+  it("the scaffolded .gitignore covers everything fastagent creates — asked of git itself", async () => {
+    // fastagent writes this file ONCE and never touches git again, so this is the whole protection:
+    // it has to hold for the real paths, under real git semantics. Oracle is `git check-ignore`, not
+    // our own matcher — the point is to agree with git, not with ourselves.
     const dir = await freshDir();
     await scaffoldAgent(dir, { minimal: true });
     const agent = join(dir, "fastagent");
-    await expect(ensureSecretsDirSelfIgnored(agent, join(agent, ".secrets"))).resolves.toBe("ignored");
+    await run("git", ["init", "-q"], dir);
+    await mkdir(join(agent, ".state", "sessions"), { recursive: true });
+    await mkdir(join(agent, "node_modules", "pkg"), { recursive: true });
+    for (const p of [".env", ".secrets/.env", ".secrets/auth.json", ".state/control.json"]) {
+      await writeFile(join(agent, p), "x");
+    }
+    const ignored = async (rel: string) =>
+      (await run("git", ["check-ignore", "-q", join("fastagent", rel)], dir)) === 0;
+    for (const rel of [".env", ".secrets/.env", ".secrets/auth.json", ".state/sessions", ".state/control.json"]) {
+      expect(await ignored(rel), rel).toBe(true);
+    }
+    // …while everything the author is supposed to commit stays visible.
+    for (const rel of [".secrets/.env.example", "persona.md", "fastagent.config.mjs"]) {
+      expect(await ignored(rel), rel).toBe(false);
+    }
   });
 
   it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
@@ -138,7 +157,6 @@ describe("init: scaffoldAgent", () => {
         agentPath("skills", "writing-great-skills", "LICENSE"),
         agentPath(".gitignore"),
         agentPath(".secrets", ".env.example"),
-        agentPath(".secrets", ".gitignore"),
         agentPath("fastagent.config.mjs"),
       ].sort(),
     );
@@ -398,8 +416,6 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("# --- telegram channel ---");
     expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
     expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
-    // The secrets dir was made leak-safe BEFORE the secret landed (the self-ignore mechanism).
-    expect(await readFile(join(dir, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
   });
 
   it("github's generated webhook secret gets the same treatment (kind-neutral), hint kept visible", async () => {
@@ -493,14 +509,14 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     }
   });
 
-  it("makes .secrets/ leak-safe by construction — no gitignore precondition, no warning needed", async () => {
-    // readyWorkspace has no .gitignore at all: the secret still lands safely, because the CLI
-    // ensures the self-ignoring .secrets/.gitignore BEFORE writing (nested ignores are authoritative).
+  it("writes the generated secret without any gitignore ceremony — that is the scaffold's job, once", async () => {
+    // `add` says nothing about git: an agent's .gitignore was written at init and is the author's from
+    // then on. readyWorkspace deliberately has none, and the secret still lands — visibly, in the
+    // reported path — instead of the command refusing or lecturing about ignore rules.
     const exposed = await readyWorkspace();
     const out = await cliInit(["add", "github"], exposed);
-    expect(out).not.toMatch(/not gitignored/);
+    expect(out).not.toMatch(/gitignore|committed/i);
     expect(await exists(join(exposed, "channels", "github.ts"))).toBe(true);
-    expect(await readFile(join(exposed, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
     expect(await readFile(join(exposed, ".secrets", ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=/m);
   });
 

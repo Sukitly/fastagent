@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { waitForHealth } from "../channels/wait-health.ts";
-import { ensureStateRootSelfIgnored } from "../engines/pi/definition.ts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
@@ -24,8 +23,7 @@ async function promptValue(message: string, hidden = false, initialValue?: strin
 
 /** Interactive single-workspace internal-app creation + installation. Safe to re-run after interruption. */
 export async function onboardSlackInternalApp(input: {
-  /** The AGENT DIR — credentials land in `<target>/.secrets/.env` (the caller has already
-   *  ensured the secrets dir self-ignores). */
+  /** The AGENT DIR — credentials land in `<target>/.secrets/.env`. */
   target: string;
   stateRoot: string;
   groupBehavior: GroupBehaviorChoice;
@@ -40,7 +38,6 @@ export async function onboardSlackInternalApp(input: {
     );
   }
 
-  await ensureStateRootSelfIgnored(input.target, input.stateRoot);
   let state = await readSlackOnboardingState(input.stateRoot);
   const resumed = state !== undefined;
   if (input.replaceConfig && !state) {

@@ -400,20 +400,6 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/\n\s+at /); // no stack frames — this is a user-fixable refusal, not a bug
   });
 
-  it("login self-ignores .secrets on an adapted dir before it writes the credential file", async () => {
-    // login is the command that CREATES the secret, so its self-ignore must fire independently of the
-    // opener — and BEFORE the interactive gate below, so the .gitignore is written even though this
-    // non-TTY spawn then fails fast. That .gitignore is the proof the leak guard ran. Adapted dir = no
-    // root .gitignore (the feature's core use case).
-    const cwd = join(await agentWorkspace("fa-login-cli-"), "fastagent");
-    const env = { ...process.env };
-    delete env.FASTAGENT_AUTH_PATH; // ensure the in-tree default (not a dev's global override)
-    const { code } = await run(["login", "no-such-provider"], cwd, env);
-    expect(code).not.toBe(0);
-    const { readFile } = await import("node:fs/promises");
-    expect(await readFile(join(cwd, ".secrets", ".gitignore"), "utf8")).toBe("*\n!.gitignore\n!.env.example\n");
-  });
-
   it("attach --url/--token needs no local agent — a laptop attaching to a deployed box", async () => {
     // A remote attach reads nothing under the directory (no control.json, no assembly), so requiring
     // one there would refuse the command's whole point. The connection then fails on its own terms.

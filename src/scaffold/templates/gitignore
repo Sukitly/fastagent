@@ -1,11 +1,17 @@
+# This file is yours — fastagent writes it once, at `init`, and never touches git again.
+
 # dependencies (reinstalled at deploy)
 node_modules/
 
-# a hand-created .env at the agent root: fastagent reads .secrets/.env (which self-ignores), but
-# this is the file habit puts here — never let it become committable. The template still travels.
+# fastagent machinery: credentials and machine state never belong in git.
+# `.secrets/*` (not `.secrets/`) so the committable template below can be re-included.
+.secrets/*
+!.secrets/.env.example
+.state/
+.cache/
+
+# fastagent reads the agent's env from .secrets/.env, but a bare .env at this level is the file
+# habit puts here — `dev` says so when it finds one; this keeps it uncommittable meanwhile.
 .env
 .env.*
 !.env.example
-
-# fastagent machinery (.secrets/ credentials+.env, .state/ sessions+channel state) carries
-# its own self-ignoring .gitignore — no entries needed here.

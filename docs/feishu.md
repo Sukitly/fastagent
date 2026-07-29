@@ -31,7 +31,7 @@ Both ingress modes feed the same request/reply engine: the channel holds the app
 
 ## Add the channel
 
-From an agent directory, credentials land in `.secrets/.env` — the CLI makes the `.secrets/` dir self-gitignore before writing, so no ignore setup is needed; both
+From an agent directory, credentials land in `.secrets/.env` — excluded by the agent `.gitignore` that `init` scaffolds; both
 commands refuse to write platform credentials into a committable file:
 
 ```bash
@@ -96,7 +96,7 @@ printed, so you can open it in the app or scan it as a QR code instead — and y
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1`. Onboarding requests
 `application:application:patch` when it must configure webhook mode or the recommended group-context
-scope. The CLI immediately persists App ID/Secret to the self-gitignored `.secrets/.env` before starting later network
+scope. The CLI immediately persists App ID/Secret to `.secrets/.env` before starting later network
 work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
@@ -336,7 +336,7 @@ after the turn/buffer state so a failed pre-ACK state write can still be redeliv
 between those writes, a failed ring write, or a duplicate older than the cap can therefore still re-run
 or re-fold. Interrupted-turn recovery also remains L1 at-least-once and can repeat tool side effects.
 
-The state home self-ignores (a nested `.gitignore`). Single-process semantics: two processes must not share a state dir.
+The state home lives under `.state/`, which the agent `.gitignore` excludes. Single-process semantics: two processes must not share a state dir.
 
 ## Sending messages back (`feishu-send` / `lark-send`)
 

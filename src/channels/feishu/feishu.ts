@@ -266,7 +266,7 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
-    ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
+    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const ownedThreads = createOwnedFeishuThreads(join(stateHome, "owned-threads.json"), label);
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {

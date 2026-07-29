@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -390,16 +391,15 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag wins
   });
 
-  it("L3 creates agent state: .state/.secrets self-ignore for library callers as well as the CLI", async () => {
+  it("opening an agent writes nothing about git — the scaffold's .gitignore is the author's file", async () => {
+    // fastagent used to (re)write and VERIFY machinery .gitignores on every open, which meant a
+    // library caller's directory got edited behind its back — and an author's own edit could abort
+    // the command. Opening resolves paths; it does not have opinions about the user's repo.
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     await createPiAgentFromDir(host);
-    const { readFile } = await import("node:fs/promises");
-    expect(await readFile(join(agent, ".state", ".gitignore"), "utf8")).toBe("*\n");
-    // .secrets carries the traveling variant: template + protection stay committable.
-    const secrets = await readFile(join(agent, ".secrets", ".gitignore"), "utf8");
-    expect(secrets).toMatch(/^\*$/m);
-    expect(secrets).toMatch(/^!\.env\.example$/m);
+    expect(existsSync(join(agent, ".state", ".gitignore"))).toBe(false);
+    expect(existsSync(join(agent, ".secrets", ".gitignore"))).toBe(false);
   });
 
   it("sessionsDir overrides the default <agentDir>/.state/sessions (start's deploy posture)", async () => {
@@ -426,18 +426,6 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const shared = join(tmpdir(), "shared-auth.json");
     const overridden = await createPiAgentFromDir(host, { authPath: shared });
     expect(overridden.authPath).toBe(shared);
-  });
-
-  it("self-ignores .secrets when auth defaults in-tree even though sessionsDir is on a volume", async () => {
-    // The leak this guards: `start --sessions-dir /vol` overrides sessions but leaves the credential
-    // file at the default <agentDir>/.secrets/auth.json. The self-ignore must still fire so an agent
-    // dir with no .gitignore never ships OAuth/API-key state.
-    const { host, agent } = await agentWorkspace();
-    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    const vol = await mkdtemp(join(tmpdir(), "fa-sessions-"));
-    await createPiAgentFromDir(host, { sessionsDir: vol });
-    const { readFile } = await import("node:fs/promises");
-    expect(await readFile(join(agent, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {

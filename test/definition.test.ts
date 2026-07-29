@@ -4,9 +4,8 @@ import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
   collect,
@@ -17,7 +16,7 @@ import {
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
-import { ensureSecretsDirSelfIgnored, ensureStateRootSelfIgnored, isUnderDir } from "../src/engines/pi/definition.ts";
+import { isUnderDir } from "../src/engines/pi/definition.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 
@@ -32,48 +31,6 @@ describe("definition: isUnderDir (the leak-guard predicate — does the state ro
   it("is false for external paths (a mounted volume) and sibling dirs sharing a prefix", () => {
     expect(isUnderDir("/mnt/vol", dir)).toBe(false); // operator's volume
     expect(isUnderDir("/work-old", dir)).toBe(false); // prefix sibling, not inside
-  });
-});
-
-describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () => {
-  it("self-ignores a CUSTOM in-tree state root, not just `fastagent` (the FASTAGENT_STATE_DIR leak)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const root = join(dir, "data"); // FASTAGENT_STATE_DIR=data → in-tree, not under fastagent
-    await ensureStateRootSelfIgnored(dir, root);
-    expect(await readFile(join(root, ".gitignore"), "utf8")).toBe("*\n");
-  });
-  it("leaves an external-volume root alone (never writes a .gitignore outside the tree)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const ext = await mkdtemp(join(tmpdir(), "fa-vol-"));
-    await ensureStateRootSelfIgnored(dir, ext);
-    expect(existsSync(join(ext, ".gitignore"))).toBe(false);
-  });
-
-  it("an EXISTING .gitignore is verified, not trusted — an emptied file fails loudly with the remedy", async () => {
-    // "A file exists" is not "the contents are protected": a bad merge/emptied file would otherwise
-    // pass silently and the next login/add would write a credential into a committable dir.
-    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const secrets = join(dir, ".secrets");
-    await mkdir(secrets, { recursive: true });
-    await writeFile(join(secrets, ".gitignore"), "");
-    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).rejects.toThrow(/does not ignore \.env, auth\.json/);
-
-    const state = join(dir, ".state");
-    await mkdir(state, { recursive: true });
-    await writeFile(join(state, ".gitignore"), "");
-    await expect(ensureStateRootSelfIgnored(dir, state)).rejects.toThrow(/does not ignore sessions/);
-  });
-
-  it("a `!.env` re-include is caught with git's last-match semantics; a custom-but-safe file passes", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const secrets = join(dir, ".secrets");
-    await mkdir(secrets, { recursive: true });
-    await writeFile(join(secrets, ".gitignore"), "*\n!.gitignore\n!.env\n");
-    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).rejects.toThrow(/does not ignore \.env\b/);
-
-    // Author's own additions are fine as long as the protection holds (.env + auth.json ignored).
-    await writeFile(join(secrets, ".gitignore"), "*\n!.gitignore\n!.env.example\n!README.md\n");
-    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).resolves.toBe("ignored");
   });
 });
 
@@ -493,32 +450,6 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     env.deny = false; // the next good edit heals it — same agent, no restart
     const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
     expect(text).toBe("recovered");
-  });
-});
-
-describe("definition: the leak guard decides on the TARGET dir, not the anchor", () => {
-  it("skips fastagent's global home by TARGET, not by the caller's anchor", async () => {
-    // The exception is about the directory being written, not about who asked: `login` outside any
-    // agent anchors on $HOME, and deciding there would skip the guard for every target under it.
-    const { GLOBAL_HOME_DIR } = await import("../src/paths.ts");
-    expect(await ensureSecretsDirSelfIgnored(homedir(), join(homedir(), GLOBAL_HOME_DIR, ".secrets"))).toBe("home");
-
-    // A project-level secrets dir under the same anchor IS protected.
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    const secrets = join(home, "project", ".secrets");
-    await mkdir(secrets, { recursive: true });
-    expect(await ensureSecretsDirSelfIgnored(home, secrets)).toBe("ignored");
-    expect(await readFile(join(secrets, ".gitignore"), "utf8")).toMatch(/^\*$/m);
-  });
-
-  it("verifies control.json is ignored — the one SECRET under the state root", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-state-token-"));
-    const stateRoot = join(dir, ".state");
-    await mkdir(stateRoot, { recursive: true });
-    // A hand-written file naming only the state DIRECTORIES leaves the session-control bearer token
-    // committable — verification must refuse it.
-    await writeFile(join(stateRoot, ".gitignore"), "sessions\nchannels\nschedule\n");
-    await expect(ensureStateRootSelfIgnored(dir, stateRoot)).rejects.toThrow(/control\.json/);
   });
 });
 

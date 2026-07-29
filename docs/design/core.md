@@ -45,8 +45,8 @@ There is ONE agent shape, in ONE placement. The shape:
 ├── channels/
 ├── schedules/
 ├── fastagent.config.mjs
-├── .secrets/               # fastagent-managed secrets: .env + auth.json (self-gitignored;
-│                           # .env.example travels)
+├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .secrets, .state, .env
+├── .secrets/               # fastagent-managed secrets: .env + auth.json (only .env.example travels)
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
@@ -103,6 +103,16 @@ was solving "which of the two shapes is this?". Deleting `--flat` deleted the qu
 The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret
 store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
 point both at it in a container).
+
+**Git is the author's, not fastagent's.** `init` scaffolds the agent's `.gitignore` — covering
+`node_modules/`, both machinery dirs, and a stray `.env` — and that is the last time fastagent has an
+opinion about git. No command writes, rewrites, reads or verifies an ignore file at runtime. The
+version that did carried a decision procedure ("is this path under a directory we control?") that
+approximated git's own semantics with containment comparisons against a different anchor per command;
+it produced four reversals of the same predicate in review, could WRITE a `*`-ignoring file into a
+directory the operator named, and could ABORT `login` over an ignore file the author had edited. The
+question it was approximating — "will git see this?" — has exactly one authority, and users configure
+their own ignore rules.
 
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
 see docs/embedding.md.)

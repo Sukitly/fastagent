@@ -273,7 +273,7 @@ function mentionsEnvName(content: string, name: string): boolean {
 
 /**
  * Append generated channel secrets to the agent's `.env` (`.secrets/.env` — never `.env.example`)
- * after the CLI has ensured `.secrets/` self-ignores. Existing non-empty values are kept — EXCEPT the names listed in
+ * Existing non-empty values are kept — EXCEPT the names listed in
  * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
  * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
  * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is

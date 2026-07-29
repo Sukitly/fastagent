@@ -14,7 +14,6 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { displayPath } from "../../scaffold/init.ts";
-import { guardCredentialHome } from "../shared.ts";
 import {
   type ChannelKind,
   type GroupBehavior,
@@ -91,13 +90,6 @@ export async function runAddChannel(
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
   }
-  // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
-  // written into `.secrets/.env` — make the secrets dir exist and self-ignore FIRST, so the CLI never
-  // materializes a secret into a committable file (the .secrets/.gitignore is authoritative over any
-  // root-level negation — git's nested-ignore precedence). A FASTAGENT_SECRETS_DIR pointed outside the
-  // agent is not ours to self-ignore, and the write below happens anyway — so say it, or the guarantee
-  // above would be a claim the command does not keep.
-  await guardCredentialHome(target, dotEnvPath(target)).catch(failStartup);
   // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
   // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
   let created: Record<string, string> | undefined;

@@ -132,7 +132,7 @@ export async function configureGroupBehavior(input: {
 /**
  * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the AGENT DIR
  * — credentials land in `<target>/.secrets/.env` (the caller has already ensured the secrets dir
- * self-ignores, so a real credential can never land committable). Returns credentials for the
+ * is excluded by the agent's scaffolded .gitignore). Returns credentials for the
  * caller's generic .env write (the guided Lark path), or undefined when nothing remains to write —
  * the feishu path persists its own two credential stages internally (the App ID/Secret boundary is
  * irreversible and must not wait for the caller). Throws on refusal (a non-interactive lark run);
