@@ -160,7 +160,7 @@ The root export intentionally contains the supported surface only.
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
 | Channels/host | `createInvokeHandler`, `nodeListener`, `serveNode`, `router`, `Routes` | Reference implementation, pre-1.0 |
-| pi assembly | `createPiAgentFromWorkspace`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
+| pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
 | Injection ports | `PiSessionStore`, `inMemorySessionStore`, `jsonlSessionStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
 | Not exported | L0 harness adapter, pi harness factory, prompt/config internals | Internal modules; no compatibility promise |

@@ -8,7 +8,7 @@
  * What makes a directory an agent is its NAME (`fastagent/` — see resolvePlacement).
  */
 import { existsSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { FastagentTool } from "./tool.ts";
@@ -225,10 +225,20 @@ export function findAgentDir(dir: string): string | undefined {
  * resolve identically. A directory with no `fastagent/` is not an agent → throw (fail visibly).
  */
 export function resolvePlacement(dir: string): ResolvedPlacement {
-  const agentDir = findAgentDir(dir);
+  const base = resolve(dir);
+  const agentDir = findAgentDir(base);
   if (!agentDir) {
+    // Resolution never walks UP (that would make the answer depend on how deep you stand), but the
+    // most likely way to land here is standing INSIDE an agent — in `fastagent/tools/`, say. Telling
+    // that user to run `fastagent init` would send them to build `fastagent/fastagent/`, the one
+    // shape scaffolding refuses. Name the enclosing agent instead.
+    const segments = base.split(sep);
+    const depth = segments.slice(0, -1).lastIndexOf(AGENT_DIR); // PROPER ancestors only
+    const enclosing = depth > 0 ? segments.slice(0, depth + 1).join(sep) : undefined;
     throw new Error(
-      `${resolve(dir)} is not a fastagent agent — no ./${AGENT_DIR}/ directory here; run \`fastagent init\` to scaffold one`,
+      enclosing
+        ? `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`
+        : `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory here; run \`fastagent init\` to scaffold one`,
     );
   }
   return { agentDir, workspace: dirname(agentDir) };

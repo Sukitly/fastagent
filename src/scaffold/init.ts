@@ -23,6 +23,7 @@
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { AGENT_CONFIG_NAMES, AGENT_DIR } from "../engines/pi/config.ts";
+import { SECRETS_DIRNAME } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 
@@ -91,8 +92,8 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     { rel: join(root, ".gitignore"), content: baseTemplate("gitignore") },
     // `.secrets/`: real values (.env, auth.json) live here, never committed; the template and the
     // protection itself are un-ignored so both travel with the agent (see templates).
-    { rel: join(root, ".secrets", ".env.example"), content: baseTemplate("env.example") },
-    { rel: join(root, ".secrets", ".gitignore"), content: baseTemplate("secrets.gitignore") },
+    { rel: join(root, SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
+    { rel: join(root, SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
   ];
   if (!minimal) {
     files.push(

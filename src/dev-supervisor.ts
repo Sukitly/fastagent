@@ -15,6 +15,7 @@ import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { resolveStateRoot, resolvePlacement } from "./engines/pi/config.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
+import { SECRETS_DIRNAME } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
@@ -46,7 +47,7 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
     // `.secrets/.env` restarts too (credentials are process-bound). The `.secrets` directory entry
     // itself must stay un-pruned so chokidar can descend to the .env; everything else inside
     // (auth.json, .env.example) never triggers.
-    if (head === ".secrets") {
+    if (head === SECRETS_DIRNAME) {
       if (tail.length === 0) return false; // the dir itself: descend, don't prune
       return !(tail.length === 1 && tail[0] === ".env");
     }

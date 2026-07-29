@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveSecretsDir } from "./paths.ts";
+import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -56,7 +56,7 @@ export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.en
  *  `.secrets/.gitignore` the scaffold writes, so it travels with the agent while real values never
  *  do); only the real `.env` follows the override. */
 export function envExamplePath(agentDir: string): string {
-  return join(agentDir, ".secrets", ".env.example");
+  return join(agentDir, SECRETS_DIRNAME, ".env.example");
 }
 
 /**

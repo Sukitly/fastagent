@@ -78,6 +78,13 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     // Same rule on the basename branch: a path that only LOOKS like an agent dir refuses here
     // rather than resolving and failing later as a raw ENOENT from config/definition loading.
     expect(() => resolvePlacement(join(dir, "missing", "fastagent"))).toThrow(/not a fastagent agent/);
+
+    // Standing INSIDE an agent (its tools/, skills/…) is the likeliest way to reach this refusal —
+    // "run `fastagent init`" there would build the fastagent/fastagent trap, so it names the agent.
+    await mkdir(join(dir, "agent", "fastagent", "tools"), { recursive: true });
+    expect(() => resolvePlacement(join(dir, "agent", "fastagent", "tools"))).toThrow(
+      /is inside the agent .*fastagent but is not its root/,
+    );
   });
 });
 

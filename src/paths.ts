@@ -21,6 +21,12 @@ export const AGENT_DIR = "fastagent";
  *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link AGENT_DIR}, which names agent directories. */
 export const GLOBAL_HOME_DIR = ".fastagent";
 
+/** The secrets segment inside an agent dir (or the global home). ONE owner: `.env`, `.env.example`,
+ *  auth.json and the scaffold all derive their paths from it, so a rename can never move the real
+ *  `.env` without the template beside it (or auth.json without the `.gitignore` protecting it).
+ *  `FASTAGENT_SECRETS_DIR` relocates the RESOLVED dir ({@link resolveSecretsDir}), never this name. */
+export const SECRETS_DIRNAME = ".secrets";
+
 /**
  * Resolve a user-supplied path override (a CLI flag or an env var) to an absolute path, expanding a
  * leading `~`/`~/` to the home dir FIRST. Path-valued config from `.env` (or any non-shell source)
@@ -81,7 +87,7 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
  * auth.json but cannot move the file it is read from (env.ts dotEnvPath).
  */
 export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(machineryHome(dir), ".secrets");
+  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(machineryHome(dir), SECRETS_DIRNAME);
 }
 
 /**

@@ -14,7 +14,6 @@
  */
 import { homedir } from "node:os";
 import { loadDotEnv } from "../../env.ts";
-import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { AGENT_DIR, findAgentDir, resolveAuthPath, resolveSecretsDir } from "../../engines/pi/config.ts";
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
@@ -35,10 +34,11 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const secretsDir = resolveSecretsDir(loginDir);
   const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
-  // Announce the GLOBAL fallback — but only once the real target is known: `--auth-path`/
-  // FASTAGENT_AUTH_PATH outrank the fallback, and an announcement contradicting the file actually
-  // written would be worse than none. The point is that this credential is not the one an agent reads.
-  if (!agentDir && authPath === GLOBAL_AUTH_PATH) {
+  // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path,
+  // the credential lands somewhere no agent will read. An explicit `--auth-path`/FASTAGENT_AUTH_PATH
+  // is the user naming the file, so there is no surprise to announce (and announcing a path this run
+  // does not write would be worse than saying nothing). The resolved path goes in the message.
+  if (!agentDir && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
       `[fastagent] no ./${AGENT_DIR}/ here — logging in GLOBALLY (${authPath}). An agent reads its own ` +
         `.secrets/auth.json: \`cd\` into one first, or point this run at it with --auth-path.`,

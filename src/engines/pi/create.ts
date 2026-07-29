@@ -6,7 +6,7 @@
  *   L1  createPiAgent(options)                       — assemble from typed parts (the canonical ctor).
  *   L0  createPiAgentFromHarness({ harnessFactory }) — in invoke.ts (its body is the turn mechanism).
  *
- * Above L2 sits the workspace opener createPiAgentFromDir (workspace.ts), which both `dev` and
+ * Above L2 sits the agent opener createPiAgentFromDir (open.ts), which both `dev` and
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
  */
@@ -52,14 +52,14 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
 }
 
 /**
- * The full tool set a workspace mounts: pi defaults + `config.tools` + discovered `tools/` (deduped,
+ * The full tool set an agent mounts: pi defaults + `config.tools` + discovered `tools/` (deduped,
  * existing win), plus the non-default tool names and collisions to report. One source for the
  * dev/start openers AND `fastagent tool`, so they all mount exactly the same set.
  */
 export async function resolveAgentTools(
   config: FastagentConfig,
-  root: string,
-  cwd: string = root,
+  agentDir: string,
+  cwd: string = agentDir,
 ): Promise<{
   tools: AgentTool[];
   toolNames: string[];
@@ -70,12 +70,12 @@ export async function resolveAgentTools(
   toolFailures: ModuleLoadFailure[];
 }> {
   // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the workspace the agent operates
-  // on); discovered `tools/` come from `root` (the agent's own surface).
-  const discovered = await loadTools(root);
+  // on); discovered `tools/` come from `agentDir` (the agent's own surface).
+  const discovered = await loadTools(agentDir);
   const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
-  // The built-in `search_tools` loader mounts here — the one place the workspace's full tool set is
-  // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; a
-  // workspace-defined search_tools wins).
+  // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
+  // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; an
+  // agent-defined search_tools wins).
   const tools = withSearchTool(merged.tools);
   // Builtin = a search_tools that was ABSENT before withSearchTool (a reference compare would misfire
   // on the deferred-authored-loader case, where withSearchTool returns a new array without adding one).
