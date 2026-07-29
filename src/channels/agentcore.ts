@@ -274,10 +274,16 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         // Deliberately does NOT wait for idle: the durable turn intent is persisted BEFORE the
         // webhook ACK (turn-store.ts), so a flush right now already carries the interrupted turn —
         // and blocking a deploy on a turn that may run for minutes would be the worse trade.
-        if (!stateSync) return json({ flushed: false, reason: "no state sync in this deployment" }, 200);
-        stateSync.save();
-        await stateSync.flush();
-        return json({ flushed: true, inFlight: isBusy() }, 200);
+        if (!stateSync) return json({ written: false, reason: "no state sync in this deployment" }, 200);
+        try {
+          // The reply is the ONLY thing telling the operator whether an in-flight turn was
+          // protected, so it reports what actually happened — `written: false` (nothing to write)
+          // reads differently from `written: true`, and a failure is a failure.
+          return json(await stateSync.checkpoint(), 200);
+        } catch (e) {
+          log.error(`[agentcore] checkpoint failed: ${String(e)}`);
+          return text(`checkpoint failed: ${String(e)}\n`, 500);
+        }
       }
       case "wake-poke": {
         // The poke's job is DONE by arriving: the invocation woke (or kept awake) the container, and

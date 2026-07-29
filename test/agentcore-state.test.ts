@@ -229,6 +229,54 @@ describe("agentcore state snapshot", () => {
       expect(activeWork()).toBe(base);
     });
 
+    describe("checkpoint (the pre-stop flush)", () => {
+      it("writes a FRESH snapshot and says so — the caller is about to lose this process", async () => {
+        const local = await stateRoot({ "a.json": "1" });
+        const { impl, calls } = fakeFetch((_u, init) =>
+          init?.method === "PUT" ? new Response(null, { status: 200 }) : new Response(null, { status: 404 }),
+        );
+        const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+        sync.use(urls);
+        await sync.ready();
+
+        // A turn's durable intent lands AFTER the last idle-edge upload — the checkpoint must carry it.
+        await writeFile(join(local, "turns.json"), '{"pending":"the interrupted turn"}');
+        expect(await sync.checkpoint()).toEqual({ written: true });
+
+        const put = calls.filter((c) => c.method === "PUT").at(-1)!;
+        const sent = JSON.parse(gunzipSync(Buffer.from(put.body!)).toString());
+        expect(sent.files["turns.json"]).toBeDefined();
+      });
+
+      it("reports written:false with a REASON rather than claiming a protection it did not give", async () => {
+        // No URLs: this process never served a forwarder envelope (a session started by the
+        // checkpoint itself). Nothing of the shared state to write — but the caller must not be told
+        // an in-flight turn was protected.
+        const bare = createStateSync({ stateRoot: await stateRoot(), fetchImpl: fakeFetch(() => new Response()).impl });
+        expect(await bare.checkpoint()).toMatchObject({ written: false, reason: expect.stringContaining("forwarder") });
+
+        // URLs, but a failed restore: writing now would overwrite a good snapshot with a blank root.
+        const { impl } = fakeFetch(() => new Response("boom", { status: 500 }));
+        const broken = createStateSync({ stateRoot: await stateRoot(), fetchImpl: impl });
+        broken.use(urls);
+        await expect(broken.ready()).rejects.toThrow();
+        expect(await broken.checkpoint()).toMatchObject({ written: false });
+      });
+
+      it("THROWS when the upload fails — unlike save(), the whole point of the call is to know", async () => {
+        const local = await stateRoot({ "a.json": "1" });
+        const { impl } = fakeFetch((_u, init) =>
+          init?.method === "PUT" ? new Response(null, { status: 403 }) : new Response(null, { status: 404 }),
+        );
+        const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+        sync.use(urls);
+        await sync.ready();
+        await expect(sync.checkpoint()).rejects.toThrow(/PUT failed: 403/);
+        // …and the failure leaves the sync usable rather than wedged.
+        await expect(sync.flush()).resolves.toBeUndefined();
+      });
+    });
+
     it("an upload failure is logged, not thrown — the local mount still holds the data until next settle", async () => {
       const local = await stateRoot({ "a.json": "1" });
       const { impl } = fakeFetch((_u, init) =>

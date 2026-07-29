@@ -477,6 +477,10 @@ platform wipes on a version update, so cross-deploy memory is a property of the 
 docs say so. `--run` sends a `checkpoint` envelope before `stop-runtime-session` — the stop cuts an
 in-flight turn whose durable intent (written pre-ACK by every replaying channel) would otherwise sit
 only on the mount the version update erases, which is what makes replay real rather than aspirational.
+It protects a LIVE session; one already idle-reclaimed has nothing to lose, because its snapshot was
+written when work settled, before the reclaim. The reply reports whether a snapshot was actually
+written and `--run` prints that verbatim — a blanket "checkpointed" would be the only signal an
+operator has about an interrupted turn, saying the same thing whether or not anything happened.
 The bucket is created OUTSIDE the stack (like the ECR repo) so `delete-stack` cannot take the agent's
 memory with it; a durable MOUNT instead (EFS/S3 Files) requires VPC mode and therefore a NAT gateway for
 model/channel egress, which would replace pay-per-use with a fixed ~$33/mo floor. The same bucket hosts

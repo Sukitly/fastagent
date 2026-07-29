@@ -50,6 +50,7 @@ function fakeStateSync(over: Partial<StateSync> = {}): StateSync & { seen: strin
     },
     configured: () => seen.length > 0,
     flush: async () => {},
+    checkpoint: async () => ({ written: seen.length > 0 }),
   };
   return Object.assign(base, over, { seen, saves: () => saves });
 }
@@ -433,5 +434,39 @@ describe("agentcore adapter: post-restore hooks", () => {
     });
 
     expect(readWakeAlarmUrl(stateRoot)).toBe("https://current.lambda-url.on.aws/");
+  });
+});
+
+describe("agentcore adapter: the pre-stop checkpoint", () => {
+  it("returns what actually happened, so the deploy log cannot claim a protection it did not give", async () => {
+    const wrote = fakeStateSync({ checkpoint: async () => ({ written: true }) });
+    const res = await postEnvelope(adapter({ stateSync: wrote }), { kind: "checkpoint" });
+    expect(await res.json()).toEqual({ written: true });
+
+    const nothing = fakeStateSync({
+      checkpoint: async () => ({ written: false, reason: "this session has never served a forwarder envelope" }),
+    });
+    const res2 = await postEnvelope(adapter({ stateSync: nothing }), { kind: "checkpoint" });
+    expect(await res2.json()).toMatchObject({ written: false, reason: expect.stringContaining("forwarder") });
+  });
+
+  it("a failed flush is a 500 — the deploy is about to destroy this process", async () => {
+    const res = await postEnvelope(
+      adapter({
+        stateSync: fakeStateSync({
+          checkpoint: async () => {
+            throw new Error("snapshot PUT failed: 403");
+          },
+        }),
+      }),
+      { kind: "checkpoint" },
+    );
+    expect(res.status).toBe(500);
+    expect(await res.text()).toContain("403");
+  });
+
+  it("is an INTERNAL kind — an unauthenticated caller cannot force a snapshot write", async () => {
+    const res = await postUntrusted(adapter({ stateSync: fakeStateSync() }), { kind: "checkpoint" });
+    expect(res.status).toBe(403);
   });
 });

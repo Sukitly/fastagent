@@ -385,13 +385,21 @@ export async function deployAgentcoreRun(
       ],
       { capture: true, captureStderr: true },
     );
-    if (checkpoint.code === 0) {
+    // Report what the container ACTUALLY did. This line is the only signal an operator has about
+    // whether an in-flight turn survived the deploy, so a blanket "checkpointed" — printed even when
+    // nothing was written — would be worse than no line at all.
+    if (checkpoint.code !== 0) {
+      log(
+        "note: could not reach the ingress session to checkpoint — if a turn was in flight it is lost " +
+          "rather than replayed (see the output above)",
+      );
+    } else if (/"written"\s*:\s*true/.test(checkpoint.stdout)) {
       log("checkpointed the ingress session (an interrupted turn can be replayed)");
     } else {
-      log(
-        "note: could not checkpoint before stopping — a turn in flight right now would be lost rather " +
-          "than replayed (a session that is not running has nothing to checkpoint)",
-      );
+      const reason = /"reason"\s*:\s*"([^"]*)"/.exec(checkpoint.stdout)?.[1];
+      // The ordinary case: the session was already idle-reclaimed, so its snapshot was written when
+      // it settled and there is nothing in flight to lose.
+      log(`note: nothing to checkpoint${reason ? ` — ${reason}` : " (no session was running)"}`);
     }
     log("stopping the ingress session so the new image serves immediately…");
     const stopCommand = [

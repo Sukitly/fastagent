@@ -153,6 +153,19 @@ export interface StateSync {
   save(): void;
   /** Await the in-flight (and any queued) upload — the shutdown/test seam. */
   flush(): Promise<void>;
+  /**
+   * Push a snapshot NOW and report whether one was actually written — the pre-stop checkpoint
+   * (`--run`, before `stop-runtime-session`). Distinct from {@link StateSync.save} on both counts:
+   * it forces a fresh round rather than joining a coalescing window (the caller is about to lose
+   * this process, so "an upload from a second ago" is not good enough), and it THROWS on failure
+   * instead of logging, because the whole point of the call is to know.
+   *
+   * `written: false` is a legitimate outcome, not an error: a session that never served a forwarder
+   * envelope has no URLs and nothing of the shared state to write. The caller must not report that
+   * as a successful checkpoint — it is exactly the case where an operator would otherwise believe an
+   * in-flight turn had been protected.
+   */
+  checkpoint(): Promise<{ written: boolean; reason?: string }>;
 }
 
 export function createStateSync(options: StateSyncOptions): StateSync {
@@ -243,6 +256,33 @@ export function createStateSync(options: StateSyncOptions): StateSync {
     },
     async flush() {
       while (saving) await saving;
+    },
+    async checkpoint() {
+      if (!urls) {
+        return { written: false, reason: "this session has never served a forwarder envelope" };
+      }
+      if (!restored) {
+        return { written: false, reason: "the state root is not authoritative here (nothing restored)" };
+      }
+      // Never overlap an in-flight upload, then run a FRESH one: joining the running round could
+      // return before the bytes written moments ago (the interrupted turn's intent) are included.
+      while (saving) await saving;
+      const run = runSave();
+      // Stored form never rejects (an unawaited rejection would be an unhandled crash); the caller
+      // awaits `run` itself and gets the error.
+      saving = run.then(
+        () => {},
+        () => {},
+      );
+      const settle = saving.finally(() => {
+        saving = undefined;
+      });
+      try {
+        await run;
+      } finally {
+        await settle;
+      }
+      return { written: true };
     },
   };
 }

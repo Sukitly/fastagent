@@ -133,6 +133,59 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
   });
 });
 
+describe("the pre-stop checkpoint", () => {
+  const checkpointReply = (stdout: string) =>
+    fakeCli((a) => (a[1] === "invoke-agent-runtime" ? { stdout } : happyAws(a)));
+
+  it("claims the protection ONLY when the container says it wrote a snapshot", async () => {
+    const logs: string[] = [];
+    const { cli } = checkpointReply('{"written":true}');
+    await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      async () => "registered",
+    );
+    expect(logs.join("\n")).toContain("checkpointed the ingress session");
+  });
+
+  it("says nothing-to-do (with the reason) when it did not — a blanket claim is worse than no line", async () => {
+    const logs: string[] = [];
+    const { cli } = checkpointReply('{"written":false,"reason":"this session has never served a forwarder envelope"}');
+    await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      async () => "registered",
+    );
+    const out = logs.join("\n");
+    expect(out).not.toContain("checkpointed the ingress session");
+    expect(out).toContain("nothing to checkpoint");
+    expect(out).toContain("never served a forwarder envelope");
+  });
+
+  it("an unreachable session says the turn is LOST, not protected", async () => {
+    const logs: string[] = [];
+    const { cli } = fakeCli((a) => (a[1] === "invoke-agent-runtime" ? { code: 254 } : happyAws(a)));
+    await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      async () => "registered",
+    );
+    expect(logs.join("\n")).toContain("it is lost");
+  });
+});
+
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
     const { cli: aws, cmds: awsCmds } = fakeCli(happyAws);
