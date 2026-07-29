@@ -188,11 +188,10 @@ const SECRETS_GITIGNORE = "*\n!.gitignore\n!.env.example\n";
  * `.gitignore` written into the user's home, which a dotfiles repo may track.
  */
 export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string): Promise<void> {
-  // Compare CANONICAL paths for the home check: `dir` arrives realpath-resolved (it is `process.cwd()`
-  // or `resolve(".")`) but `homedir()` returns the raw `$HOME`, so a symlinked home would slip past raw
-  // equality and we'd write a `.gitignore` into the real `~/.fastagent` — the very thing the doc forbids
-  // (chat.ts canonicalizes for the same reason).
-  if (canonicalPath(dir) === canonicalPath(homedir())) return;
+  // Decided on the TARGET, exactly like the secrets half: fastagent's own global machinery home needs
+  // no `.gitignore` (a dotfiles repo may track it), and judging by the CALLER's anchor instead would
+  // skip the guard for every target beneath it.
+  if (isUnderDir(stateRoot, join(homedir(), GLOBAL_HOME_DIR))) return;
   // Containment on RAW paths: stateRoot is resolve()'d (config.ts) and `dir` is absolute, so it is exact
   // by construction. An external-volume root resolves outside the tree → skip (not ours to ignore).
   // Must-ignore names = the state dirs that actually live here (representative, not exhaustive).

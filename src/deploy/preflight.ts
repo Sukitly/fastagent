@@ -301,13 +301,17 @@ export async function preflightDeploy(input: {
         text: `your .dockerignore (kept) does not exclude \`${stateRel}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateRel}`])}`,
       });
     }
-    if (!excluded(`${AGENT_DIR}/node_modules/.bin/fastagent`)) {
+    // Both the agent's own node_modules and the workspace's: either would upload the build machine's
+    // deps (native binaries for YOUR OS) and clobber the image's freshly-installed ones. Named by the
+    // PATHS actually found unexcluded, like every other check here — not by a rule's spelling.
+    const deps = [`${AGENT_DIR}/node_modules`, "node_modules"].filter((p) => !excluded(`${p}/.package-lock.json`));
+    if (deps.length > 0) {
       messages.push({
         level: "warn",
         text:
-          `your .dockerignore lacks \`**/node_modules\` — the build machine's node_modules ` +
-          `(native binaries for YOUR OS) would be uploaded and clobber the image's freshly-installed ones. ` +
-          `Add \`**/node_modules\` to it.`,
+          `your .dockerignore does not exclude ${deps.map((p) => `\`${p}\``).join(" or ")} — the build ` +
+          `machine's deps (native binaries for YOUR OS) would be uploaded and clobber the image's ` +
+          `freshly-installed ones. ${remedy(deps.map((p) => `/${p}`))}`,
       });
     }
     if (excluded(".git/HEAD")) {

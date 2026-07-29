@@ -13,8 +13,9 @@
  * existing config, or a non-empty `fastagent/`).
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites existing files,
- * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend
- * against every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
+ * preflights non-directory scaffold parents, and rolls back a partial write (files AND the
+ * `fastagent/` tree it created for them, so a retry sees a clean slate). It does not defend against
+ * every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
  *
  * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`). The files
  * this module writes are real templates under templates/, read through templates.ts.
@@ -173,9 +174,11 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
 
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
-  // ONE rollback scope: any failure removes files written THIS run, so scaffoldAgent is atomic. Every
-  // file lands inside the `fastagent/` dir the refusal above proved empty, so `wx` (never clobber)
-  // can only fire on a concurrent writer — an error, not a file to keep.
+  // ONE rollback scope: any failure removes what THIS run created — files AND the directories it made
+  // for them. Leaving the empty dirs behind would be worse than untidy: the occupancy refusal above
+  // would then report the next `init` as "already exists and is not empty", blaming the user for our
+  // own debris. Every file lands inside the `fastagent/` dir that refusal proved empty, so `wx` (never
+  // clobber) can only fire on a concurrent writer — an error, not a file to keep.
   try {
     for (const file of files) {
       const abs = join(dir, file.rel);
@@ -184,9 +187,11 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       created.push(file.rel);
     }
   } catch (error) {
-    // Best-effort rollback of a partial scaffold: a file that won't delete is left behind (the original
-    // error below is the one worth surfacing — a cleanup failure must not mask it).
+    // Best-effort rollback of a partial scaffold: anything that won't delete is left behind (the
+    // original error below is the one worth surfacing — a cleanup failure must not mask it). The
+    // `fastagent/` root goes too: it was ours to create (proven empty or absent above).
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
+    await rm(join(dir, root), { recursive: true, force: true }).catch(() => {});
     throw error;
   }
   return { dir, complete: !minimal, created };

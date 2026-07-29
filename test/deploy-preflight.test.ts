@@ -75,7 +75,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("a kept workspace .dockerignore: warns for missing secret/machinery excludes and **/node_modules; notes a .git exclude", async () => {
+  it("a kept workspace .dockerignore: warns for missing secret/machinery/node_modules excludes; notes a .git exclude", async () => {
     const agentDir = await workspace({ "package.json": `{"type":"module"}` });
     await writeFile(join(dirname(agentDir), ".dockerignore"), ".git\nnode_modules\n"); // the workspace's own — kept, not ours
 
@@ -85,7 +85,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const text = JSON.stringify(pre.messages);
       expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
       expect(text).toMatch(/does not exclude .{0,12}\.state/); // machine state would ship
-      expect(text).toMatch(/lacks .{0,4}\*\*\/node_modules/); // the native-binary clobber hazard — named
+      expect(text).toMatch(/does not exclude .{0,30}node_modules/); // the native-binary clobber hazard — named
       expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
     }
   });

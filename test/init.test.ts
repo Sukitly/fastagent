@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +173,20 @@ describe("init: scaffoldAgent", () => {
     await symlink(external, join(dir2, "fastagent"));
     await expect(scaffoldAgent(dir2)).rejects.toThrow(/"fastagent" exists and is not a directory/);
     expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
+  });
+
+  it("rolls back the whole fastagent/ tree on a mid-write failure, so a retry is not refused as 'not empty'", async () => {
+    // Fault injection: a read-only agent dir makes the FIRST nested mkdir fail after the root exists.
+    // Leaving that root behind would make the next init report the user's directory as occupied — our
+    // own debris, blamed on them.
+    const dir = await freshDir();
+    const agent = join(dir, "fastagent");
+    await mkdir(agent);
+    await chmod(agent, 0o500); // r-x: writes inside fail, the dir itself is ours to remove
+    await expect(scaffoldAgent(dir)).rejects.toThrow();
+    await chmod(agent, 0o700).catch(() => {}); // (no-op if the rollback already removed it)
+    expect(await exists(agent)).toBe(false); // clean slate — the retry below is a fresh scaffold
+    expect((await scaffoldAgent(dir)).created).toContain(agentPath("persona.md"));
   });
 
   it("refuses an occupied ./fastagent/: a config means already-an-agent, anything else means don't mix", async () => {
