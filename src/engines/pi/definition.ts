@@ -148,8 +148,8 @@ async function ensureDirSelfIgnored(dir: string, content: string, mustIgnore: st
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
   }
   const file = join(dir, ".gitignore");
-  // Same matcher discipline as loadRootIgnore (workspace.ts): case-sensitive, git semantics — a
-  // later `!name` line un-ignores exactly like git would, so the check can't disagree with git.
+  // Case-sensitive (the library defaults to insensitive), git semantics — a later `!name` line
+  // un-ignores exactly like git would, so this check can't disagree with git about what is protected.
   const matcher = ignore({ ignorecase: false }).add(await readFile(file, "utf8"));
   const leaks = mustIgnore.filter((name) => !matcher.ignores(name));
   if (leaks.length > 0) {
@@ -163,9 +163,10 @@ async function ensureDirSelfIgnored(dir: string, content: string, mustIgnore: st
 }
 
 /** The `.secrets/` self-ignore: everything is a secret EXCEPT the committable template and the
- *  protection itself (un-ignored so both travel with the workspace through git; git's nested-ignore
- *  precedence means no root .gitignore entry can re-include the rest). The scaffold's
- *  templates/secrets.gitignore mirrors these rules. */
+ *  protection itself (un-ignored so both travel with the agent through git; git's nested-ignore
+ *  precedence means no root .gitignore entry can re-include the rest). The scaffold writes its own
+ *  copy (templates/secrets.gitignore) so the protection exists before the first fastagent write; a
+ *  test scaffolds and runs this verification over it, so the two cannot drift apart silently. */
 const SECRETS_GITIGNORE = "*\n!.gitignore\n!.env.example\n";
 
 /**

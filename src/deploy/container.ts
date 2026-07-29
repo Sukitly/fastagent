@@ -71,9 +71,8 @@ function aptLayer(packages?: string[]): string {
 }
 
 function dockerfile(input: ContainerInput): string {
-  // The agent prefix inside the image: the whole workspace is baked at /app, and deps install (and
-  // the local bin lives) under the agent dir inside it.
-  const ws = AGENT_DIR;
+  // The whole workspace is baked at /app; deps install (and the local bin lives) under the agent dir
+  // inside it, so every path below is prefixed with AGENT_DIR.
   const layoutNote = `The whole directory is the agent's workspace; the agent itself lives in ${AGENT_DIR}/.`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
@@ -116,10 +115,10 @@ ${apt}WORKDIR /app
     // `bunx fastagent` would fall back to installing the npm package named `fastagent`, which is an
     // unrelated third-party package (ours is the scoped @fastagent-sh/fastagent).
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
-    return `${head}COPY ${ws}/package.json ${ws}/bun.lock* ./${ws}/
-RUN cd ${ws} && ${install}
+    return `${head}COPY ${AGENT_DIR}/package.json ${AGENT_DIR}/bun.lock* ./${AGENT_DIR}/
+RUN cd ${AGENT_DIR} && ${install}
 COPY . .
-CMD ["sh", "-c", "cd ${ws} && bun run fastagent start /app"]
+CMD ["sh", "-c", "cd ${AGENT_DIR} && bun run fastagent start /app"]
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent);
@@ -130,18 +129,19 @@ CMD ["sh", "-c", "cd ${ws} && bun run fastagent start /app"]
   // `fastagent` when the dep is absent — an unrelated third-party package (ours is scoped). The local
   // path fails fast and visibly instead.
   const install = input.hasLockfile ? "npm ci" : "npm install";
-  return `${head}COPY ${ws}/package.json ${ws}/package-lock.json* ./${ws}/
-RUN cd ${ws} && ${install}
+  return `${head}COPY ${AGENT_DIR}/package.json ${AGENT_DIR}/package-lock.json* ./${AGENT_DIR}/
+RUN cd ${AGENT_DIR} && ${install}
 COPY . .
-CMD ["./${ws}/node_modules/.bin/fastagent", "start", "/app"]
+CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
 `;
 }
 
 /** Patterns are RECURSIVE (`**​/`) on purpose — dockerignore patterns are root-anchored (unlike
  *  .gitignore), and a baked workspace can hold nested projects: a bare `node_modules` would upload
  *  their build-machine deps (macOS binaries!) and a bare `.env` would bake their secrets into the
- *  image. `.secrets`/`.state`/`.cache` are fastagent machinery — secrets travel through the host's
- *  secret store, state lives on the volume, cache is re-derivable; NONE of it may enter an image.
+ *  image. `.secrets`/`.state` are fastagent machinery — secrets travel through the host's secret
+ *  store, state lives on the volume; neither may ever enter an image. `.cache` is generic hygiene
+ *  (a baked project's own build cache), not a fastagent directory.
  *  `.git` is deliberately SHIPPED: the deployed agent's write-back (pull/commit/push) needs the
  *  repo's history+remote — the WYSIWYG bake's freshness/durability loop runs through git, driven by
  *  the agent itself, not by deploy machinery. Shipping `.git` is only half of that loop: preflight

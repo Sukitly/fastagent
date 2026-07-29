@@ -101,7 +101,7 @@ export async function preflightDeploy(input: {
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
-  /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<state agentDir>/auth.json`)
+  /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<agentDir>/.secrets/auth.json`)
    *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
   authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {

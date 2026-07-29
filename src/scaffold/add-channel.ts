@@ -52,7 +52,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real agent-dir-relative
-    // location (agentDir-aware) — the CLI holds no channel-private filenames.
+    // location — the CLI holds no channel-private filenames.
     steps: [
       "edit {channel} — map events to intents in on()",
       "add the webhook in your repo (Settings → Webhooks): Payload URL = <public-url>/webhook, content type application/json",

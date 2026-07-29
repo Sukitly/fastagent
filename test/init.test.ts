@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace } from "../src/index.ts";
-import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored, loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { nextStepCd, scaffoldAgent } from "../src/scaffold/init.ts";
 
 /** A path inside the scaffolded agent dir, as scaffoldAgent reports it (relative to the workspace). */
@@ -104,6 +104,17 @@ describe("init: scaffoldAgent", () => {
     expect(a.definition.persona).toContain("Persona");
     expect(a.definition.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Project spec");
+  });
+
+  it("the scaffolded .secrets/.gitignore satisfies the runtime's own leak verification", async () => {
+    // Two copies of the credential-protection rule exist by design: the scaffold template (so the
+    // protection is there before fastagent's first write) and SECRETS_GITIGNORE (written by the guard
+    // itself). ensureSecretsDirSelfIgnored VERIFIES an existing file, so running it over the
+    // scaffolded one is the check that the two cannot drift apart silently.
+    const dir = await freshDir();
+    await scaffoldAgent(dir, { minimal: true });
+    const agent = join(dir, "fastagent");
+    await expect(ensureSecretsDirSelfIgnored(agent, join(agent, ".secrets"))).resolves.toBeUndefined();
   });
 
   it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {

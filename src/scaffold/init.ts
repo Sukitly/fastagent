@@ -117,26 +117,11 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     );
   }
 
-  // Refuse an occupied `fastagent/`. A config inside means it IS an agent already (name the marker
-  // so the message is actionable); any other content means an unfinished agent or something
-  // unrelated, and landing persona.md beside it would be a silent mix. A SYMLINKED `fastagent` slips
-  // past this readdir (it follows links) — deliberate: the parent preflight below lstat-rejects it
-  // before any write. (AGENTS.md outside is NOT a marker — it is context, adopted untouched.)
-  const occupants = (await readdir(join(dir, root)).catch(() => [] as string[])).filter((f) => f !== ".DS_Store");
-  const config = occupants.filter((f) => (AGENT_CONFIG_NAMES as readonly string[]).includes(f));
-  if (config.length > 0) {
-    throw new Error(`"${join(dir, root)}" already has ${config.join(", ")} — already a fastagent agent`);
-  }
-  if (occupants.length > 0) {
-    throw new Error(
-      `"${join(basename(dir), AGENT_DIR)}" already exists and is not empty — move it away first, ` +
-        `or run \`fastagent init\` in a different directory`,
-    );
-  }
-
-  // Preflight scaffold parent dirs: a pre-existing non-directory there would make mkdir fail mid-loop
-  // AFTER the first write, leaving a half-scaffold. Detect it before any write (lstat, not stat: a
-  // symlinked parent must be rejected, not followed — it would write outside the agent dir).
+  // Preflight scaffold parent dirs FIRST: a pre-existing non-directory there would make mkdir fail
+  // mid-loop AFTER the first write, leaving a half-scaffold — and a file or symlink named `fastagent`
+  // must be named as such here, before the occupancy check below tries to read it as a directory
+  // (lstat, not stat: a symlinked parent must be rejected, not followed — it would write outside the
+  // agent dir).
   const parents = new Set<string>();
   for (const file of files) {
     let p = dirname(file.rel);
@@ -152,6 +137,28 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
         `cannot scaffold: "${rel}" exists and is not a directory (a regular file or symlink) — remove it, or init elsewhere`,
       );
     }
+  }
+
+  // Refuse an occupied `fastagent/`. A config inside means it IS an agent already (name the marker
+  // so the message is actionable); any other content means an unfinished agent or something
+  // unrelated, and landing persona.md beside it would be a silent mix. Only ENOENT reads as "empty" —
+  // any other fault (EACCES…) must surface here rather than as a raw errno mid-write.
+  // (AGENTS.md outside is NOT a marker — it is context, adopted untouched.)
+  const occupants = (
+    await readdir(join(dir, root)).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return [] as string[];
+      throw e;
+    })
+  ).filter((f) => f !== ".DS_Store");
+  const config = occupants.filter((f) => (AGENT_CONFIG_NAMES as readonly string[]).includes(f));
+  if (config.length > 0) {
+    throw new Error(`"${join(dir, root)}" already has ${config.join(", ")} — already a fastagent agent`);
+  }
+  if (occupants.length > 0) {
+    throw new Error(
+      `"${join(basename(dir), AGENT_DIR)}" already exists and is not empty — move it away first, ` +
+        `or run \`fastagent init\` in a different directory`,
+    );
   }
 
   await mkdir(dir, { recursive: true });

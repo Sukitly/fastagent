@@ -47,8 +47,7 @@ There is ONE agent shape, in ONE placement. The shape:
 ├── fastagent.config.mjs
 ├── .secrets/               # fastagent-managed secrets: .env + auth.json (self-gitignored;
 │                           # .env.example travels)
-├── .state/                 # mutable machine state: sessions, channel state, schedule state
-└── .cache/                 # reserved: re-derivable content
+└── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
 The agent always lives in a directory named `fastagent/`, and the directory around it is the
@@ -93,10 +92,9 @@ a reserved-name refusal in `init`, and a `nested ?` branch in all seven deploy m
 was solving the actual tension (an agent needs a home that is not the project it works on); all of it
 was solving "which of the two shapes is this?". Deleting `--flat` deleted the question.
 
-The machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's
-secret store (never an image), `.state/` through a volume
-(`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it in a container), `.cache/` is
-re-derivable.
+The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret
+store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
+point both at it in a container).
 
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
 see docs/embedding.md.)
