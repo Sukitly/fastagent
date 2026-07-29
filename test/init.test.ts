@@ -178,6 +178,15 @@ describe("init: scaffoldAgent", () => {
     expect((await scaffoldAgent(dir4)).created).toContain(agentPath("persona.md"));
   });
 
+  it("refuses init INSIDE an agent dir — fastagent/fastagent/ is a scaffold no command could resolve", async () => {
+    // findAgentDir checks the basename first, so an agent nested in an agent is never reached: every
+    // command resolves the OUTER one. Refusing keeps that from being a silent no-op scaffold.
+    const inside = join(await freshDir(), "fastagent");
+    await mkdir(inside);
+    await expect(scaffoldAgent(inside)).rejects.toThrow(/already inside an agent directory/);
+    expect(await exists(join(inside, "fastagent"))).toBe(false); // side-effect-free refusal
+  });
+
   it("`init` always nests — no detection, no prompt, no placement flags", async () => {
     // An existing toolchain changes NOTHING: there is no jurisdiction heuristic anymore.
     const host = await freshDir();
@@ -252,7 +261,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     return dir;
   }
 
-  it("routes into the nested workspace: channel + companion tool + secrets all land under fastagent/", async () => {
+  it("routes into the agent dir: channel + companion tool + secrets all land under fastagent/", async () => {
     const dir = await freshDir();
     const root = join(dir, "fastagent");
     await mkdir(join(root, ".secrets"), { recursive: true });
@@ -265,7 +274,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
 
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toContain(join("channels", "telegram.ts")); // reported relative to the workspace root
-    expect(await exists(join(root, "channels", "telegram.ts"))).toBe(true); // in the workspace…
+    expect(await exists(join(root, "channels", "telegram.ts"))).toBe(true); // in the agent dir…
     expect(await exists(join(root, "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
     expect(await exists(join(dir, "channels"))).toBe(false); // NOT at the host root
     expect(await readFile(join(root, ".secrets", ".env.example"), "utf8")).toContain("TELEGRAM_BOT_TOKEN");
@@ -414,7 +423,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toBe("// mine\n"); // tool untouched
   });
 
-  it("refuses (writing nothing) when the workspace is not channel-ready, with an actionable message", async () => {
+  it("refuses (writing nothing) when the agent dir is not channel-ready, with an actionable message", async () => {
     /** An agent dir carrying `pkg` as its package.json (undefined = none at all). */
     const agentWith = async (pkg?: object): Promise<string> => {
       const d = join(await freshDir(), "fastagent");
@@ -507,7 +516,7 @@ describe("add: fastagent add skill (vendor)", () => {
 
     const out = await cliInit(["add", "skill", join(srcRoot, "greeter")], dir);
     expect(out).toMatch(/vendored skill "greeter"/);
-    expect(await exists(join(dir, "fastagent", "skills", "greeter", "SKILL.md"))).toBe(true); // in the workspace…
+    expect(await exists(join(dir, "fastagent", "skills", "greeter", "SKILL.md"))).toBe(true); // in the agent dir…
     expect(await exists(join(dir, "skills"))).toBe(false); // …NOT at the host root (it would never be scanned)
   });
 
@@ -593,7 +602,7 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(await exists(join(ws, "skills", "greeter"))).toBe(false);
   });
 
-  it("rejects a skills/ symlink that escapes the workspace (mkdir would follow it and write outside)", async () => {
+  it("rejects a skills/ symlink that escapes the agent dir (mkdir would follow it and write outside)", async () => {
     const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
     const external = await freshDir();
     await symlink(external, join(ws, "skills")); // skills → outside the workspace

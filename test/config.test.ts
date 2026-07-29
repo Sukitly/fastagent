@@ -75,6 +75,9 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     // A FILE named fastagent is not an agent dir either (a stray script must not become a placement).
     await writeFile(join(dir, "fastagent"), "#!/bin/sh\n");
     expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
+    // Same rule on the basename branch: a path that only LOOKS like an agent dir refuses here
+    // rather than resolving and failing later as a raw ENOENT from config/definition loading.
+    expect(() => resolvePlacement(join(dir, "missing", "fastagent"))).toThrow(/not a fastagent agent/);
   });
 });
 

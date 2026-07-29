@@ -106,6 +106,17 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     );
   }
 
+  // `fastagent` is the agent-directory NAME, and findAgentDir checks the basename FIRST: scaffolding
+  // into a directory already called that would produce `fastagent/fastagent/`, which every command
+  // then resolves PAST (they find the outer one) — a silent no-op scaffold. Refuse with the way out.
+  if (basename(dir) === AGENT_DIR) {
+    throw new Error(
+      `"${dir}": you are already inside an agent directory ("${AGENT_DIR}" is the reserved name) — ` +
+        `init here would create ${AGENT_DIR}/${AGENT_DIR}/, which no command would ever resolve. ` +
+        `\`cd ..\` and init there, or pick a different directory.`,
+    );
+  }
+
   // Refuse an occupied `fastagent/`. A config inside means it IS an agent already (name the marker
   // so the message is actionable); any other content means an unfinished agent or something
   // unrelated, and landing persona.md beside it would be a silent mix. A SYMLINKED `fastagent` slips

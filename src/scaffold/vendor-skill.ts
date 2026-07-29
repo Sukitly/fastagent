@@ -1,5 +1,5 @@
 /**
- * `fastagent add skill <source>`: vendor an Agent Skills skill into `<workspace>/skills/<name>/` —
+ * `fastagent add skill <source>`: vendor an Agent Skills skill into `<agent dir>/skills/<name>/` —
  * copy-in, git-tracked, never a runtime registry. Source is a giget ref (github default), a local
  * path, or a bare name (resolved against the local global skill dirs as an add-time copy source only).
  * Fetch → staging → validate → rollback-protected replace, so a bad fetch never destroys an existing
@@ -20,7 +20,7 @@ function skillNameFromSource(source: string): string {
 }
 
 /**
- * The skills/ path must be safe to write through: never follow a symlink that escapes the workspace
+ * The skills/ path must be safe to write through: never follow a symlink that escapes the agent dir
  * (mkdir would), and reject a plain file with one clear message.
  */
 async function assertSkillsDirUsable(agentDir: string): Promise<void> {
@@ -66,7 +66,7 @@ export interface VendoredSkill {
 }
 
 /**
- * Vendor an Agent Skills skill into `<workspace>/skills/<name>/` from a giget ref (github default), a
+ * Vendor an Agent Skills skill into `<agent dir>/skills/<name>/` from a giget ref (github default), a
  * local path, or a bare name (resolved against the local global skill dirs). Copy-in, git-tracked.
  * Refuses to overwrite unless `options.update` (then a plain git-tracked overwrite, never a merge).
  * Validates a staging copy with the runtime loader BEFORE replacing, so a bad fetch never destroys an

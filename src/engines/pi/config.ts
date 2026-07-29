@@ -205,13 +205,16 @@ export interface ResolvedPlacement {
   workspace: string;
 }
 
-/** The agent dir for `dir`, or undefined when there is none: `dir` itself if it IS a `fastagent/`
- *  dir, else `<dir>/fastagent/`. The name is the marker — nothing is read, nothing is configured. */
+/** The agent dir for `dir`, or undefined when there is none: `dir` itself if it IS an existing
+ *  `fastagent/` directory, else `<dir>/fastagent/`. The name is the marker — nothing is read, nothing
+ *  is configured. Both candidates must be real DIRECTORIES, so a stray file named `fastagent` (or a
+ *  path that does not exist at all) refuses here rather than failing later as a raw ENOENT. */
 export function findAgentDir(dir: string): string | undefined {
   const base = resolve(dir);
-  if (basename(base) === AGENT_DIR) return base;
+  const isDir = (p: string): boolean => statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+  if (basename(base) === AGENT_DIR) return isDir(base) ? base : undefined;
   const nested = join(base, AGENT_DIR);
-  return statSync(nested, { throwIfNoEntry: false })?.isDirectory() ? nested : undefined;
+  return isDir(nested) ? nested : undefined;
 }
 
 /**

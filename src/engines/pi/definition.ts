@@ -111,10 +111,11 @@ export async function loadAgentDefinition(
 
 /**
  * Whether `targetPath` lives inside `baseDir` (same path counts). The self-ignore guard uses it to ask
- * "does the resolved state root land inside the workspace tree?" — an in-tree root (the default
- * `.state`, or a custom `FASTAGENT_STATE_DIR` pointed inside the agent dir) is ours to self-ignore;
- * a root on an external volume resolves outside and must not be (we never write a `.gitignore` outside
- * the tree). Whether a relative override lands in-tree is a cwd question — see `resolveStateRoot`.
+ * "does the resolved state root land inside the AGENT DIR?" — an in-agent root (the default `.state`,
+ * or a custom `FASTAGENT_STATE_DIR` pointed inside it) is ours to self-ignore; a root on an external
+ * volume — or anywhere else in the user's workspace — resolves outside and must not be (we never write
+ * a `.gitignore` outside the agent). Whether a relative override lands inside is a cwd question — see
+ * `resolveStateRoot`.
  */
 export function isUnderDir(targetPath: string, baseDir: string): boolean {
   const rel = relative(baseDir, targetPath);
@@ -198,7 +199,7 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
 
 /**
  * The `.secrets/` sibling of {@link ensureStateRootSelfIgnored}: iff the resolved secrets dir lands
- * inside the workspace tree, make it exist and self-ignore ({@link SECRETS_GITIGNORE}) — called by
+ * inside the agent dir, make it exist and self-ignore ({@link SECRETS_GITIGNORE}) — called by
  * every path that WRITES a secret (`login`, the opener, channel onboarding), so a credential or `.env`
  * value can never land untracked-but-committable. Same home exclusion and containment rules.
  */

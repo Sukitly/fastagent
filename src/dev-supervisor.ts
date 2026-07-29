@@ -14,6 +14,8 @@ import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { resolveStateRoot, resolvePlacement } from "./engines/pi/config.ts";
+import { isUnderDir } from "./engines/pi/definition.ts";
+import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
@@ -139,6 +141,14 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
   log.info(
     `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
   );
+  // The watch scope is the agent dir, but FASTAGENT_SECRETS_DIR can move the `.env` outside it — the
+  // worker would then load a file no watcher sees, and a credential edit would silently never take
+  // effect. Say so once instead of leaving the hint above lying.
+  if (!isUnderDir(dotEnvPath(ws.agentDir), ws.agentDir)) {
+    log.warn(
+      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(ws.agentDir)}) — it is NOT watched; restart dev after editing it`,
+    );
+  }
 
   const shutdown = (): never => {
     worker?.kill("SIGTERM");

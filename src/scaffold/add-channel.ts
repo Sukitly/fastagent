@@ -1,7 +1,7 @@
 /**
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
- * `.secrets/.env.example` vars) into an existing workspace. `add` checks and guides; it never
- * bootstraps a workspace (that is `init`'s job). Each channel's template files live in its own bundle
+ * `.secrets/.env.example` vars) into an existing agent. `add` checks and guides; it never
+ * bootstraps an agent (that is `init`'s job). Each channel's template files live in its own bundle
  * at src/channels/<kind>/scaffold/, read here at scaffold time.
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -51,7 +51,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         generate: true,
       },
     ],
-    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real workspace-relative
+    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real agent-dir-relative
     // location (agentDir-aware) — the CLI holds no channel-private filenames.
     steps: [
       "edit {channel} — map events to intents in on()",
@@ -272,7 +272,7 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Append generated channel secrets to the workspace `.env` (`.secrets/.env` — never `.env.example`)
+ * Append generated channel secrets to the agent's `.env` (`.secrets/.env` — never `.env.example`)
  * after the CLI has ensured `.secrets/` self-ignores. Existing non-empty values are kept — EXCEPT the names listed in
  * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
  * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
@@ -287,7 +287,7 @@ export async function appendChannelDotEnv(
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
-  await mkdir(dirname(file), { recursive: true }); // .secrets/ may not exist yet (adapted workspace)
+  await mkdir(dirname(file), { recursive: true }); // .secrets/ may not exist yet (a --minimal agent)
   let current = "";
   try {
     current = await readFile(file, "utf8");
@@ -368,7 +368,7 @@ export async function scaffoldChannel(
   options: { ingress?: FeishuSubscriptionMode; groupBehavior?: GroupBehavior } = {},
 ): Promise<string> {
   const channelsDir = join(dir, "channels");
-  // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
+  // Don't write through a channels/ symlink that escapes the agent dir; one inside it is fine.
   await assertInsideAgentDir(dir, "channels");
   const file = channelPath(dir, kind);
   if (await exists(file)) {
@@ -427,7 +427,7 @@ export async function scaffoldChannel(
 }
 
 /**
- * Verify the workspace is ready to host a channel: an ESM package.json that declares
+ * Verify the AGENT DIR is ready to host a channel: an ESM package.json that declares
  * `@fastagent-sh/fastagent` (the channel file imports it). `add` checks and guides, never bootstraps — that
  * is `init`'s job.
  */
@@ -438,12 +438,12 @@ export async function assertChannelReady(dir: string): Promise<void> {
     raw = await readFile(pkgPath, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      // `dir` is the workspace root — "run init" is only the right advice when no workspace exists
-      // yet; a workspace missing its manifest (e.g. a --minimal init) needs the manifest, not init.
+      // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it — the
+      // right remedy is the missing manifest (a --minimal init writes none), or init in the workspace.
       throw new Error(
-        `${dir}: no package.json — a channel adapter is code and needs the kit's own manifest. ` +
-          `Run \`fastagent init\` for a fresh workspace, or add a package.json with @fastagent-sh/fastagent there ` +
-          `(a --minimal init has none)`,
+        `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
+          `Add a package.json declaring @fastagent-sh/fastagent there (a --minimal init writes none), ` +
+          `or run \`fastagent init\` in the workspace for a fresh agent`,
       );
     }
     throw e;
