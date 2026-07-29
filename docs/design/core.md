@@ -72,11 +72,14 @@ Placement is STRUCTURAL — the directory NAME is the marker. Nothing is configu
 detected, and no file is read to decide it, so `resolvePlacement(dir)` (the ONE owner of the rule)
 has a two-line state space:
 
-| On disk | Result |
+| `dir`, checked in this order | Result |
 |---|---|
-| `<dir>/fastagent/` exists | `{ agentDir: <dir>/fastagent, workspace: dir }` |
-| `basename(dir) === "fastagent"` | the same pair — the entry point never changes the answer |
+| `basename(dir) === "fastagent"` | `{ agentDir: dir, workspace: dirname(dir) }` — invoking from inside the agent never changes the answer |
+| `<dir>/fastagent/` is a directory | `{ agentDir: <dir>/fastagent, workspace: dir }` |
 | neither | throws: not a fastagent agent, run `fastagent init` |
+
+(The basename check comes first, so `fastagent/fastagent/` resolves to the OUTER one — you are
+already standing in an agent.)
 
 Because the name carries the placement, the config is NOT structural: deleting
 `fastagent.config.mjs` leaves a zero-config agent that still runs with `--model`/`FASTAGENT_MODEL`.

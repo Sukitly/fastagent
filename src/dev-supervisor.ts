@@ -19,7 +19,7 @@ import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
-/** What the dev watcher restarts on (workspace-root-relative): the process-bound code inputs only. */
+/** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
 const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.config.*, .secrets/.env";
 
 /**
@@ -34,7 +34,7 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
   return (path: string): boolean => {
     if (path === root) return false; // the root itself must not be pruned
     const rel = relative(root, path);
-    // Code inputs at the workspace root: config, package.json, and the dirs loaded once per worker
+    // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker
     // (a restart is their only re-read). Everything else (skills/, persona.md, AGENTS.md) is
     // live-read — pruned, no restart.
     if (/^fastagent\.config\.[cm]?[jt]s$/.test(rel)) return false;
@@ -52,9 +52,9 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
   };
 }
 
-/** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
+/** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
 export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
-  // The watch root is the WORKSPACE ROOT (structural — resolvePlacement): every restart-relevant code
+  // The watch root is the AGENT DIR (structural — resolvePlacement): every restart-relevant code
   // input lives under it, so the surrounding workspace costs no watchers at all.
   // The placement is assumed STATIC for the dev session (creating/removing `fastagent/` mid-session
   // is out of scope for watch re-sync).

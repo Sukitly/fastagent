@@ -13,7 +13,7 @@ import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
-import { isGeneratedDockerfile } from "../../deploy/container.ts";
+import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../deploy/container.ts";
 import {
   composeHasTunnelService,
   dockerWebhookPaths,
@@ -334,21 +334,25 @@ async function writeArtifacts(
 ): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
-    // Workspace-owned paths (the root .dockerignore): --force means "MY generated artifact is
-    // authoritative", which never licenses clobbering the workspace's own file — keep it always.
-    if (options.neverForce?.includes(a.path) && (await exists(abs))) {
+    const existing = (await exists(abs)) ? await readFile(abs, "utf8") : undefined;
+    // Is the file on disk OURS? Each generated artifact opens with a marker; drop the marker to take
+    // ownership. This is what separates "regenerate my own output" from "never touch the user's file".
+    const ours =
+      existing !== undefined &&
+      ((a.path.endsWith("Dockerfile") && isGeneratedDockerfile(existing)) ||
+        (a.path.endsWith(".dockerignore") && isGeneratedDockerignore(existing)) ||
+        (a.path.endsWith("fastagent.compose.yml") && isGeneratedCompose(existing)));
+    // Paths the workspace owns (the root .dockerignore): --force means "MY generated artifact is
+    // authoritative", which never licenses clobbering a file that is not ours.
+    if (existing !== undefined && !ours && options.neverForce?.includes(a.path)) {
       console.error(
         `[fastagent] kept ${a.path} — the workspace's own file (never overwritten, even with --force); ` +
           `see the preflight warnings for what it must contain`,
       );
       continue;
     }
-    if (!options.force && (await exists(abs))) {
-      const existing = await readFile(abs, "utf8");
-      const generatedDrift =
-        (a.path.endsWith("Dockerfile") && isGeneratedDockerfile(existing)) ||
-        (a.path.endsWith("fastagent.compose.yml") && isGeneratedCompose(existing));
-      if (generatedDrift && existing !== a.content) {
+    if (existing !== undefined && !options.force) {
+      if (ours && existing !== a.content) {
         console.error(
           `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
             `you edited it); pass --force to regenerate.`,

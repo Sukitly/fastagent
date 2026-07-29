@@ -6,7 +6,7 @@
  */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolvePlacement } from "../../engines/pi/config.ts";
+import { AGENT_DIR, resolvePlacement } from "../../engines/pi/config.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
@@ -29,18 +29,17 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   loadDotEnv(ws.agentDir);
   installProxyFetch();
   await resolveFirstRunModel(ws.agentDir, opts);
-  // Schedules are agent surface — discover them where dev/start/`schedule list` do (the workspace
+  // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent
   // dir), so `fire` sees the same set the scheduler serves.
   const { schedules, failures } = await loadSchedules(ws.agentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
-    // Name the discovery path: a schedule misplaced at the workspace root
+    // Name the discovery path: a schedule misplaced in the workspace (outside the agent dir)
     // should read as "wrong place", not "broken file".
-    const looked = ws.agentDir !== ws.workspace ? ` (looked in fastagent/schedules)` : "";
     failStartup(
       new Error(
-        `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
+        `unknown schedule "${name}" (looked in ${AGENT_DIR}/schedules). available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
       ),
     );
   }

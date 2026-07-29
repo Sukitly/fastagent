@@ -248,10 +248,10 @@ const start: CommandSpec = {
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
-    "  state:    FASTAGENT_STATE_DIR > <workspace>/.state — mutable machine state\n" +
+    "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +
-    "  secrets:  FASTAGENT_SECRETS_DIR > <workspace>/.secrets — .env + auth.json\n" +
+    "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets — .env + auth.json\n" +
     "  sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions\n" +
     "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
@@ -519,8 +519,9 @@ const login: CommandSpec = {
   name: "login",
   summary: "authenticate a model provider (subscription/OAuth or API key)",
   description:
-    "Authenticate a model provider into the project-level <workspace>/.secrets/auth.json (run from " +
-    "$HOME for the global ~/.fastagent/.secrets/auth.json): pick a method (subscription/OAuth or API " +
+    "Authenticate a model provider into the project-level <agent dir>/.secrets/auth.json (outside an " +
+    "agent it writes the global ~/.fastagent/.secrets/auth.json, and says so): pick a method " +
+    "(subscription/OAuth or API " +
     "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
     "what that provider supports, asked only when both.",
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],

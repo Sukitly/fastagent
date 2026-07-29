@@ -1,5 +1,5 @@
 # dependencies (reinstalled at deploy)
 node_modules/
 
-# fastagent machinery (.secrets/ credentials+.env, .state/ sessions+channel state, .cache/) carries
+# fastagent machinery (.secrets/ credentials+.env, .state/ sessions+channel state) carries
 # its own self-ignoring .gitignore — no entries needed here.

@@ -4,7 +4,9 @@
  * positional is the PROVIDER (not a dir), so the agent resolves from cwd — `cd` into your agent
  * before logging in. OUTSIDE an agent there is no project credential to write, so the target is the
  * user-global `~/.fastagent/.secrets/auth.json` (which is what running it from $HOME has always
- * meant); the "saved to …" line names the file either way.
+ * meant) — announced on stderr BEFORE the flow, because that is a different credential than the one
+ * `dev`/`start` in a real agent would read, and a silent scope switch is exactly the surprise this
+ * command must not ship.
  *
  * Creates and self-ignores `<root>/.secrets/` (the credential's gitignored home) BEFORE the auth flow,
  * so the secret can never land untracked — a flow that then fails (bad provider, abort) leaves that
@@ -12,7 +14,8 @@
  */
 import { homedir } from "node:os";
 import { loadDotEnv } from "../../env.ts";
-import { findAgentDir, resolveAuthPath, resolveSecretsDir } from "../../engines/pi/config.ts";
+import { AGENT_DIR, findAgentDir, resolveAuthPath, resolveSecretsDir } from "../../engines/pi/config.ts";
+import { GLOBAL_HOME_DIR } from "../../paths.ts";
 import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -26,7 +29,14 @@ export interface LoginOptions {
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
-  const loginDir = findAgentDir(process.cwd()) ?? homedir();
+  const agentDir = findAgentDir(process.cwd());
+  if (!agentDir) {
+    console.error(
+      `[fastagent] no ./${AGENT_DIR}/ here — logging in GLOBALLY (~/${GLOBAL_HOME_DIR}/.secrets/auth.json). ` +
+        `An agent reads its own .secrets/auth.json: \`cd\` into one first, or point it here with --auth-path.`,
+    );
+  }
+  const loginDir = agentDir ?? homedir();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const secretsDir = resolveSecretsDir(loginDir);

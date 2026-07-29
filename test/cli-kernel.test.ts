@@ -95,7 +95,7 @@ describe("cli kernel: spec conformance", () => {
       [["deploy"], "missing CLI/daemon/login/secret"],
       [["deploy"], "Existing Compose stays authoritative"],
       [["deploy"], "routine redeploy of an already-provisioned agent"],
-      [["login"], "run from $HOME for the global ~/.fastagent/.secrets/auth.json"],
+      [["login"], "outside an agent it writes the global ~/.fastagent/.secrets/auth.json"],
     ];
     const rendered = new Map<string, string>();
     for (const [path, phrase] of carried) {
