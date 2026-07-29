@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { crc32 } from "node:zlib";
+import { Cron } from "croner";
 import { cronError } from "../src/schedule/cron.ts";
 import { describe, expect, it } from "vitest";
 import {
@@ -242,18 +243,70 @@ describe("deploy agentcore: the plan", () => {
   });
 
   describe("cron translation vs the Croner dialect the workspace actually accepts", () => {
-    // Every case below is one Croner ACCEPTS: a mistranslation here either refuses a valid schedule
-    // or emits an expression EventBridge rejects at deploy time.
+    /**
+     * The property that matters is not "the string looks right" but "the DEPLOYED rule fires on the
+     * same days the workspace's own scheduler fires on". So: expand both sides and compare.
+     * EventBridge's cron is Quartz-flavoured 6-field — day-of-week names, exactly one of DOM/DOW as
+     * `?` — which for the day-selection question this checks maps onto croner once the trailing year
+     * field is dropped and the `?` field is read as `*` (EventBridge has no OR semantics: the `?`
+     * field is genuinely unrestricted).
+     */
+    const firingDays = (cron: string, count: number): string[] => {
+      const c = new Cron(cron, { timezone: "UTC" });
+      const out: string[] = [];
+      let prev: Date | null = null;
+      for (let i = 0; i < count; i++) {
+        prev = c.nextRun(prev ?? new Date("2026-07-29T00:00:00Z"));
+        if (!prev) break;
+        out.push(prev.toISOString().slice(0, 16));
+      }
+      return out;
+    };
+    const eventBridgeDays = (expression: string, count: number): string[] => {
+      const [min, hour, dom, mon, dowRaw] = expression.slice(5, -1).split(" ") as [
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
+      // `?` = unrestricted; croner reads `*` for that, without the OR quirk (only one can be `?`).
+      const dow = dowRaw === "?" ? "*" : dowRaw;
+      return firingDays(`${min} ${hour} ${dom === "?" ? "*" : dom} ${mon} ${dow}`, count);
+    };
+
+    it.each([
+      "0 9 * * MON", // the plain weekly form
+      "0 9 1 * *", // day-of-month
+      "*/5 * * * *", // the every-N form a deploy test actually uses
+      "0 9 ? * MON", // `?` is NOT `*` in croner: this fires DAILY, whatever MON suggests
+      "0 9 1 * ?", // …and here too, whatever the 1st suggests
+      "0 9 * * ?",
+      "0 9 ? * *",
+    ])("%s fires on the same days locally and on EventBridge", (cron) => {
+      expect(cronError(cron, undefined)).toBeUndefined();
+      const out = toEventBridgeCron(cron);
+      expect("expression" in out).toBe(true);
+      const expression = (out as { expression: string }).expression;
+      // 10 occurrences is enough to separate daily / weekly / monthly patterns.
+      expect(eventBridgeDays(expression, 10)).toEqual(firingDays(cron, 10));
+    });
+
+    it("refuses what EventBridge genuinely cannot express, rather than deploying a different schedule", () => {
+      // Cron ORs two RESTRICTED day fields (the 15th OR any Wednesday); EventBridge has no such form.
+      expect(cronError("0 9 15 * WED", undefined)).toBeUndefined();
+      expect(toEventBridgeCron("0 9 15 * WED")).toMatchObject({ error: expect.stringContaining("BOTH") });
+    });
+
     it.each([
       ["0 9 * * MON", "cron(0 9 ? * MON *)"],
       ["0 9 1 * *", "cron(0 9 1 * ? *)"],
-      // `?` is a Croner synonym for `*`, but carries EventBridge's "the other field is restricted"
-      // meaning — without normalising first these produced a false rejection and a double-`?`.
-      ["0 9 ? * MON", "cron(0 9 ? * MON *)"],
+      // A `?` means daily in croner, so the deployed rule must say daily — NOT carry MON/1 across.
+      ["0 9 ? * MON", "cron(0 9 * * ? *)"],
+      ["0 9 1 * ?", "cron(0 9 * * ? *)"],
       ["0 9 * * ?", "cron(0 9 * * ? *)"],
       ["0 9 ? * *", "cron(0 9 * * ? *)"],
     ])("%s → %s", (cron, expression) => {
-      expect(cronError(cron, undefined)).toBeUndefined(); // the premise: the workspace would accept it
       expect(toEventBridgeCron(cron)).toEqual({ expression });
     });
 

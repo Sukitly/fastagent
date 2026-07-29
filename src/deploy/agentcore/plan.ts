@@ -195,14 +195,19 @@ export function toEventBridgeCron(cron: string): { expression: string } | { erro
   if (fields.length !== 5) {
     return { error: `EventBridge supports 5-field cron only (got ${fields.length} fields)` };
   }
-  const [min, hour, rawDom, mon, rawDow] = fields as [string, string, string, string, string];
-  // Croner accepts `?` as a synonym for `*` in either day field; EventBridge gives it a DIFFERENT
-  // meaning (exactly one of the two must be `?`, the other restricted). Normalise to `*` FIRST, or a
-  // valid `0 9 ? * MON` reads as "both days restricted" and a valid `0 9 * * ?` emits two `?`.
-  const dom = rawDom === "?" ? "*" : rawDom;
-  const dow = rawDow === "?" ? "*" : rawDow;
+  const [min, hour, dom, mon, dow] = fields as [string, string, string, string, string];
   if (/[L#]/i.test(dow) || /[L#]/i.test(dom)) {
     return { error: "L/# day forms don't translate to EventBridge numbering — set this schedule up manually" };
+  }
+  // `?` FIRST, and not as a synonym for `*`. Croner treats it as a day field that matches everything
+  // and — unlike `*` — does NOT trigger cron's "one field is unrestricted, so the other governs"
+  // special case. It therefore ORs with the other field to mean EVERY DAY, whatever that field says.
+  // Measured against croner: `0 9 ? * MON` and `0 9 1 * ?` both fire daily, while `0 9 * * MON`
+  // fires on Mondays. Translating `?` to `*` would deploy a rule that fires on a DIFFERENT set of
+  // days than the same file fires on locally — the silent divergence this whole target exists to
+  // avoid — so a `?` in either field becomes an explicitly daily EventBridge rule.
+  if (dom === "?" || dow === "?") {
+    return { expression: `cron(${min} ${hour} * ${mon} ? *)` };
   }
   if (dom !== "*" && dow !== "*") {
     return {
