@@ -443,6 +443,28 @@ describe("cli papercuts", () => {
     // does not write would be worse than none.
     const directed = await run(["login", "no-such-provider", "--auth-path", join(cwd, "auth.json")], cwd, env);
     expect(directed.stderr).not.toMatch(/logging in GLOBALLY/);
+
+    // A directory NAMED fastagent that holds no definition is NOT "outside an agent" — resolvePlacement
+    // refuses that position with its own way out, and login must tell the same story as every other
+    // command instead of quietly switching scope.
+    const reserved = join(cwd, "fastagent");
+    await mkdir(reserved);
+    const named = await run(["login", "no-such-provider"], reserved, env);
+    expect(named.stderr).toMatch(/reserved for agent directories/);
+    expect(named.stderr).not.toMatch(/logging in GLOBALLY/);
+  });
+
+  it("login --auth-path at the user-global credential is the documented sharing path, not a leak", async () => {
+    // `--auth-path ~/.fastagent/.secrets/auth.json` from inside an agent is how docs/cli.md says to run
+    // several agents off one account. Warning about it would be advice against our own documentation:
+    // that directory is fastagent's own machinery home and needs no .gitignore.
+    const home = await mkdtemp(join(tmpdir(), "fa-share-home-"));
+    const cwd = join(await agentWorkspace("fa-share-agent-"), "fastagent");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.FASTAGENT_AUTH_PATH;
+    const shared = join(home, ".fastagent", ".secrets", "auth.json");
+    const { stderr } = await run(["login", "no-such-provider", "--auth-path", shared], cwd, env);
+    expect(stderr).not.toMatch(/cannot be committed/);
   });
 
   it("login fails fast in a non-TTY (a pipe/CI) instead of hanging on the interactive menu", async () => {

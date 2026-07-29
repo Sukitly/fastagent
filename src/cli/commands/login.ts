@@ -13,6 +13,7 @@
  * empty secrets dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
 import { homedir } from "node:os";
+import { basename } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import {
   AGENT_DIR,
@@ -34,10 +35,15 @@ export interface LoginOptions {
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   const agentDir = findAgentDir(process.cwd());
-  // Standing INSIDE an agent (`fastagent/tools/`) is NOT "outside an agent": the global fallback would
-  // write a credential the agent right here will never read, under a message saying there is no agent.
-  // resolvePlacement owns that refusal — every other command gives the same one.
-  if (!agentDir && enclosingAgentDir(process.cwd())) failStartupOn(() => resolvePlacement(process.cwd()));
+  // "Outside an agent" must mean exactly that. Standing inside one (`fastagent/tools/`), or in a
+  // directory NAMED `fastagent` that holds no definition, are both positions resolvePlacement refuses
+  // with a specific way out — and taking the global fallback there would write a credential to a
+  // different scope under a message saying there is no agent here. Route all of them through the one
+  // owner, so login's story matches every other command's.
+  const cwd = process.cwd();
+  if (!agentDir && (enclosingAgentDir(cwd) || basename(cwd) === AGENT_DIR)) {
+    failStartupOn(() => resolvePlacement(cwd));
+  }
   const loginDir = agentDir ?? homedir();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
