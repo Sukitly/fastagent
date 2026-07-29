@@ -13,9 +13,8 @@
  * existing config, or a non-empty `fastagent/`).
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites existing files,
- * preflights non-directory scaffold parents, and rolls back a partial write (one exception: the
- * .gitignore APPEND is not rolled back — idempotent, harmless residue). It does not defend against
- * every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
+ * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend
+ * against every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
  *
  * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`). The files
  * this module writes are real templates under templates/, read through templates.ts.

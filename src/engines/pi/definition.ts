@@ -22,6 +22,7 @@ import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-ag
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
+import { GLOBAL_HOME_DIR } from "../../paths.ts";
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
 export interface SkillCollision {
@@ -195,7 +196,12 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
   // Containment on RAW paths: stateRoot is resolve()'d (config.ts) and `dir` is absolute, so it is exact
   // by construction. An external-volume root resolves outside the tree → skip (not ours to ignore).
   // Must-ignore names = the state dirs that actually live here (representative, not exhaustive).
-  if (isUnderDir(stateRoot, dir)) await ensureDirSelfIgnored(stateRoot, "*\n", ["sessions", "channels", "schedule"]);
+  // control.json (the per-boot session-control bearer token) is in the list on purpose: it is the one
+  // file under the state root that IS a secret, so a hand-written `.gitignore` naming only the state
+  // DIRECTORIES must not pass verification.
+  if (isUnderDir(stateRoot, dir)) {
+    await ensureDirSelfIgnored(stateRoot, "*\n", ["sessions", "channels", "schedule", "control.json"]);
+  }
 }
 
 /**
@@ -213,7 +219,11 @@ export async function ensureSecretsDirSelfIgnored(
   dir: string,
   secretsDir: string,
 ): Promise<"ignored" | "outside" | "home"> {
-  if (canonicalPath(dir) === canonicalPath(homedir())) return "home";
+  // Decide on the TARGET, not on the anchor: what matters is where the credential lands. fastagent's
+  // user-global machinery home needs no `.gitignore` (a dotfiles repo may track it deliberately);
+  // anywhere else that a secret is about to land does — including a directory reached only because
+  // the caller's anchor was $HOME (`login` outside any agent with an explicit --auth-path).
+  if (isUnderDir(secretsDir, join(homedir(), GLOBAL_HOME_DIR))) return "home";
   if (!isUnderDir(secretsDir, dir)) return "outside";
   await ensureDirSelfIgnored(secretsDir, SECRETS_GITIGNORE, [".env", "auth.json"]);
   return "ignored";

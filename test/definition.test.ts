@@ -6,7 +6,7 @@ import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
   collect,
@@ -493,5 +493,33 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     env.deny = false; // the next good edit heals it — same agent, no restart
     const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
     expect(text).toBe("recovered");
+  });
+});
+
+describe("definition: the leak guard decides on the TARGET dir, not the anchor", () => {
+  it("protects a credential home reached from a $HOME anchor; skips only fastagent's global home", async () => {
+    // `login --auth-path ./creds/auth.json` outside any agent resolves its anchor to $HOME. Deciding
+    // "is this home?" on the anchor would skip the guard entirely and write the credential into a
+    // committable project directory — the case this whole family of guards exists to close.
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    const project = join(home, "project", "creds");
+    await mkdir(project, { recursive: true });
+    expect(await ensureSecretsDirSelfIgnored(home, project)).toBe("ignored");
+    expect(await readFile(join(project, ".gitignore"), "utf8")).toMatch(/^\*$/m);
+
+    // fastagent's own global machinery home is the one exception (a dotfiles repo may track it).
+    const { GLOBAL_HOME_DIR } = await import("../src/paths.ts");
+    const globalSecrets = join(homedir(), GLOBAL_HOME_DIR, ".secrets");
+    expect(await ensureSecretsDirSelfIgnored(homedir(), globalSecrets)).toBe("home");
+  });
+
+  it("verifies control.json is ignored — the one SECRET under the state root", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-state-token-"));
+    const stateRoot = join(dir, ".state");
+    await mkdir(stateRoot, { recursive: true });
+    // A hand-written file naming only the state DIRECTORIES leaves the session-control bearer token
+    // committable — verification must refuse it.
+    await writeFile(join(stateRoot, ".gitignore"), "sessions\nchannels\nschedule\n");
+    await expect(ensureStateRootSelfIgnored(dir, stateRoot)).rejects.toThrow(/control\.json/);
   });
 });
