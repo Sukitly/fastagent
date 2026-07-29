@@ -15,6 +15,7 @@ import { buildWorkspaceSessionRuntime } from "../src/engines/pi/session-builder.
 async function freshAgentDir(prefix: string): Promise<string> {
   const dir = join(await mkdtemp(join(tmpdir(), prefix)), "fastagent");
   await mkdir(dir);
+  await writeFile(join(dir, "persona.md"), "You are terse.\n"); // an agent, not an empty dir
   return dir;
 }
 

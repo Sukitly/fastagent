@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -324,6 +324,7 @@ const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 async function agentWorkspace(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   await mkdir(join(dir, "fastagent"));
+  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n"); // an agent, not an empty dir
   return dir;
 }
 

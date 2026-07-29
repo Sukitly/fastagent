@@ -304,14 +304,16 @@ export async function preflightDeploy(input: {
     // Both the agent's own node_modules and the workspace's: either would upload the build machine's
     // deps (native binaries for YOUR OS) and clobber the image's freshly-installed ones. Named by the
     // PATHS actually found unexcluded, like every other check here — not by a rule's spelling.
-    const deps = [`${AGENT_DIR}/node_modules`, "node_modules"].filter((p) => !excluded(`${p}/.package-lock.json`));
-    if (deps.length > 0) {
+    const unexcludedDeps = [`${AGENT_DIR}/node_modules`, "node_modules"].filter(
+      (p) => !excluded(`${p}/.package-lock.json`),
+    );
+    if (unexcludedDeps.length > 0) {
       messages.push({
         level: "warn",
         text:
-          `your .dockerignore does not exclude ${deps.map((p) => `\`${p}\``).join(" or ")} — the build ` +
-          `machine's deps (native binaries for YOUR OS) would be uploaded and clobber the image's ` +
-          `freshly-installed ones. ${remedy(deps.map((p) => `/${p}`))}`,
+          `your .dockerignore does not exclude ${unexcludedDeps.map((p) => `\`${p}\``).join(" or ")} — the ` +
+          `build machine's deps (native binaries for YOUR OS) would be uploaded and clobber the image's ` +
+          `freshly-installed ones. ${remedy(unexcludedDeps.map((p) => `/${p}`))}`,
       });
     }
     if (excluded(".git/HEAD")) {

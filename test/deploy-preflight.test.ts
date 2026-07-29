@@ -12,6 +12,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   await writeFile(join(host, "AGENTS.md"), "You are terse.\n"); // ② context, lives in the workspace
   const dir = join(host, AGENT_DIR);
   await mkdir(dir);
+  await writeFile(join(dir, "persona.md"), "You are terse.\n"); // what makes it an agent, not a same-named dir
   for (const [name, content] of Object.entries(files)) await writeFile(join(dir, name), content);
   return dir;
 }

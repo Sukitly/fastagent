@@ -15,6 +15,7 @@ const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 async function agentWorkspace(prefix: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   await mkdir(join(dir, "fastagent"), { recursive: true });
+  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n"); // an agent, not an empty dir
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, "fastagent", dirname(name)), { recursive: true });
     await writeFile(join(dir, "fastagent", name), content);

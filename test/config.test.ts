@@ -53,6 +53,7 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
   it("the agent is the ./fastagent/ dir; the workspace is the tree around it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
     const ws = resolvePlacement(dir);
     expect(ws).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
     // Entry-point-invariant: invoked from INSIDE the agent dir, the SAME pair resolves. The name is
@@ -60,13 +61,32 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     expect(resolvePlacement(join(dir, "fastagent"))).toEqual(ws);
   });
 
-  it("a config outside the agent dir is NOT a marker — placement is the directory NAME", async () => {
+  it("a config outside the agent dir is NOT a marker — the agent DIRECTORY is", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-strayconfig-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
     expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
     // …and it changes nothing once a real agent dir exists beside it.
     await mkdir(join(dir, "fastagent"));
+    await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
+  });
+
+  it("a same-named directory with NOTHING of an agent in it is not an agent (either candidate)", async () => {
+    // The name alone would make an unrelated checkout called `fastagent/` — or an empty leftover from
+    // a rolled-back init — resolve as a persona-less zero-config agent whose coding tools operate on
+    // its PARENT. One shred of evidence is required, and the SAME rule applies to both candidates, so
+    // entry-point invariance holds.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-empty-"));
+    const empty = join(dir, "fastagent");
+    await mkdir(empty);
+    await writeFile(join(empty, "README.md"), "an unrelated checkout\n"); // not agent surface
+    expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
+    expect(() => resolvePlacement(empty)).toThrow(/not a fastagent agent/);
+
+    // Any ONE authored surface is enough — a zero-config agent still resolves, from either end.
+    await mkdir(join(empty, "tools"));
+    expect(resolvePlacement(dir)).toEqual({ agentDir: empty, workspace: dir });
+    expect(resolvePlacement(empty)).toEqual({ agentDir: empty, workspace: dir });
   });
 
   it("no ./fastagent/ → not an agent: refuse with the way out, never guess", async () => {
@@ -337,6 +357,7 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   const host = await mkdtemp(join(tmpdir(), "fa-ws-"));
   const agent = join(host, "fastagent");
   await mkdir(agent);
+  await writeFile(join(agent, "persona.md"), "You are terse.\n"); // an agent, not an empty dir
   return { host, agent };
 }
 

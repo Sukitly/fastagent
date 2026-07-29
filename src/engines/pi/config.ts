@@ -205,16 +205,25 @@ export interface ResolvedPlacement {
   workspace: string;
 }
 
-/** The agent dir for `dir`, or undefined when there is none: `dir` itself if it IS an existing
- *  `fastagent/` directory, else `<dir>/fastagent/`. The name is the marker — nothing is read, nothing
- *  is configured. Both candidates must be real DIRECTORIES, so a stray file named `fastagent` (or a
- *  path that does not exist at all) refuses here rather than failing later as a raw ENOENT. */
+/** What makes a `fastagent/` directory an AGENT rather than a same-named directory: any one authored
+ *  surface. The check is deliberately shallow and cheap — it separates "an agent" from "an unrelated
+ *  checkout / an empty leftover", never one placement from another. */
+const AGENT_SURFACE = ["persona.md", "skills", "tools", "channels", "schedules"] as const;
+
+/** The agent dir for `dir`, or undefined when there is none: `dir` itself if it IS a `fastagent/`
+ *  directory, else `<dir>/fastagent/`. The candidate must exist AND hold something of an agent (a
+ *  config or one of {@link AGENT_SURFACE}) — the name alone would make any directory called
+ *  `fastagent` (an unrelated checkout, an empty leftover) resolve as a persona-less zero-config agent
+ *  whose coding tools operate on its PARENT. The same evidence rule applies to both candidates, so
+ *  where you invoke from still cannot change the answer. */
 export function findAgentDir(dir: string): string | undefined {
   const base = resolve(dir);
-  const isDir = (p: string): boolean => statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
-  if (basename(base) === AGENT_DIR) return isDir(base) ? base : undefined;
+  const isAgent = (p: string): boolean =>
+    statSync(p, { throwIfNoEntry: false })?.isDirectory() === true &&
+    [...AGENT_CONFIG_NAMES, ...AGENT_SURFACE].some((name) => existsSync(join(p, name)));
+  if (basename(base) === AGENT_DIR) return isAgent(base) ? base : undefined;
   const nested = join(base, AGENT_DIR);
-  return isDir(nested) ? nested : undefined;
+  return isAgent(nested) ? nested : undefined;
 }
 
 /** The agent dir `dir` sits INSIDE (a proper ancestor named `fastagent`), or undefined. Placement
@@ -246,7 +255,8 @@ export function resolvePlacement(dir: string): ResolvedPlacement {
     throw new Error(
       enclosing
         ? `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`
-        : `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory here; run \`fastagent init\` to scaffold one`,
+        : `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory holding a definition here; ` +
+            `run \`fastagent init\` to scaffold one`,
     );
   }
   return { agentDir, workspace: dirname(agentDir) };

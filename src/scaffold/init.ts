@@ -172,6 +172,9 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     );
   }
 
+  // Was the agent dir OURS to create? "Empty" is not ownership: a user may have pre-created it (or
+  // left one behind), and the rollback below must not delete a directory this run did not make.
+  const agentDirExisted = await exists(join(dir, root));
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
   // ONE rollback scope: any failure removes what THIS run created — files AND the directories it made
@@ -189,9 +192,9 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   } catch (error) {
     // Best-effort rollback of a partial scaffold: anything that won't delete is left behind (the
     // original error below is the one worth surfacing — a cleanup failure must not mask it). The
-    // `fastagent/` root goes too: it was ours to create (proven empty or absent above).
+    // `fastagent/` root goes too, but only when THIS run created it.
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
-    await rm(join(dir, root), { recursive: true, force: true }).catch(() => {});
+    if (!agentDirExisted) await rm(join(dir, root), { recursive: true, force: true }).catch(() => {});
     throw error;
   }
   return { dir, complete: !minimal, created };

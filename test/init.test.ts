@@ -175,17 +175,18 @@ describe("init: scaffoldAgent", () => {
     expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
   });
 
-  it("rolls back the whole fastagent/ tree on a mid-write failure, so a retry is not refused as 'not empty'", async () => {
-    // Fault injection: a read-only agent dir makes the FIRST nested mkdir fail after the root exists.
-    // Leaving that root behind would make the next init report the user's directory as occupied — our
-    // own debris, blamed on them.
+  it("rolls back a mid-write failure to a clean slate, keeping a fastagent/ this run did not create", async () => {
+    // Fault injection: a read-only agent dir makes the writes inside it fail after the root exists.
+    // Leaving OUR debris would make the next init report the user's directory as occupied; deleting a
+    // root THEY pre-created would destroy a directory this run never made. Rollback must do neither.
     const dir = await freshDir();
     const agent = join(dir, "fastagent");
     await mkdir(agent);
-    await chmod(agent, 0o500); // r-x: writes inside fail, the dir itself is ours to remove
+    await chmod(agent, 0o500); // r-x: writes inside fail
     await expect(scaffoldAgent(dir)).rejects.toThrow();
-    await chmod(agent, 0o700).catch(() => {}); // (no-op if the rollback already removed it)
-    expect(await exists(agent)).toBe(false); // clean slate — the retry below is a fresh scaffold
+    await chmod(agent, 0o700);
+    expect(await exists(agent)).toBe(true); // theirs, not ours — preserved
+    expect(await readdir(agent)).toEqual([]); // …and empty, so the retry is a fresh scaffold
     expect((await scaffoldAgent(dir)).created).toContain(agentPath("persona.md"));
   });
 
@@ -297,6 +298,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
   async function readyWorkspace(): Promise<string> {
     const dir = join(await freshDir(), "fastagent");
     await mkdir(dir);
+    await writeFile(join(dir, "persona.md"), "You are terse.\n"); // an agent, not an empty dir
     await writeFile(
       join(dir, "package.json"),
       `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
@@ -471,6 +473,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const agentWith = async (pkg?: object): Promise<string> => {
       const d = join(await freshDir(), "fastagent");
       await mkdir(d);
+      await writeFile(join(d, "persona.md"), "You are terse.\n"); // an agent, not an empty dir
       if (pkg) await writeFile(join(d, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
       return d;
     };

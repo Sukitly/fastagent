@@ -73,9 +73,17 @@ has a two-line state space:
 
 | `dir`, checked in this order | Result |
 |---|---|
-| `basename(dir) === "fastagent"` | `{ agentDir: dir, workspace: dirname(dir) }` — invoking from inside the agent never changes the answer |
-| `<dir>/fastagent/` is a directory | `{ agentDir: <dir>/fastagent, workspace: dir }` |
+| `basename(dir) === "fastagent"` and it holds a definition | `{ agentDir: dir, workspace: dirname(dir) }` — invoking from inside the agent never changes the answer |
+| `<dir>/fastagent/` holds a definition | `{ agentDir: <dir>/fastagent, workspace: dir }` |
 | neither | throws: not a fastagent agent, run `fastagent init` |
+
+"Holds a definition" is one shallow existence check — a `fastagent.config.*` or any of `persona.md`,
+`skills/`, `tools/`, `channels/`, `schedules/`. It is NOT the old config-less probe: that one chose
+between two placements and could refuse while a valid alternative reading existed. This one answers a
+single question ("is this an agent?") with the same evidence rule on BOTH candidates, so entry-point
+invariance holds, and its only alternative answer is the same not-an-agent refusal. Without it the
+name alone would make an unrelated checkout called `fastagent/` — or an empty leftover — resolve as a
+persona-less zero-config agent whose coding tools operate on its PARENT.
 
 (The basename check comes first, so `fastagent/fastagent/` resolves to the OUTER one — you are
 already standing in an agent.)
@@ -99,13 +107,10 @@ point both at it in a container).
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
 see docs/embedding.md.)
 
-**Known boundary (accepted, documented):** the name is the WHOLE rule, so ANY directory called
-`fastagent` reads as an agent dir — including a project that happens to be named that. Its parent
-then becomes the workspace, and `init` inside it is refused (the way out is `init <name>`, an agent in
-a subdirectory). Adding "…and it looks like an agent" evidence would buy that case at the price of
-re-introducing content sniffing into a rule whose value is that it reads nothing — and it would break
-entry-point invariance for a zero-config agent. The mis-resolution is loud in practice: such a
-directory has no config, so the next step fails with `missing model` before anything is written.
+**Known boundary (accepted, documented):** a project directory named `fastagent` that DOES hold one of
+those names (its own `tools/`, say) still reads as an agent, and `init` inside it is refused — the way
+out is to rename it. Deeper evidence (parsing the config, requiring persona.md specifically) would buy
+that residual case at the price of a rule nobody can predict from the outside.
 
 **Known boundary (accepted, documented):** `workspace` is always `agentDir`'s immediate parent —
 never further. Since `fastagent/` is a fixed name, a workspace holds at most one agent, and "two
