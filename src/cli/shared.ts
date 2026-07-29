@@ -29,16 +29,16 @@ import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
- * Make sure a credential cannot land untracked-but-committable. THE one owner for every command that
- * MINTS one (`fastagent login` and the first-run inline login below).
+ * The credential-leak policy, in one place for every command that MINTS a credential (`fastagent
+ * login` and the first-run inline login below): PROTECT the directory fastagent owns — the resolved
+ * `.secrets/`, self-ignored and verified — and merely ANNOUNCE anywhere else.
  *
- * fastagent self-ignores only the directory it OWNS — the resolved `.secrets/`. A credential steered
- * elsewhere by `--auth-path`/`FASTAGENT_AUTH_PATH` lands in a directory the operator named and
- * manages: writing a `*`-ignoring `.gitignore` into it would hide their files, and VERIFYING one they
- * already wrote would abort the login over a directory that is none of our business. So that case is
- * announced, not managed — the user gets the fact and owns the decision.
+ * Deliberately not "ensure": a credential steered elsewhere by `--auth-path`/`FASTAGENT_AUTH_PATH`
+ * lands in a directory the operator named and manages, where writing a `*`-ignoring `.gitignore`
+ * would hide their files and VERIFYING one they already wrote would abort the login over a directory
+ * that is none of our business. The user gets the fact and owns the decision.
  */
-export async function ensureCredentialHome(agentDir: string, authPath: string): Promise<void> {
+export async function guardCredentialHome(agentDir: string, authPath: string): Promise<void> {
   const secretsDir = resolveSecretsDir(agentDir);
   const warn = (text: string): void => console.error(`[fastagent] warn: ${text}`);
   if (!isUnderDir(authPath, secretsDir)) {
@@ -166,9 +166,9 @@ async function pickWithCredentials(agentDir: string, models: Models, authPath: s
     return chosen;
   }
 
-  // Inline login: the SAME leak guard `fastagent login` runs, through the same helper — a credential
+  // Inline login: the SAME leak policy `fastagent login` runs, through the same helper — a credential
   // is a credential whichever command mints it.
-  await ensureCredentialHome(agentDir, authPath);
+  await guardCredentialHome(agentDir, authPath);
   try {
     // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
     // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.

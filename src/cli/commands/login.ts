@@ -24,7 +24,7 @@ import {
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
-import { ensureCredentialHome, isInteractive, loginWithKeyCheck } from "../shared.ts";
+import { guardCredentialHome, isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
   authPath?: string;
@@ -52,14 +52,11 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
         `.secrets/auth.json: \`cd\` into one first, or point this run at it with --auth-path.`,
     );
   }
-  // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
-  // in the opener): a `login` before the first dev/start would otherwise leave the secret
-  // untracked-but-committable. login writes ONLY auth.json, so the dir to protect is that file's OWN
-  // parent — not the default secrets dir: an in-agent `--auth-path`/`FASTAGENT_AUTH_PATH` (e.g.
-  // `fastagent/creds/auth.json`) lands somewhere else in the tree and needs the same protection. A
-  // genuinely out-of-agent path is nothing of ours (no empty dir created); it is announced instead,
-  // because the credential still gets written. The guard itself skips the HOME-global dir.
-  await ensureCredentialHome(loginDir, authPath);
+  // login is the command that CREATES the credential file, so the leak guard binds HERE too, not only
+  // in the opener: a `login` before the first dev/start would otherwise leave the secret
+  // untracked-but-committable. The policy (what fastagent protects vs merely announces) lives in
+  // guardCredentialHome — one owner, shared with the first-run inline login.
+  await guardCredentialHome(loginDir, authPath);
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
   // prompts for a key). In a non-TTY (a pipe, CI, a coding-agent shell) the menu can't receive keystrokes
   // and would hang; --no-input asks for the same posture explicitly. Fail fast with the reason instead
