@@ -22,7 +22,7 @@ import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-ag
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
-import { GLOBAL_HOME_DIR } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, assertInsideAgentDir } from "../../paths.ts";
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
 export interface SkillCollision {
@@ -94,7 +94,9 @@ export async function loadAgentDefinition(
   const persona = personaRead.ok ? personaRead.value : undefined;
 
   // Skills come ONLY from the definition's own skills/ (no external/global mount), so the same
-  // definition loads the same skills on every machine.
+  // definition loads the same skills on every machine — and, like tools/channels/schedules, a symlink
+  // that escapes the agent dir is refused rather than followed (the fourth of four surfaces).
+  await assertInsideAgentDir(root, "skills");
   const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")]);
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];

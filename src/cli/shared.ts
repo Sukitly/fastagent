@@ -29,32 +29,33 @@ import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
- * The credential-leak policy, in one place for every command that MINTS a credential (`fastagent
- * login` and the first-run inline login below): PROTECT the directory fastagent owns — the resolved
- * `.secrets/`, self-ignored and verified — and merely ANNOUNCE anywhere else.
+ * The secret-leak policy, in one place for every command that WRITES one — `fastagent login`, the
+ * first-run inline login below, and `add <channel>` (whose generated webhook tokens are the same class
+ * of value, written to `.secrets/.env`). Given the file about to land: PROTECT the directory fastagent
+ * owns — the resolved `.secrets/`, self-ignored and verified — and merely ANNOUNCE anywhere else.
  *
- * Deliberately not "ensure": a credential steered elsewhere by `--auth-path`/`FASTAGENT_AUTH_PATH`
- * lands in a directory the operator named and manages, where writing a `*`-ignoring `.gitignore`
- * would hide their files and VERIFYING one they already wrote would abort the login over a directory
- * that is none of our business. The user gets the fact and owns the decision.
+ * Deliberately not "ensure": a secret steered elsewhere by `--auth-path`/`FASTAGENT_AUTH_PATH` lands
+ * in a directory the operator named and manages, where writing a `*`-ignoring `.gitignore` would hide
+ * their files and VERIFYING one they already wrote would abort the command over a directory that is
+ * none of our business. The user gets the fact and owns the decision.
  *
  * `anchorDir` is usually the agent dir, but `$HOME` is a legal anchor too (`login` outside any agent):
  * its machinery home is fastagent's own, needs no `.gitignore`, and is silently skipped.
  */
-export async function guardCredentialHome(anchorDir: string, authPath: string): Promise<void> {
+export async function guardCredentialHome(anchorDir: string, secretPath: string): Promise<void> {
   const secretsDir = resolveSecretsDir(anchorDir);
   const warn = (text: string): void => console.error(`[fastagent] warn: ${text}`);
-  if (!isUnderDir(authPath, secretsDir)) {
+  if (!isUnderDir(secretPath, secretsDir)) {
     warn(
-      `${authPath} is outside fastagent's secrets dir (${secretsDir}) — no .gitignore is written there, ` +
-        `so make sure the credential cannot be committed`,
+      `${secretPath} is outside fastagent's secrets dir (${secretsDir}) — no .gitignore is written ` +
+        `there, so make sure the secret cannot be committed`,
     );
-    return; // don't create an empty `.secrets/` for a credential that is not going into it
+    return; // don't create an empty `.secrets/` for a secret that is not going into it
   }
   if ((await ensureSecretsDirSelfIgnored(anchorDir, secretsDir)) === "outside") {
     warn(
       `${secretsDir} is outside the agent — fastagent does not write a .gitignore there, so make sure ` +
-        `the credential cannot be committed`,
+        `the secret cannot be committed`,
     );
   }
 }

@@ -521,3 +521,18 @@ describe("definition: the leak guard decides on the TARGET dir, not the anchor",
     await expect(ensureStateRootSelfIgnored(dir, stateRoot)).rejects.toThrow(/control\.json/);
   });
 });
+
+describe("definition: skills/ gets the same containment guard as tools/channels/schedules", () => {
+  it("refuses a skills/ symlink that escapes the agent dir instead of loading through it", async () => {
+    // The three sibling surfaces already refuse this at DISCOVERY, and vendor-skill refuses it when
+    // WRITING; loading through it was the one way out of the definition directory.
+    const { symlink } = await import("node:fs/promises");
+    const outside = await mkdtemp(join(tmpdir(), "fa-outside-"));
+    await mkdir(join(outside, "sneaky"), { recursive: true });
+    await writeFile(join(outside, "sneaky", "SKILL.md"), "---\nname: sneaky\ndescription: d\n---\nx\n");
+    const agent = join(await mkdtemp(join(tmpdir(), "fa-skills-escape-")), "fastagent");
+    await mkdir(agent);
+    await symlink(outside, join(agent, "skills"));
+    await expect(loadAgentDefinition(agent)).rejects.toThrow(/resolves outside the agent dir/);
+  });
+});
