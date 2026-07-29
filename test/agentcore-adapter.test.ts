@@ -11,6 +11,7 @@ import {
   type WebhookReply,
   agentcoreRoutes,
 } from "../src/channels/agentcore.ts";
+import type { StateSync } from "../src/channels/agentcore-state.ts";
 import type { Routes } from "../src/host/node.ts";
 import type { ScheduleFireOutcome } from "../src/schedule/scheduler.ts";
 
@@ -28,6 +29,23 @@ interface AdapterOverrides {
   agent?: Agent;
   isBusy?: () => boolean;
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
+  stateSync?: StateSync;
+}
+
+/** A StateSync double: records the lifecycle without touching S3 or the disk. */
+function fakeStateSync(over: Partial<StateSync> = {}): StateSync & { seen: string[]; saves: () => number } {
+  const seen: string[] = [];
+  let saves = 0;
+  const base: StateSync = {
+    use: (u) => seen.push(u.getUrl),
+    ready: async () => {},
+    save: () => {
+      saves += 1;
+    },
+    configured: () => seen.length > 0,
+    flush: async () => {},
+  };
+  return Object.assign(base, over, { seen, saves: () => saves });
 }
 
 const stateRoot = await mkdtemp(join(tmpdir(), "fa-agentcore-adapter-"));
@@ -39,6 +57,7 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
     fire: over.fire,
+    stateSync: over.stateSync,
   });
 
 const post = (routes: Routes, body: string): Promise<Response> | Response =>
@@ -244,5 +263,71 @@ describe("agentcore adapter: envelope validation", () => {
       bodyB64: "A".repeat(MAX_ENVELOPE_BYTES),
     });
     expect((await post(routes, huge)).status).toBe(413);
+  });
+});
+
+describe("agentcore adapter: cross-deploy state", () => {
+  const withState = (envelope: AgentcoreEnvelope): AgentcoreEnvelope => ({
+    ...envelope,
+    state: { getUrl: "https://s3/get", putUrl: "https://s3/put" },
+  });
+
+  it("adopts the envelope's URLs and restores BEFORE the request is served", async () => {
+    const order: string[] = [];
+    const sync = fakeStateSync({
+      ready: async () => {
+        order.push("restore");
+      },
+    });
+    const routes = adapter({
+      stateSync: sync,
+      routes: {
+        "POST /hook": () => {
+          order.push("dispatch");
+          return new Response("ok");
+        },
+      },
+    });
+
+    await postEnvelope(routes, withState({ kind: "webhook", method: "POST", path: "/hook" }));
+
+    expect(sync.seen).toEqual(["https://s3/get"]);
+    expect(order).toEqual(["restore", "dispatch"]); // never serve from an unrestored state root
+  });
+
+  it("a failed restore 503s instead of serving an EMPTY agent (which would then snapshot that emptiness)", async () => {
+    const routes = adapter({
+      stateSync: fakeStateSync({
+        ready: async () => {
+          throw new Error("snapshot GET failed: 500");
+        },
+      }),
+      routes: {
+        "POST /hook": () => new Response("must not run"),
+      },
+    });
+
+    const res = await postEnvelope(routes, withState({ kind: "webhook", method: "POST", path: "/hook" }));
+
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("snapshot GET failed: 500");
+  });
+
+  it("snapshots when the envelope leaves nothing in flight, and defers to the idle edge when it does", async () => {
+    const idle = fakeStateSync();
+    await postEnvelope(adapter({ stateSync: idle, isBusy: () => false }), withState({ kind: "wake-poke" }));
+    expect(idle.saves()).toBe(1);
+
+    // Busy = a background turn is still writing; the 0-in-flight edge (busy.ts onIdle) owns that save.
+    const busy = fakeStateSync();
+    await postEnvelope(adapter({ stateSync: busy, isBusy: () => true }), withState({ kind: "wake-poke" }));
+    expect(busy.saves()).toBe(0);
+  });
+
+  it("a direct invoke carries no URLs — its isolated session must not read or clobber the snapshot", async () => {
+    const sync = fakeStateSync();
+    const res = await postEnvelope(adapter({ stateSync: sync }), { kind: "invoke", session: "cli", text: "hi" });
+    expect(res.status).toBe(200);
+    expect(sync.seen).toEqual([]);
   });
 });

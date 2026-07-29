@@ -64,8 +64,24 @@ export interface AgentcorePlan {
   untranslatableSchedules: { name: string; reason: string }[];
 }
 
-/** SessionStorage mount = FASTAGENT_STATE_DIR (AgentCore requires exactly `/mnt/<one-level>`). */
+/** SessionStorage mount = FASTAGENT_STATE_DIR (AgentCore requires exactly `/mnt/<one-level>`). It is
+ *  a fast LOCAL disk only: the platform wipes it on every runtime version update (= every deploy).
+ *  Durability across deploys comes from the S3 snapshot (channels/agentcore-state.ts). */
 export const MOUNT = "/mnt/state";
+
+/** The state snapshot's object key in the deployment bucket (one object; see agentcore-state.ts). */
+export const STATE_KEY = "state/snapshot.json.gz";
+
+/** The forwarder artifact. Named `index.js` because it IS the Lambda deployment package's entry:
+ *  zipping it as-is produces a valid package (`Handler: index.handler`), with nothing to rename. */
+export const FORWARDER_FILE = "lambda/index.js";
+
+/** The deployment bucket: forwarder code + the state snapshot. Account-suffixed for S3's GLOBAL
+ *  namespace, and created OUTSIDE the stack (like the ECR repo) so a `delete-stack` cannot take the
+ *  agent's memory with it. Bucket names cap at 63 chars; `name` is already gated to 40. */
+export function stateBucketName(name: string, account: string): string {
+  return `fa-${name}-${account}`;
+}
 /** AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so the seed is
  *  CHUNKED across FASTAGENT_AUTH_SEED + _2… (collectAuthSeed reassembles at boot). 2000 keeps margin. */
 export const AUTH_SEED_CHUNK_SIZE = 2000;
@@ -210,11 +226,46 @@ export function forwarderSource(): string {
 // Lambda also OWNS the wake alarms: the container POSTs its pending wake-ups to /__fastagent/
 // wake-alarm (shared secret) and each becomes a self-deleting one-shot EventBridge schedule that
 // pokes this Lambda — which wakes the container, whose wake pump fires the due entry.
-// CommonJS on purpose: CloudFormation inline code lands as index.js, where ESM import is invalid.
+// CommonJS on purpose: the deployment package's entry lands as index.js, where ESM import is invalid.
 "use strict";
+const crypto = require("node:crypto");
 const { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } = require("@aws-sdk/client-bedrock-agentcore");
 const client = new BedrockAgentCoreClient({});
 let ownUrl; // self-resolved once per cold start; rides on every envelope for the wake-alarm callback
+
+// Presigned S3 URLs for the container's state snapshot. AgentCore wipes the /mnt/state mount on
+// every runtime version update (= every deploy), so the durable copy lives in S3 — but the
+// container is given NO AWS credentials by the platform, so the only reachable form is a URL that
+// carries its own authorization. SigV4 query signing, node:crypto only (no SDK, nothing to install).
+const enc = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => \`%\${c.charCodeAt(0).toString(16).toUpperCase()}\`);
+const hmac = (key, data) => crypto.createHmac("sha256", key).update(data).digest();
+
+function presign(method, seconds) {
+  const bucket = process.env.STATE_BUCKET, key = process.env.STATE_KEY, region = process.env.AWS_REGION;
+  const host = \`\${bucket}.s3.\${region}.amazonaws.com\`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\\.\\d+/, "");
+  const scope = \`\${stamp.slice(0, 8)}/\${region}/s3/aws4_request\`;
+  const pairs = [
+    ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
+    ["X-Amz-Credential", \`\${process.env.AWS_ACCESS_KEY_ID}/\${scope}\`],
+    ["X-Amz-Date", stamp],
+    ["X-Amz-Expires", String(seconds)],
+    ["X-Amz-SignedHeaders", "host"],
+  ];
+  if (process.env.AWS_SESSION_TOKEN) pairs.push(["X-Amz-Security-Token", process.env.AWS_SESSION_TOKEN]);
+  // The canonical query must be byte-identical to the one on the wire — build it ONCE, reuse below.
+  const query = pairs
+    .map(([k, v]) => [enc(k), enc(v)])
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map((p) => p.join("="))
+    .join("&");
+  const path = \`/\${key.split("/").map(enc).join("/")}\`;
+  const canonical = [method, path, query, \`host:\${host}\\n\`, "host", "UNSIGNED-PAYLOAD"].join("\\n");
+  const sts = ["AWS4-HMAC-SHA256", stamp, scope, crypto.createHash("sha256").update(canonical).digest("hex")].join("\\n");
+  let k = hmac(\`AWS4\${process.env.AWS_SECRET_ACCESS_KEY}\`, stamp.slice(0, 8));
+  for (const part of [region, "s3", "aws4_request"]) k = hmac(k, part);
+  return \`https://\${host}\${path}?\${query}&X-Amz-Signature=\${hmac(k, sts).toString("hex")}\`;
+}
 
 async function invoke(envelope) {
   if (process.env.WAKE_SECRET && !ownUrl) {
@@ -224,6 +275,10 @@ async function invoke(envelope) {
     )).FunctionUrl;
   }
   if (ownUrl) envelope.wake = { url: ownUrl };
+  // 12 h: comfortably longer than a session's 8 h compute ceiling, so the pair minted with an
+  // envelope stays usable for that session's whole life (the snapshot may be pushed much later,
+  // when background work finally settles).
+  if (process.env.STATE_BUCKET) envelope.state = { getUrl: presign("GET", 43200), putUrl: presign("PUT", 43200) };
   const res = await client.send(new InvokeAgentRuntimeCommand({
     agentRuntimeArn: process.env.RUNTIME_ARN,
     runtimeSessionId: process.env.INGRESS_SESSION_ID,
@@ -320,28 +375,6 @@ exports.handler = async (event, ctx) => {
 `;
 }
 
-/**
- * The template's inline (ZipFile) form of {@link forwarderSource}: the SAME source with full-line
- * comments and blank lines stripped — CloudFormation caps inline code at 4096 bytes, and the prose
- * lives in the readable `lambda/forwarder.js` artifact. A mechanical transform of the one source,
- * so the two forms cannot drift semantically.
- */
-export function forwarderInlineSource(): string {
-  return forwarderSource()
-    .split("\n")
-    .filter((line) => !/^\s*\/\//.test(line) && line.trim() !== "")
-    .join("\n");
-}
-
-/** Indent every line of `text` by `spaces` (YAML block embedding). */
-function indent(text: string, spaces: number): string {
-  const pad = " ".repeat(spaces);
-  return text
-    .split("\n")
-    .map((line) => (line === "" ? "" : pad + line))
-    .join("\n");
-}
-
 /** The CloudFormation template — the whole topology in one stack. */
 function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; expression: string }[]): string {
   const runtimeName = toRuntimeName(input.name);
@@ -358,6 +391,16 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     `    Type: String`,
     `    Description: ECR image URI (linux/arm64) — <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`,
   ];
+  if (needsForwarder) {
+    params.push(
+      `  StateBucket:`,
+      `    Type: String`,
+      `    Description: S3 bucket holding the forwarder deployment package + the agent's state snapshot (created outside this stack)`,
+      `  ForwarderS3Key:`,
+      `    Type: String`,
+      `    Description: key of the forwarder .zip in StateBucket — CONTENT-HASHED, so new code is a new value and CloudFormation rolls the function`,
+    );
+  }
   const envLines: string[] = [
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
@@ -447,9 +490,12 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     `      RoleArn: !GetAtt ExecutionRole.Arn`,
     `      ProtocolConfiguration: HTTP`,
     `      NetworkConfiguration: { NetworkMode: PUBLIC }`,
-    `      # SessionStorage: platform-persistent state across compute stop/resume — no VPC/EFS needed.`,
-    `      # It is tied to THIS runtime resource: renaming the runtime (a CFN replacement) starts blank.`,
-    `      # If state must outlive the runtime, switch to an EfsAccessPoint mount (requires VPC mode).`,
+    `      # SessionStorage is the agent's LOCAL disk: it survives compute stop/resume within a runtime`,
+    `      # version, but AWS wipes it on every VERSION UPDATE (= every deploy) and after 14 idle days.`,
+    `      # Durability therefore comes from the S3 snapshot the container pulls on its first`,
+    `      # invocation and pushes when work settles (presigned by the forwarder — the container holds`,
+    `      # no AWS credentials). A persistent MOUNT instead needs EfsAccessPoint + VPC mode, which`,
+    `      # forces a NAT gateway for model/channel egress (~$33/mo) — deliberately not the default.`,
     `      FilesystemConfigurations:`,
     `        - SessionStorage: { MountPath: ${MOUNT} }`,
     `      # Idle 15 min (the ping's HealthyBusy keeps busy sessions alive), max compute lifetime 8 h`,
@@ -482,6 +528,9 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `                Resource:`,
       `                  - !GetAtt Runtime.AgentRuntimeArn`,
       `                  - !Sub "\${Runtime.AgentRuntimeArn}/*"`,
+      `              - Effect: Allow # mint the presigned URLs the container uses for its state snapshot`,
+      `                Action: [s3:GetObject, s3:PutObject]`,
+      `                Resource: !Sub arn:aws:s3:::\${StateBucket}/${STATE_KEY}`,
       ...(input.selfSchedule
         ? [
             `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
@@ -519,9 +568,14 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
             `          WAKE_PREFIX: fa-${input.name}-wk-`,
           ]
         : []),
+      `          STATE_BUCKET: !Ref StateBucket`,
+      `          STATE_KEY: ${STATE_KEY}`,
+      `      # From S3, not inline: the forwarder mints SigV4-presigned URLs for the state snapshot and`,
+      `      # no longer fits CloudFormation's 4096-byte inline cap. The key is content-hashed, so a`,
+      `      # code change is a parameter change — CloudFormation cannot miss it.`,
       `      Code:`,
-      `        ZipFile: | # lambda/forwarder.js minus comments (one source; inline code caps at 4096 bytes)`,
-      indent(forwarderInlineSource(), 10),
+      `        S3Bucket: !Ref StateBucket`,
+      `        S3Key: !Ref ForwarderS3Key`,
       ``,
       `  ForwarderUrl:`,
       `    Type: AWS::Lambda::Url`,
@@ -677,7 +731,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
   const artifacts: Artifact[] = [
     { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated) },
-    ...(needsForwarder ? [{ path: `${prefix}lambda/forwarder.js`, content: forwarderSource() }] : []),
+    ...(needsForwarder ? [{ path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() }] : []),
     ...containerArtifacts(input),
   ];
 
@@ -687,14 +741,28 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const paramHint = (list: typeof secrets): string => list.map((s) => `${cfnParamName(s.name)}=<value>`).join(" ");
 
   const image = `<account-id>.dkr.ecr.<region>.amazonaws.com/${repo}:<tag>`;
+  const bucketHint = stateBucketName(name, "<account-id>");
   const runbook: string[] = [
     `# Deploy "${name}" to AWS Bedrock AgentCore. ${prefix}${TEMPLATE_FILE} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
     ``,
-    `# 1. ECR repository (one-time; skip if it exists):`,
+    `# 1. ECR repository + the deployment bucket (one-time; skip what exists). The bucket lives OUTSIDE`,
+    `#    the stack on purpose: it holds the agent's state snapshot, which must survive a delete-stack.`,
     `aws ecr create-repository --repository-name ${repo}`,
+    `aws s3api create-bucket --bucket ${bucketHint} --region <region>`,
+    `aws s3api put-public-access-block --bucket ${bucketHint} \\`,
+    `  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true`,
     ``,
+    ...(needsForwarder
+      ? [
+          `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
+          `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
+          `(cd ${prefix}lambda && zip -q forwarder.zip index.js)`,
+          `aws s3 cp ${prefix}lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
+          ``,
+        ]
+      : []),
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
@@ -723,7 +791,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   runbook.push(
     `aws cloudformation deploy --stack-name ${stack} --template-file ${prefix}${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
-    `  --parameter-overrides ImageUri=${image}${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
+    `  --parameter-overrides ImageUri=${image}${
+      needsForwarder ? ` StateBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
+    }${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
     ``,
     `# 4. Read the outputs (the runtime ARN + the public webhook URL):`,
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
@@ -810,10 +880,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   }
   runbook.push(
     ``,
-    `# Redeploy = step 2 with a NEW tag + step 3 with the new ImageUri. State (${MOUNT}: auth, sessions,`,
-    `# channel state) persists across redeploys and compute recycling — but it is tied to this Runtime`,
-    `# resource: renaming the runtime (or deleting the stack) starts blank. Need state that outlives the`,
-    `# runtime? Switch the template to an EfsAccessPoint mount (VPC mode) — see the template comment.`,
+    `# Redeploy = step 1b (new forwarder key, if its code changed) + step 2 with a NEW tag + step 3.`,
+    `# STATE: ${MOUNT} is a LOCAL disk — AWS wipes it on every runtime version update (i.e. every`,
+    `# deploy) and after 14 idle days. What survives is the S3 snapshot under s3://${bucketHint}/${STATE_KEY}:`,
+    `# the container restores it on its first invocation and pushes it whenever work settles. Keep that`,
+    `# bucket and the agent keeps its sessions, channel state and pending wake-ups across deploys;`,
+    `# delete it and the agent starts blank. (A persistent MOUNT would need EFS + VPC mode + a NAT`,
+    `# gateway for model/channel egress — see the template comment.)`,
   );
 
   return { artifacts, runbook, untranslatableSchedules: untranslatable };

@@ -5,6 +5,7 @@
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Agent } from "../agent.ts";
+import { createStateSync } from "../channels/agentcore-state.ts";
 import { agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
 import { controlRoutes } from "../channels/control.ts";
@@ -185,6 +186,11 @@ export function mountAgentcore(
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
+    // Cross-deploy durability: AgentCore wipes the state mount on every runtime version update, so
+    // the state root is restored from (and pushed to) an S3 snapshot through presigned URLs the
+    // forwarder mints per envelope. Always wired on this path — the platform gives no other way to
+    // keep an agent's memory across a deploy.
+    stateSync: createStateSync({ stateRoot }),
     fire:
       schedules.length === 0
         ? undefined

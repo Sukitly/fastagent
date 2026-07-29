@@ -26,7 +26,8 @@
  */
 import { Buffer } from "node:buffer";
 import type { Agent } from "../agent.ts";
-import { beginWork } from "./busy.ts";
+import type { StateSync, StateUrls } from "./agentcore-state.ts";
+import { beginWork, onIdle } from "./busy.ts";
 import type { Routes } from "../host/node.ts";
 import { router } from "../host/node.ts";
 import { log } from "../log.ts";
@@ -43,7 +44,7 @@ export const MAX_ENVELOPE_BYTES = 2 << 20;
 /** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
  *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
  *  ALARM sink (schedule/wake-alarm.ts) can call back without the URL being baked anywhere. */
-export type AgentcoreEnvelope = { wake?: { url: string } } & (
+export type AgentcoreEnvelope = { wake?: { url: string }; state?: StateUrls } & (
   | {
       kind: "webhook";
       /** Original webhook request line, verbatim. `path` must be absolute ("/telegram"). */
@@ -89,7 +90,14 @@ export interface AgentcoreAdapterOptions {
    *  undefined when the workspace has none — a schedule-fire envelope then 404s (deploy drift: an
    *  external clock still firing for a schedule this definition no longer has). */
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
+  /** Cross-deploy state durability (agentcore-state.ts). Absent = the state root is local-only,
+   *  which on AgentCore means it is erased by the next deploy — the serving path always wires it. */
+  stateSync?: StateSync;
 }
+
+const unsnapshottedWarning =
+  "[agentcore] this envelope carried no state-snapshot URLs — the state root is LOCAL ONLY and the " +
+  "platform erases it on the next deploy (redeploy with a current fastagent to restore durability)";
 
 const jsonHeaders = { "content-type": "application/json" } as const;
 const json = (body: unknown, status: number): Response =>
@@ -102,11 +110,15 @@ const json = (body: unknown, status: number): Response =>
  * a local `curl` debug surface.
  */
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { routes, agent, stateRoot, isBusy, fire } = options;
+  const { routes, agent, stateRoot, isBusy, fire, stateSync } = options;
   const dispatch = router(routes);
   const invokeHandler = createInvokeHandler(agent);
+  // Snapshot on the 0-in-flight edge: webhook channels ACK fast and finish the turn in the
+  // background, so "the request returned" is NOT when the state root settles.
+  if (stateSync) onIdle(() => stateSync.save());
+  let warnedUnsnapshotted = false;
 
-  const invocations = async (req: Request): Promise<Response> => {
+  const handleInvocation = async (req: Request): Promise<Response> => {
     const body = await readBodyCapped(req, MAX_ENVELOPE_BYTES);
     if ("tooLarge" in body) return text("envelope too large\n", 413);
     let envelope: AgentcoreEnvelope;
@@ -125,6 +137,26 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
       } catch (e) {
         log.error(`[agentcore] could not persist the wake-alarm URL: ${String(e)}`);
+      }
+    }
+    // Cross-deploy state: the platform wipes /mnt/state on every version update, so the durable copy
+    // must be pulled back BEFORE anything reads it. A failed restore fails the request — serving an
+    // empty agent (and then snapshotting that emptiness over the good copy) is the worse outcome.
+    if (stateSync) {
+      if (envelope.state && typeof envelope.state.getUrl === "string" && typeof envelope.state.putUrl === "string") {
+        stateSync.use(envelope.state);
+      } else if (envelope.kind !== "invoke" && !stateSync.configured() && !warnedUnsnapshotted) {
+        // webhook/schedule-fire/wake-poke reach us ONLY through the forwarder, which always mints the
+        // pair. Missing = a broken/stale topology whose state dies at the next deploy: say so, loudly,
+        // once per process (a direct `invoke` legitimately has none — its session storage is its own).
+        warnedUnsnapshotted = true;
+        log.warn(unsnapshottedWarning);
+      }
+      try {
+        await stateSync.ready();
+      } catch (e) {
+        log.error(`[agentcore] state restore failed: ${String(e)}`);
+        return text(`state restore failed: ${String(e)}\n`, 503);
       }
     }
 
@@ -204,6 +236,14 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       default:
         return text(`unknown envelope kind "${(envelope as { kind: string }).kind}"\n`, 400);
     }
+  };
+
+  // Settle-then-snapshot: when the envelope leaves nothing in flight, its writes are final now (a
+  // background turn instead reports through the idle edge above).
+  const invocations = async (req: Request): Promise<Response> => {
+    const response = await handleInvocation(req);
+    if (stateSync && !isBusy()) stateSync.save();
+    return response;
   };
 
   return {

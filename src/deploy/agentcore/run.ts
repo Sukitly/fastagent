@@ -18,7 +18,17 @@ import type { RegistrationOutcome } from "../../channels/registration.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { registrationGate } from "../registration-gate.ts";
 import type { CliRunner } from "../runner.ts";
-import { AUTH_SEED_CHUNK_SIZE, AUTH_SEED_MAX_CHUNKS, cfnParamName, ingressSessionId } from "./plan.ts";
+import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
+import {
+  AUTH_SEED_CHUNK_SIZE,
+  AUTH_SEED_MAX_CHUNKS,
+  cfnParamName,
+  forwarderSource,
+  ingressSessionId,
+  stateBucketName,
+} from "./plan.ts";
+import { zipSingleFile } from "./zip.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -39,6 +49,10 @@ export interface AgentcoreRunPlan {
   /** Required secret names with NO local value — gated before any side effect. */
   missingSecrets: string[];
   channels: ChannelKind[];
+  /** Whether the topology includes the forwarder Lambda (route channels / schedules / selfSchedule).
+   *  It owns the state snapshot's presigned URLs, so its absence means an invoke-only deployment
+   *  with no cross-deploy state to keep. */
+  needsForwarder: boolean;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
@@ -61,8 +75,13 @@ export function parseStackOutputs(stdout: string): Record<string, string> {
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. The auth seed
  *  is CHUNKED across FastagentAuthSeed(2…) — AgentCore env values cap at 2048 chars and a real OAuth
  *  auth.json's base64 exceeds it; `start` reassembles (collectAuthSeed). Other values pass through. */
-export function paramsFileContent(imageUri: string, secrets: Record<string, string>): string {
+export function paramsFileContent(
+  imageUri: string,
+  secrets: Record<string, string>,
+  forwarder?: { bucket: string; key: string },
+): string {
   const params = [`ImageUri=${imageUri}`];
+  if (forwarder) params.push(`StateBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`);
   for (const [k, v] of Object.entries(secrets)) {
     if (k !== "FASTAGENT_AUTH_SEED") {
       params.push(`${cfnParamName(k)}=${v}`);
@@ -87,6 +106,7 @@ export async function deployAgentcoreRun(
   docker: CliRunner,
   log: (msg: string) => void,
   writeParamsFile: (content: string) => Promise<string>,
+  writeForwarderZip: (bytes: Uint8Array) => Promise<string>,
   registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
   registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
   registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
@@ -175,6 +195,69 @@ export async function deployAgentcoreRun(
     }
   }
 
+  // 4b. The deployment bucket + the forwarder package. The bucket is created OUTSIDE the stack, on
+  //     purpose and unlike everything else here: it holds the agent's STATE SNAPSHOT, and AgentCore
+  //     wipes the /mnt/state mount on every runtime version update (i.e. every deploy). Keeping it
+  //     out of CloudFormation means a `delete-stack` — or a rolled-back create — cannot take the
+  //     agent's sessions, channel state and pending wake-ups with it.
+  let forwarderParams: { bucket: string; key: string } | undefined;
+  if (plan.needsForwarder) {
+    const bucket = stateBucketName(plan.name, account);
+    if ((await aws(["s3api", "head-bucket", "--bucket", bucket], { capture: true })).code !== 0) {
+      log(`creating deployment bucket ${bucket}…`);
+      // us-east-1 is the ONE region that must not carry a LocationConstraint (the API rejects it).
+      const createArgs = ["s3api", "create-bucket", "--bucket", bucket];
+      if (region !== "us-east-1") createArgs.push("--create-bucket-configuration", `LocationConstraint=${region}`);
+      if ((await aws(createArgs)).code !== 0) {
+        return gate(`\`aws s3api create-bucket --bucket ${bucket}\` failed — see the output above; fix and re-run`);
+      }
+      if (
+        (
+          await aws([
+            "s3api",
+            "put-public-access-block",
+            "--bucket",
+            bucket,
+            "--public-access-block-configuration",
+            "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+          ])
+        ).code !== 0
+      ) {
+        return gate(`could not block public access on ${bucket} — refusing to store agent state in it`);
+      }
+      // Versioning + a short noncurrent expiry: the snapshot is the agent's whole memory, so one bad
+      // write should be recoverable, but keeping every turn's copy forever would be a slow leak.
+      await aws(["s3api", "put-bucket-versioning", "--bucket", bucket, "--versioning-configuration", "Status=Enabled"]);
+      await aws([
+        "s3api",
+        "put-bucket-lifecycle-configuration",
+        "--bucket",
+        bucket,
+        "--lifecycle-configuration",
+        JSON.stringify({
+          Rules: [
+            {
+              ID: "fastagent-expire-old-snapshots",
+              Status: "Enabled",
+              Filter: { Prefix: "state/" },
+              NoncurrentVersionExpiration: { NoncurrentDays: 7 },
+            },
+          ],
+        }),
+      ]);
+    }
+    // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so
+    // identical source must map to an identical key (hence the deterministic zip) and changed source
+    // to a new one.
+    const zip = zipSingleFile("index.js", Buffer.from(forwarderSource()));
+    const key = `forwarder/${createHash("sha256").update(zip).digest("hex").slice(0, 16)}.zip`;
+    const zipPath = await writeForwarderZip(zip);
+    if ((await aws(["s3", "cp", zipPath, `s3://${bucket}/${key}`])).code !== 0) {
+      return gate("uploading the forwarder package to S3 failed — see the output above; fix and re-run");
+    }
+    forwarderParams = { bucket, key };
+  }
+
   // 5. Registry login — the password flows stdout→stdin between the two runners, never argv.
   const password = await aws(["ecr", "get-login-password"], { capture: true });
   if (password.code !== 0) return gate("`aws ecr get-login-password` failed — see the output above");
@@ -222,7 +305,7 @@ export async function deployAgentcoreRun(
     }
   }
   log(`deploying stack ${stack}…`);
-  const paramsPath = await writeParamsFile(paramsFileContent(image, plan.secrets));
+  const paramsPath = await writeParamsFile(paramsFileContent(image, plan.secrets, forwarderParams));
   const deployed = await aws([
     "cloudformation",
     "deploy",

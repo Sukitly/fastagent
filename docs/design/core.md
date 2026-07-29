@@ -460,8 +460,24 @@ slot as the idempotency key (EventBridge delivery is at-least-once), and an invo
 `GET /ping` reports `HealthyBusy` while background turns run (the shared turn-queue/task-tracker report
 into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn. All ingress traffic shares ONE
 fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
-until the runtime is deleted — with state on the platform's SessionStorage mount (`/mnt/state`; tied to
-the runtime resource — the EFS/VPC mount is the named upgrade path when state must outlive it).
+until the runtime is deleted.
+
+**State durability is an S3 snapshot, not the mount.** The platform's SessionStorage (`/mnt/state`) is
+reset on every runtime VERSION UPDATE — i.e. on every deploy — and after 14 idle days, so it is a local
+disk, not the source of truth (a real deployment proved this: the truncation point in a live chat matched
+the deploy timestamp exactly). `channels/agentcore-state.ts` restores the state root from one gzipped
+JSON object on the first ingress envelope and pushes a coalesced snapshot on the 0-in-flight edge
+(`busy.ts` `onIdle`). The container holds NO AWS credentials (verified on a live box), so the forwarder
+mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping the container AWS-SDK-free
+and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
+the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
+is first boot. `auth.json` restores absent-only — the deploy seeds a fresher copy than the snapshot's.
+The bucket is created OUTSIDE the stack (like the ECR repo) so `delete-stack` cannot take the agent's
+memory with it; a durable MOUNT instead (EFS/S3 Files) requires VPC mode and therefore a NAT gateway for
+model/channel egress, which would replace pay-per-use with a fixed ~$33/mo floor. The same bucket hosts
+the forwarder's deployment package, whose key is content-hashed (the presigning pushed it past
+CloudFormation's 4096-byte inline cap; a hashed key is also what makes CloudFormation notice new code).
+
 A live session keeps its
 old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
 successful deploy, making the new image serve immediately (an in-flight turn is cut; channels with

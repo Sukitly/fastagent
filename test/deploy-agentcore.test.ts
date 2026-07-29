@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+import { crc32 } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   type AgentcorePlanInput,
@@ -5,15 +7,18 @@ import {
   type ScheduleFact,
   TEMPLATE_FILE,
   GENERATED_TEMPLATE_MARKER,
+  FORWARDER_FILE,
+  STATE_KEY,
   cfnParamName,
-  forwarderInlineSource,
   forwarderSource,
   isGeneratedAgentcoreTemplate,
   ingressSessionId,
   planAgentcoreDeploy,
+  stateBucketName,
   toEventBridgeCron,
   toRuntimeName,
 } from "../src/deploy/agentcore/plan.ts";
+import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
   name: "my-agent",
@@ -121,7 +126,7 @@ describe("deploy agentcore: the plan", () => {
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: ["telegram"], routeChannels: ["telegram"] }));
-    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/forwarder.js");
+    expect(plan.artifacts.map((a) => a.path)).toContain(FORWARDER_FILE);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::Lambda::Function");
     expect(template).toContain("Type: AWS::Lambda::Url");
@@ -140,10 +145,10 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("setWebhook");
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
-    // The forwarder artifact and the template's inline ZipFile come from the ONE source.
-    const forwarder = plan.artifacts.find((a) => a.path === "lambda/forwarder.js")!;
+    // The shipped artifact IS the forwarder source (it becomes the Lambda package verbatim).
+    const forwarder = plan.artifacts.find((a) => a.path === FORWARDER_FILE)!;
     expect(forwarder.content).toBe(forwarderSource());
-    expect(template).toContain("InvokeAgentRuntimeCommand");
+    expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
   });
 
   it("schedules become EventBridge rules with tz + slot-carrying input; untranslatable ones warn", () => {
@@ -200,7 +205,7 @@ describe("deploy agentcore: the plan", () => {
     );
     const paths = plan.artifacts.map((a) => a.path);
     expect(paths).toContain(`agent/${TEMPLATE_FILE}`);
-    expect(paths).toContain("agent/lambda/forwarder.js");
+    expect(paths).toContain(`agent/${FORWARDER_FILE}`);
     expect(plan.runbook.join("\n")).toContain("-f agent/Dockerfile");
   });
 
@@ -232,12 +237,72 @@ describe("deploy agentcore: the plan", () => {
     expect(isGeneratedAgentcoreTemplate("# my hand-written template\n")).toBe(false);
   });
 
-  it("the inline forwarder form (comments stripped) stays under the 4096-byte cap and derives from the one source", () => {
-    const inline = forwarderInlineSource();
-    expect(Buffer.byteLength(inline)).toBeLessThan(4096);
-    // Every inline line exists verbatim in the full source — a mechanical strip, not a fork.
-    const full = new Set(forwarderSource().split("\n"));
-    for (const line of inline.split("\n")) expect(full.has(line)).toBe(true);
+  it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
+    const plan = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }));
+    // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
+    expect(FORWARDER_FILE).toBe("lambda/index.js");
+    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/index.js");
+    const template = plan.artifacts[0]!.content;
+    expect(template).not.toContain("ZipFile"); // presigning pushed it past CFN's 4096-byte inline cap
+    expect(template).toContain("S3Bucket: !Ref StateBucket");
+    expect(template).toContain("S3Key: !Ref ForwarderS3Key");
+    expect(template).toContain("  StateBucket:");
+    expect(template).toContain("  ForwarderS3Key:");
+  });
+
+  it("grants the forwarder ONLY the one snapshot object, and hands the container its bucket/key", () => {
+    const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
+      .artifacts[0]!.content;
+    expect(template).toContain("Action: [s3:GetObject, s3:PutObject]");
+    expect(template).toContain(`Resource: !Sub arn:aws:s3:::\${StateBucket}/${STATE_KEY}`);
+    expect(template).toContain("STATE_BUCKET: !Ref StateBucket");
+    expect(template).toContain(`STATE_KEY: ${STATE_KEY}`);
+  });
+
+  it("an invoke-only deployment (no forwarder) carries no bucket wiring at all", () => {
+    const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
+    expect(template).not.toContain("StateBucket");
+    expect(template).not.toContain("s3:GetObject");
+  });
+
+  it("tells the truth about state: the mount is wiped per deploy, the S3 snapshot is what survives", () => {
+    const plan = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }));
+    const template = plan.artifacts[0]!.content;
+    expect(template).toContain("wipes it on every VERSION UPDATE");
+    expect(template).not.toMatch(/SessionStorage: platform-persistent/);
+    const runbook = plan.runbook.join("\n");
+    expect(runbook).toContain(stateBucketName("my-agent", "<account-id>"));
+    expect(runbook).toContain(STATE_KEY);
+    expect(runbook).toContain("every runtime version update");
+  });
+
+  describe("the forwarder deployment package", () => {
+    /** Parse the single stored entry back out — proves the archive is real, not just plausible. */
+    const readSingleEntry = (zip: Buffer) => {
+      expect(zip.readUInt32LE(0)).toBe(0x04034b50); // local file header
+      expect(zip.readUInt16LE(8)).toBe(0); // method 0 = stored
+      const nameLength = zip.readUInt16LE(26);
+      const size = zip.readUInt32LE(22);
+      const name = zip.subarray(30, 30 + nameLength).toString();
+      const content = zip.subarray(30 + nameLength, 30 + nameLength + size);
+      expect(zip.readUInt32LE(14)).toBe(crc32(content)); // the CRC an unzipper will verify
+      expect(zip.readUInt32LE(zip.byteLength - 22)).toBe(0x06054b50); // end of central directory
+      expect(zip.readUInt16LE(zip.byteLength - 12)).toBe(1); // exactly one entry
+      return { name, content: content.toString() };
+    };
+
+    it("packages the forwarder as a valid, self-consistent archive", () => {
+      const entry = readSingleEntry(zipSingleFile("index.js", Buffer.from(forwarderSource())));
+      expect(entry.name).toBe("index.js");
+      expect(entry.content).toBe(forwarderSource());
+    });
+
+    it("is byte-deterministic — the S3 key is content-hashed, so identical source must not look new", () => {
+      const once = zipSingleFile("index.js", Buffer.from("exports.handler = 1;"));
+      const twice = zipSingleFile("index.js", Buffer.from("exports.handler = 1;"));
+      expect(once.equals(twice)).toBe(true);
+      expect(once.equals(zipSingleFile("index.js", Buffer.from("exports.handler = 2;")))).toBe(false);
+    });
   });
 
   it("OAuth model auth (non-env) gets the FastagentAuthSeed guidance instead of a fake secret", () => {

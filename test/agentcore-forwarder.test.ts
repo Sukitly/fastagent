@@ -5,7 +5,8 @@
  * query round-trip, secret gate) must be under test, not trusted.
  */
 import { Buffer } from "node:buffer";
-import { describe, expect, it, vi } from "vitest";
+import * as nodeCrypto from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
 
 type Envelope = Record<string, unknown> & { kind?: string; wake?: { url: string } };
@@ -95,6 +96,8 @@ function loadForwarder(options: HarnessOptions = {}) {
     },
   };
   const fakeRequire = (name: string): unknown => {
+    // node:crypto is the REAL module: the forwarder's SigV4 presigning must be exercised, not faked.
+    if (name === "node:crypto") return nodeCrypto;
     const mod = modules[name];
     if (!mod) throw new Error(`unexpected require("${name}")`);
     return mod;
@@ -119,6 +122,50 @@ function loadForwarder(options: HarnessOptions = {}) {
     logs: quietConsole.log,
     urlLookups: () => urlLookups,
   };
+}
+
+/**
+ * SigV4 query-string signing, written straight from the AWS spec and pinned to their published test
+ * vector (see the test below) — an INDEPENDENT check on the generated forwarder's own implementation.
+ */
+function referenceSignature(input: {
+  method: string;
+  host: string;
+  key: string;
+  stamp: string;
+  expires: number;
+  region?: string;
+  accessKey?: string;
+  secret?: string;
+}): string {
+  const region = input.region ?? "us-east-1";
+  const accessKey = input.accessKey ?? "AKIAIOSFODNN7EXAMPLE";
+  const secret = input.secret ?? "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+  const esc = (s: string) =>
+    encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const hmac = (k: nodeCrypto.BinaryLike, d: string) => nodeCrypto.createHmac("sha256", k).update(d).digest();
+  const scope = `${input.stamp.slice(0, 8)}/${region}/s3/aws4_request`;
+  const query = [
+    ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
+    ["X-Amz-Credential", `${accessKey}/${scope}`],
+    ["X-Amz-Date", input.stamp],
+    ["X-Amz-Expires", String(input.expires)],
+    ["X-Amz-SignedHeaders", "host"],
+  ]
+    .map(([k, v]) => `${esc(k!)}=${esc(v!)}`)
+    .sort()
+    .join("&");
+  const uri = `/${input.key.split("/").map(esc).join("/")}`;
+  const canonical = [input.method, uri, query, `host:${input.host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
+  const sts = [
+    "AWS4-HMAC-SHA256",
+    input.stamp,
+    scope,
+    nodeCrypto.createHash("sha256").update(canonical).digest("hex"),
+  ].join("\n");
+  let key = hmac(`AWS4${secret}`, input.stamp.slice(0, 8));
+  for (const part of [region, "s3", "aws4_request"]) key = hmac(key, part);
+  return hmac(key, sts).toString("hex");
 }
 
 const webhookEvent = (over: Record<string, unknown> = {}) => ({
@@ -257,5 +304,97 @@ describe("agentcore forwarder (executed)", () => {
     await f.handler(webhookEvent());
     expect(f.urlLookups()).toBe(0);
     expect(f.envelopes[0]!.wake).toBeUndefined();
+  });
+
+  describe("state snapshot URLs (the container has NO AWS credentials — presigning is its only reach)", () => {
+    const stateEnv = {
+      STATE_BUCKET: "fa-agent-123456789012",
+      STATE_KEY: "state/snapshot.json.gz",
+      AWS_REGION: "us-east-1",
+      AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
+      AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("rides a GET/PUT pair on every envelope, signed for the one snapshot object", async () => {
+      const f = loadForwarder({ env: stateEnv });
+      await f.handler(webhookEvent());
+      await f.handler({ scheduleFire: { name: "digest", slot: "2026-07-28T09:00:00Z" } });
+
+      for (const envelope of f.envelopes) {
+        const state = envelope.state as { getUrl: string; putUrl: string };
+        for (const url of [state.getUrl, state.putUrl]) {
+          const parsed = new URL(url);
+          expect(parsed.origin).toBe("https://fa-agent-123456789012.s3.us-east-1.amazonaws.com");
+          expect(parsed.pathname).toBe("/state/snapshot.json.gz");
+          expect(parsed.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
+          expect(parsed.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
+          expect(parsed.searchParams.get("X-Amz-Credential")).toMatch(/AKIAIOSFODNN7EXAMPLE\/\d{8}\/us-east-1\/s3\//);
+          expect(parsed.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+          // 12 h — longer than a session's 8 h compute ceiling, so a late settle can still push.
+          expect(parsed.searchParams.get("X-Amz-Expires")).toBe("43200");
+        }
+        // The method is part of the canonical request: one signature cannot serve both verbs.
+        expect(state.getUrl).not.toBe(state.putUrl);
+      }
+    });
+
+    it("REFERENCE: the signing algorithm reproduces AWS's published query-string vector", () => {
+      // Anchors the cross-check below in something external. From the S3 docs' worked example
+      // (GET examplebucket/test.txt, 86400s, the canonical AKIAIOSFODNN7EXAMPLE credential).
+      expect(
+        referenceSignature({
+          method: "GET",
+          host: "examplebucket.s3.amazonaws.com",
+          key: "test.txt",
+          stamp: "20130524T000000Z",
+          expires: 86400,
+        }),
+      ).toBe("aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404");
+    });
+
+    it("the forwarder's signature MATCHES that reference — a wrong one 403s and the agent loses its memory", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-28T09:00:00.000Z"));
+      const f = loadForwarder({ env: stateEnv });
+      await f.handler(webhookEvent());
+
+      const state = f.envelopes[0]!.state as { getUrl: string; putUrl: string };
+      for (const [method, url] of [
+        ["GET", state.getUrl],
+        ["PUT", state.putUrl],
+      ] as const) {
+        const parsed = new URL(url);
+        expect(parsed.searchParams.get("X-Amz-Date")).toBe("20260728T090000Z");
+        expect(parsed.searchParams.get("X-Amz-Signature")).toBe(
+          referenceSignature({
+            method,
+            host: "fa-agent-123456789012.s3.us-east-1.amazonaws.com",
+            key: "state/snapshot.json.gz",
+            stamp: "20260728T090000Z",
+            expires: 43200,
+          }),
+        );
+      }
+    });
+
+    it("carries the role's session token when present — Lambda credentials are always temporary", async () => {
+      const f = loadForwarder({ env: { ...stateEnv, AWS_SESSION_TOKEN: "FwoGZXIvYXdzEJr//////////wEaDA==" } });
+      await f.handler(webhookEvent());
+      const url = new URL((f.envelopes[0]!.state as { getUrl: string }).getUrl);
+      expect(url.searchParams.get("X-Amz-Security-Token")).toBe("FwoGZXIvYXdzEJr//////////wEaDA==");
+      // Canonical-query order is signed: the token must sort into place, not append.
+      const keys = [...url.searchParams.keys()].filter((k) => k !== "X-Amz-Signature");
+      expect(keys).toEqual([...keys].sort());
+    });
+
+    it("no STATE_BUCKET, no state field — an invoke-only deployment keeps nothing durable", async () => {
+      const f = loadForwarder();
+      await f.handler(webhookEvent());
+      expect(f.envelopes[0]!.state).toBeUndefined();
+    });
   });
 });

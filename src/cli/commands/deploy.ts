@@ -314,6 +314,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         channels,
         extraSecrets,
         selfSchedule: !!config.selfSchedule,
+        // Same predicate the template uses for the forwarder resource — kept in one expression so
+        // the run path and the topology cannot disagree about whether a forwarder exists.
+        needsForwarder: routeChannels.length > 0 || loaded.schedules.length > 0 || !!config.selfSchedule,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -600,6 +603,7 @@ async function runDeployAgentcore(params: {
   channels: ChannelKind[];
   extraSecrets: string[];
   selfSchedule: boolean;
+  needsForwarder: boolean;
 }): Promise<void> {
   const { target, name, kitDir, modelAuth, authPath, channels, extraSecrets, selfSchedule } = params;
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
@@ -636,6 +640,9 @@ async function runDeployAgentcore(params: {
         secrets,
         missingSecrets,
         channels,
+        // Same predicate the template uses: the forwarder exists for route channels, cron schedules
+        // or selfSchedule — and it is what mints the state snapshot's presigned URLs.
+        needsForwarder: params.needsForwarder,
       },
       spawnRunner("aws", target),
       spawnRunner("docker", target),
@@ -644,6 +651,11 @@ async function runDeployAgentcore(params: {
         const path = join(paramsDir, "params.json");
         await writeFile(path, content, { mode: 0o600 });
         await chmod(path, 0o600);
+        return path;
+      },
+      async (bytes) => {
+        const path = join(paramsDir, "forwarder.zip");
+        await writeFile(path, bytes);
         return path;
       },
       (baseUrl) => registerTelegramWebhook(baseUrl),

@@ -42,17 +42,82 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   secrets: {},
   missingSecrets: [],
   channels: [],
+  needsForwarder: false,
   ...over,
 });
 
 const writeParams = vi.fn(async (_content: string) => "/tmp/params.json");
+const writeZip = vi.fn(async (_bytes: Uint8Array) => "/tmp/forwarder.zip");
 
 const run = (
   p: AgentcoreRunPlan,
   aws: CliRunner,
   docker: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, tg);
+) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, tg);
+
+describe("the deployment bucket (the agent's memory outlives the stack)", () => {
+  const withForwarder = plan({ needsForwarder: true });
+
+  it("creates it when absent, locks it down, and hands the stack the bucket + content-hashed key", async () => {
+    const { cli: aws, cmds } = fakeCli((a) =>
+      a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+    );
+    writeParams.mockClear();
+
+    const out = await run(withForwarder, aws, fakeCli().cli);
+
+    expect(out).toMatchObject({ ok: true });
+    expect(cmds().find((c) => c.startsWith("s3api create-bucket"))).toContain("--bucket fa-my-agent-123456789012");
+    expect(cmds().join("\n")).toContain("put-public-access-block");
+    expect(cmds().join("\n")).toContain("put-bucket-versioning"); // one bad write stays recoverable
+    expect(cmds().join("\n")).toContain("NoncurrentDays"); // …without keeping every turn's copy forever
+    const upload = cmds().find((c) => c.startsWith("s3 cp"))!;
+    expect(upload).toMatch(/s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip/);
+    // The stack learns both, so the Lambda's code and the container's snapshot point at one bucket.
+    const params = JSON.parse(writeParams.mock.calls[0]![0]) as string[];
+    expect(params).toContain("StateBucket=fa-my-agent-123456789012");
+    expect(params.some((p) => /^ForwarderS3Key=forwarder\/[0-9a-f]{16}\.zip$/.test(p))).toBe(true);
+  });
+
+  it("skips creation when it already exists — a redeploy must not touch the stored snapshot", async () => {
+    const { cli: aws, cmds } = fakeCli(happyAws); // head-bucket succeeds
+    await run(withForwarder, aws, fakeCli().cli);
+    expect(cmds().join("\n")).not.toContain("create-bucket");
+    expect(cmds().join("\n")).not.toContain("put-bucket-versioning");
+    expect(cmds().some((c) => c.startsWith("s3 cp"))).toBe(true); // the code still uploads
+  });
+
+  it("omits LocationConstraint in us-east-1 (the one region whose create-bucket rejects it)", async () => {
+    const { cli: aws, cmds } = fakeCli((a) =>
+      a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+    );
+    await run(plan({ needsForwarder: true, region: "us-east-1" }), aws, fakeCli().cli);
+    expect(cmds().find((c) => c.startsWith("s3api create-bucket"))).not.toContain("LocationConstraint");
+
+    const { cli: other, cmds: otherCmds } = fakeCli((a) =>
+      a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+    );
+    await run(plan({ needsForwarder: true, region: "eu-west-1" }), other, fakeCli().cli);
+    expect(otherCmds().find((c) => c.startsWith("s3api create-bucket"))).toContain("LocationConstraint=eu-west-1");
+  });
+
+  it("gates on a failed upload — deploying a stack whose Lambda code is missing would 500 every webhook", async () => {
+    const { cli: aws, cmds } = fakeCli((a) => (a[0] === "s3" && a[1] === "cp" ? { code: 1 } : happyAws(a)));
+    const out = await run(withForwarder, aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: false });
+    expect((out as { gate: string }).gate).toContain("forwarder package");
+    expect(cmds().join("\n")).not.toContain("cloudformation deploy");
+  });
+
+  it("an invoke-only deployment touches no bucket at all", async () => {
+    const { cli: aws, cmds } = fakeCli(happyAws);
+    writeParams.mockClear();
+    await run(plan({ needsForwarder: false }), aws, fakeCli().cli);
+    expect(cmds().join("\n")).not.toContain("s3");
+    expect(JSON.parse(writeParams.mock.calls[0]![0] as string).join()).not.toContain("StateBucket");
+  });
+});
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
@@ -218,6 +283,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       fakeCli().cli,
       (m) => logs.push(m),
       writeParams,
+      writeZip,
       async () => "registered",
     );
     expect(out).toMatchObject({ ok: true });
@@ -238,6 +304,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       fakeCli().cli,
       (m) => logs.push(m),
       writeParams,
+      writeZip,
       async () => "registered",
     );
     expect(out).toMatchObject({ ok: true }); // still not a gate — the deploy itself succeeded
