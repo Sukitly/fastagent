@@ -38,7 +38,7 @@ src/
 ├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
 ├── runtime.ts               # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts                # neutral ESM module discovery/loading for tools/ channels/ schedules/ config
-├── paths.ts, version.ts    # neutral helpers (AGENT_DIR + machinery paths, containment guard, ignore files, version)
+├── paths.ts, version.ts    # neutral helpers (AGENT_DIR + machinery paths, containment guard, version)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
@@ -105,7 +105,7 @@ src/
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
-    ├── workspace.ts         # shared opener: directory → agent for dev/start/invoke
+    ├── open.ts              # shared opener: directory → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
     ├── tool.ts              # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
     ├── tool-context.ts      # ToolContext.session + tool-activation bridge via AsyncLocalStorage (set around the turn; read in execute — the wake/search_tools seam)

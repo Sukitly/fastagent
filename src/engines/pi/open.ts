@@ -33,17 +33,17 @@ import { type LoadedDefinition, ensureSecretsDirSelfIgnored, ensureStateRootSelf
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
-export interface CreatePiAgentFromWorkspaceOptions {
+export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /**
-   * Session store directory. Default `<root>/.state/sessions` (self-gitignored machine state). `start`
+   * Session store directory. Default `<agentDir>/.state/sessions` (self-gitignored machine state). `start`
    * overrides it (--sessions-dir / FASTAGENT_SESSIONS_DIR / a mounted volume) so production continuity
    * survives redeploys.
    */
   sessionsDir?: string;
   /**
-   * Credentials file override. Default `<root>/.secrets/auth.json` (project-level, under the
+   * Credentials file override. Default `<agentDir>/.secrets/auth.json` (project-level, under the
    * self-gitignored `.secrets/`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
    * the global `~/.fastagent/.secrets/auth.json` to share one credential across projects.
    */
@@ -73,7 +73,7 @@ export interface CreatePiAgentFromWorkspaceOptions {
  * The agent assembly FRONT HALF — everything that is independent of how pi consumes the
  * definition (transient harness for serving vs resident AgentSession for chat / session control):
  * placement resolution → config → model spec → the full tool surface ({@link resolveAgentTools} — the
- * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
+ * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromDir} and the
  * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two
  * consumption shapes. (Definition loading and prompt assembly stay per-consumer: serving re-reads
  * them live per invoke, the session builder snapshots at startup and lets pi append skills/env.)
@@ -87,9 +87,9 @@ export interface AgentAssembly {
   agentDir: string;
   /** Absolute workspace — the agent dir's parent: the agent's cwd and the start of the ②-context walk. */
   workspace: string;
-  /** Absolute state root (FASTAGENT_STATE_DIR > <root>/.state). */
+  /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
-  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <root>/.secrets/auth.json). */
+  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
   /** The full mounted tool surface (config.tools + discovered tools/, search_tools applied). */
   tools: AgentTool[];
@@ -122,7 +122,7 @@ export async function resolveAgentAssembly(
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
   // in one knob — a container points it at its volume); the finer overrides below still win.
   const stateRoot = resolveStateRoot(agentDir);
-  // The credentials file: project-level by default (under `<root>/.secrets`); only resolved here, never
+  // The credentials file: project-level by default (under `<agentDir>/.secrets`); only resolved here, never
   // created (a missing file reads as not-configured — `fastagent login` creates it).
   const authPath = resolveAuthPath(agentDir, options.authPath);
   // Self-ignore the machinery dirs iff they land in-tree. HERE, not in the serving opener: every
@@ -147,13 +147,14 @@ export async function resolveAgentAssembly(
 }
 
 /**
- * "Point at a directory → agent": load the config, resolve model and tools, then L2. Throws a clear
- * error when no model source is set (fail visibly at startup). Returns everything an entry point needs
- * to report what it assembled.
+ * "Point at a directory → agent": resolve the placement (`dir` may be either end — the workspace or
+ * the agent dir itself), load the config, resolve model and tools, then L2. Throws a clear error when
+ * no model source is set (fail visibly at startup). Returns everything an entry point needs to report
+ * what it assembled.
  */
-export async function createPiAgentFromWorkspace(
+export async function createPiAgentFromDir(
   dir: string,
-  options: CreatePiAgentFromWorkspaceOptions = {},
+  options: CreatePiAgentFromDirOptions = {},
 ): Promise<{
   agent: Agent;
   definition: LoadedDefinition;
@@ -165,7 +166,7 @@ export async function createPiAgentFromWorkspace(
   agentDir: string;
   /** Absolute workspace in use — the agent's cwd (the agent dir's parent). */
   workspace: string;
-  /** Absolute state root in use (FASTAGENT_STATE_DIR > <root>/.state) — the ChannelContext's stateRoot. */
+  /** Absolute state root in use (FASTAGENT_STATE_DIR > <agentDir>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;

@@ -14,7 +14,7 @@ import {
 } from "../../engines/pi/config.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
-import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -66,7 +66,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     toolCollisions,
     toolFailures,
     sessionControl,
-  } = await createPiAgentFromWorkspace(dir, {
+  } = await createPiAgentFromDir(dir, {
     model: opts.model,
     sessionsDir: sessionsDirOverride,
     authPath: opts.authPath,

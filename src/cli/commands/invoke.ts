@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { resolvePlacement } from "../../engines/pi/config.ts";
-import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
@@ -22,7 +22,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   loadDotEnv(ws.agentDir);
   installProxyFetch();
   await resolveFirstRunModel(ws.agentDir, opts);
-  const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
+  const { agent, modelSpec, authPath } = await createPiAgentFromDir(invokeDir, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);

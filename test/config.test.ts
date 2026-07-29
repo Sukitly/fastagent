@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { createPiAgentFromWorkspace, createPiModels, listModels, probeAuthSource, resolveModel } from "../src/index.ts";
+import { createPiAgentFromDir, createPiModels, listModels, probeAuthSource, resolveModel } from "../src/index.ts";
 import {
   defaultAuthPath,
   defaultSessionsDir,
@@ -333,7 +333,7 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   return { host, agent };
 }
 
-describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the engine side)", () => {
+describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engine side)", () => {
   it("assembles config + definition and returns everything the entrypoint needs; flag beats config", async () => {
     const { host, agent } = await agentWorkspace();
     await writeFile(join(host, "AGENTS.md"), "# Test Agent\nBe concise.\n");
@@ -342,7 +342,7 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
       `export default { model: "openai-codex/gpt-5.5", http: { port: 9999 } };`,
     );
 
-    const ws = await createPiAgentFromWorkspace(host);
+    const ws = await createPiAgentFromDir(host);
     expect(ws.modelSpec).toBe("openai-codex/gpt-5.5"); // from config
     expect(ws.configPath).toMatch(/fastagent\.config\.mjs$/);
     expect(ws.config.http?.port).toBe(9999);
@@ -350,14 +350,14 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     expect(ws.definition.dir).toBe(agent);
     expect(ws.workspace).toBe(host);
 
-    const overridden = await createPiAgentFromWorkspace(host, { model: "openai-codex/gpt-5.4" });
+    const overridden = await createPiAgentFromDir(host, { model: "openai-codex/gpt-5.4" });
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag wins
   });
 
   it("L3 creates agent state: .state/.secrets self-ignore for library callers as well as the CLI", async () => {
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await createPiAgentFromWorkspace(host);
+    await createPiAgentFromDir(host);
     const { readFile } = await import("node:fs/promises");
     expect(await readFile(join(agent, ".state", ".gitignore"), "utf8")).toBe("*\n");
     // .secrets carries the traveling variant: template + protection stay committable.
@@ -373,9 +373,9 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));
-    const overridden = await createPiAgentFromWorkspace(host, { sessionsDir: ext });
+    const overridden = await createPiAgentFromDir(host, { sessionsDir: ext });
     expect(overridden.sessionsDir).toBe(ext);
-    const defaulted = await createPiAgentFromWorkspace(host);
+    const defaulted = await createPiAgentFromDir(host);
     expect(defaulted.sessionsDir).toBe(join(agent, ".state", "sessions"));
   });
 
@@ -385,10 +385,10 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     // global one) overrides — the same precedence shape as sessionsDir.
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    const defaulted = await createPiAgentFromWorkspace(host);
+    const defaulted = await createPiAgentFromDir(host);
     expect(defaulted.authPath).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");
-    const overridden = await createPiAgentFromWorkspace(host, { authPath: shared });
+    const overridden = await createPiAgentFromDir(host, { authPath: shared });
     expect(overridden.authPath).toBe(shared);
   });
 
@@ -399,7 +399,7 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     const vol = await mkdtemp(join(tmpdir(), "fa-sessions-"));
-    await createPiAgentFromWorkspace(host, { sessionsDir: vol });
+    await createPiAgentFromDir(host, { sessionsDir: vol });
     const { readFile } = await import("node:fs/promises");
     expect(await readFile(join(agent, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
   });
@@ -409,7 +409,7 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     const saved = process.env.FASTAGENT_MODEL;
     delete process.env.FASTAGENT_MODEL;
     try {
-      await expect(createPiAgentFromWorkspace(host)).rejects.toThrow(/missing model/);
+      await expect(createPiAgentFromDir(host)).rejects.toThrow(/missing model/);
     } finally {
       if (saved !== undefined) process.env.FASTAGENT_MODEL = saved;
     }

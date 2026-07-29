@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { AGENT_DIR, resolvePlacement } from "../../engines/pi/config.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
-import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
@@ -43,7 +43,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
       ),
     );
   }
-  const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(fireDir, {
+  const { agent, modelSpec, authPath } = await createPiAgentFromDir(fireDir, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);

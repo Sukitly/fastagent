@@ -8,7 +8,7 @@ import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolvePlacement } from "../../engines/pi/config.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
-import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -55,7 +55,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   loadDotEnv(failStartupOn(() => resolvePlacement(dir)).agentDir);
   installProxyFetch();
 
-  const a = await createPiAgentFromWorkspace(dir, {
+  const a = await createPiAgentFromDir(dir, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
@@ -83,7 +83,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   });
 }
 
-type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
+type Assembled = Awaited<ReturnType<typeof createPiAgentFromDir>>;
 
 /** The agents/skills/tools/collisions report lines. */
 function reportAgentsSkillsTools(a: Assembled): void {

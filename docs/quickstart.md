@@ -29,17 +29,18 @@ fastagent init my-agent
 cd my-agent
 ```
 
-The default scaffold is a **self-iterating agent** — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh agent is minimal:
+The default scaffold is a **self-iterating agent** — it is files, and it can edit its own definition (persona.md and skills are re-read every turn). The agent lands in `fastagent/`; the directory around it is its WORKSPACE — what it works on, and where its `AGENTS.md` is read from:
 
 ```txt
-my-agent/
-├── persona.md                         # the agent's identity — how to improve yourself
-├── skills/writing-great-skills/       # the example skill: how to author skills well
-├── tools/fetch-url.ts                 # an example code tool
-├── fastagent.config.mjs
-├── package.json
-├── .env.example
-└── .gitignore
+my-agent/                              # the workspace — the agent's cwd, untouched by init
+└── fastagent/                         # the agent
+    ├── persona.md                     # its identity — how to improve yourself
+    ├── skills/writing-great-skills/   # the example skill: how to author skills well
+    ├── tools/fetch-url.ts             # an example code tool
+    ├── fastagent.config.mjs
+    ├── package.json
+    ├── .secrets/.env.example          # secrets live here, never committed
+    └── .gitignore
 ```
 
 `persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. For a agent with no code tool or dependencies (persona.md + the skill + config only):
@@ -56,7 +57,7 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** That is the only mode: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. The placement is structural, marked by the directory name itself, never configured or detected.
+**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. The placement is structural, marked by the directory name itself, never configured or detected.
 
 A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
@@ -98,7 +99,7 @@ data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"
 data: {"type":"completed"}
 ```
 
-Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.state/sessions`), so a dev restart keeps conversation history.
+Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `fastagent/.state/sessions`), so a dev restart keeps conversation history.
 
 ## 4. Try authoring loops
 

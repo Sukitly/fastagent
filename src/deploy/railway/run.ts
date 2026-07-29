@@ -212,7 +212,7 @@ export async function deployRailwayRun(
   const machineryVars = [
     `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`,
     `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
-    ...(plan.dockerfilePath ? [`RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`] : []),
+    `RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`,
   ];
   log(
     `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${Object.keys(plan.secrets).length} secret(s)…`,

@@ -27,9 +27,9 @@ export type {
 
 export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 export {
-  createPiAgentFromWorkspace,
-  type CreatePiAgentFromWorkspaceOptions,
-} from "./engines/pi/workspace.ts";
+  createPiAgentFromDir,
+  type CreatePiAgentFromDirOptions,
+} from "./engines/pi/open.ts";
 export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
 
 export { defineConfig, listModels, resolveModel, type FastagentConfig } from "./engines/pi/config.ts";

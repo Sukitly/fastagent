@@ -142,14 +142,14 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromWorkspace` always does this, passing the agent dir's parent.
+Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` always does this, passing the agent dir's parent.
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
-### `createPiAgentFromWorkspace`
+### `createPiAgentFromDir`
 
 ```ts
-function createPiAgentFromWorkspace(
+function createPiAgentFromDir(
   dir: string,
   options?: { model?: string; sessionsDir?: string; authPath?: string; serving?: boolean },
 ): Promise<{
@@ -493,7 +493,7 @@ with `unsupported_capability`.
 For agent assembly the store lives inside the opener, so ask the opener to wire the hub:
 
 ```ts
-const { agent, sessionControl } = await createPiAgentFromWorkspace(dir, { sessionControl: true });
+const { agent, sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
 ```
 
 ### Remote (HTTP + SSE)

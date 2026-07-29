@@ -134,7 +134,7 @@ The pi reference implementation has three reusable rungs:
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromWorkspace` sits above L2. It resolves the placement (`resolvePlacement`), config,
+`createPiAgentFromDir` sits above L2. It resolves the placement (`resolvePlacement`), config,
 model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
 assembly rather than carrying parallel implementations.
 

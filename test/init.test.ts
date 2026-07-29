@@ -4,7 +4,7 @@ import { access, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPiAgentFromWorkspace } from "../src/index.ts";
+import { createPiAgentFromDir } from "../src/index.ts";
 import { ensureSecretsDirSelfIgnored, loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { nextStepCd, scaffoldAgent } from "../src/scaffold/init.ts";
 
@@ -98,7 +98,7 @@ describe("init: scaffoldAgent", () => {
     );
 
     // The scaffolded agent ASSEMBLES: ① persona + tools from fastagent/, ② context walked from the workspace.
-    const a = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.5" });
+    const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
     expect(a.agentDir).toBe(join(dir, "fastagent"));
     expect(a.workspace).toBe(dir);
     expect(a.definition.persona).toContain("Persona");
@@ -141,7 +141,7 @@ describe("init: scaffoldAgent", () => {
 
     // No tool to import → dev assembles with zero edits and zero network. The scaffold presets no
     // model (first-run pick writes it back), so assembly is exercised with an explicit spec.
-    const { agent, modelSpec } = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.5" });
+    const { agent, modelSpec } = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
     expect(typeof agent.invoke).toBe("function");
     expect(modelSpec).toBe("openai-codex/gpt-5.5");
   });
@@ -222,7 +222,7 @@ describe("init: scaffoldAgent", () => {
     expect(await cliInit(["init"], done)).toMatch(/already a fastagent agent/);
   });
 
-  it("createPiAgentFromWorkspace wires the placement end-to-end: persona/tools from the agent dir, ② context from the workspace", async () => {
+  it("createPiAgentFromDir wires the placement end-to-end: persona/tools from the agent dir, ② context from the workspace", async () => {
     const host = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await writeFile(join(host, "AGENTS.md"), "# Host repo context\n"); // ② at the workspace
     const root = join(host, "fastagent");
@@ -234,7 +234,7 @@ describe("init: scaffoldAgent", () => {
       `export default { description: "d", parameters: { type: "object" }, async execute() { return { content: [], details: "" }; } };`,
     );
 
-    const a = await createPiAgentFromWorkspace(host); // model from config; no invoke, so no auth/network
+    const a = await createPiAgentFromDir(host); // model from config; no invoke, so no auth/network
     expect(a.agentDir).toBe(root);
     expect(a.workspace).toBe(host);
     expect(a.definition.persona).toContain("Repo Bot"); // ① from the agent dir
@@ -242,7 +242,7 @@ describe("init: scaffoldAgent", () => {
     expect(a.toolNames).toContain("foo"); // discovered from the agent dir, not the workspace
 
     // Entry point never changes the answer: resolving from INSIDE fastagent/ gives the same pair.
-    const b = await createPiAgentFromWorkspace(root);
+    const b = await createPiAgentFromDir(root);
     expect([b.agentDir, b.workspace]).toEqual([root, host]);
   });
 

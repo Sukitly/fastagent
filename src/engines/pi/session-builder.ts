@@ -49,7 +49,7 @@ import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
-import { resolveAgentAssembly } from "./workspace.ts";
+import { resolveAgentAssembly } from "./open.ts";
 
 /** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
 function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {

@@ -190,7 +190,7 @@ Schedules and self-scheduling require one always-running machine. Do not scale t
 
 ## Embed in an application
 
-Use `createPiAgentFromDefinition` or `createPiAgentFromWorkspace`, then mount `createInvokeHandler(agent)` in the application's route.
+Use `createPiAgentFromDefinition` or `createPiAgentFromDir`, then mount `createInvokeHandler(agent)` in the application's route.
 
 Keep authentication, users, database, session ownership, and policy in the host application.
 
