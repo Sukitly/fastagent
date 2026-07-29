@@ -218,6 +218,7 @@ describe("init: scaffoldAgent", () => {
     // command resolves the OUTER one. Refusing keeps that from being a silent no-op scaffold.
     const inside = join(await freshDir(), "fastagent");
     await mkdir(inside);
+    await writeFile(join(inside, "persona.md"), "You are terse.\n"); // a real agent, not just the name
     await expect(scaffoldAgent(inside)).rejects.toThrow(/reserved agent-directory name.*Rename it/s);
     // The refusal must not offer a way out that the next guard refuses: a subdirectory of it is
     // inside an agent, so nothing under this path can be scaffolded either.

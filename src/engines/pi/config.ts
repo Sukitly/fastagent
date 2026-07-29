@@ -216,24 +216,34 @@ const AGENT_SURFACE = ["persona.md", "skills", "tools", "channels", "schedules"]
  *  `fastagent` (an unrelated checkout, an empty leftover) resolve as a persona-less zero-config agent
  *  whose coding tools operate on its PARENT. The same evidence rule applies to both candidates, so
  *  where you invoke from still cannot change the answer. */
-export function findAgentDir(dir: string): string | undefined {
-  const base = resolve(dir);
-  const isAgent = (p: string): boolean =>
+function isAgentDir(p: string): boolean {
+  return (
     statSync(p, { throwIfNoEntry: false })?.isDirectory() === true &&
-    [...AGENT_CONFIG_NAMES, ...AGENT_SURFACE].some((name) => existsSync(join(p, name)));
-  if (basename(base) === AGENT_DIR) return isAgent(base) ? base : undefined;
-  const nested = join(base, AGENT_DIR);
-  return isAgent(nested) ? nested : undefined;
+    [...AGENT_CONFIG_NAMES, ...AGENT_SURFACE].some((name) => existsSync(join(p, name)))
+  );
 }
 
-/** The agent dir `dir` sits INSIDE (a proper ancestor named `fastagent`), or undefined. Placement
- *  resolution deliberately never walks up — the answer must not depend on how deep you stand — but
- *  "you are inside an agent, just not at its root" is the likeliest reason resolution fails, and both
- *  the refusal below and `login`'s global-fallback decision need to tell that case apart. */
+export function findAgentDir(dir: string): string | undefined {
+  const base = resolve(dir);
+  if (basename(base) === AGENT_DIR) return isAgentDir(base) ? base : undefined;
+  const nested = join(base, AGENT_DIR);
+  return isAgentDir(nested) ? nested : undefined;
+}
+
+/** The agent `dir` sits INSIDE (the nearest proper ancestor that IS an agent dir), or undefined.
+ *  Placement resolution deliberately never walks up — the answer must not depend on how deep you
+ *  stand — but "you are inside an agent, just not at its root" is the likeliest reason resolution
+ *  fails, and both the refusal below and `login`'s global-fallback decision need to tell that case
+ *  apart. Same evidence rule as {@link findAgentDir}: a same-named directory holding no definition is
+ *  not an agent, so we never claim someone is standing in one. */
 export function enclosingAgentDir(dir: string): string | undefined {
   const segments = resolve(dir).split(sep);
-  const depth = segments.slice(0, -1).lastIndexOf(AGENT_DIR);
-  return depth > 0 ? segments.slice(0, depth + 1).join(sep) : undefined;
+  for (let depth = segments.length - 2; depth > 0; depth--) {
+    if (segments[depth] !== AGENT_DIR) continue;
+    const candidate = segments.slice(0, depth + 1).join(sep);
+    if (isAgentDir(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 /**

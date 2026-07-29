@@ -56,14 +56,13 @@ export async function runAddChannel(
       failStartup(new Error("--create-app is retired — app creation is the default behavior of `add feishu`"));
     }
   }
-  const channelHome = target;
   // Preconditions before the write, so a refusal is side-effect-free. slack/feishu/lark are exceptions:
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
   // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
-  const file = join(channelHome, "channels", `${channelKind}.ts`);
-  const slackToolFile = join(channelHome, "tools", "slack-send.ts");
+  const file = join(target, "channels", `${channelKind}.ts`);
+  const slackToolFile = join(target, "tools", "slack-send.ts");
   const slackToolExisted = channelKind === "slack" ? await exists(slackToolFile) : false;
-  const existsAlready = await channelExists(channelHome, channelKind).catch(failStartup);
+  const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
   const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
@@ -72,10 +71,8 @@ export async function runAddChannel(
     }
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
-    await assertChannelReady(channelHome).catch(failStartup);
-    await scaffoldChannel(channelHome, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(
-      failStartup,
-    );
+    await assertChannelReady(target).catch(failStartup);
+    await scaffoldChannel(target, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
     if (channelKind === "slack") {
       console.error(`[fastagent] ${slackToolExisted ? "kept existing" : "created"} ${relative(target, slackToolFile)}`);
@@ -141,7 +138,7 @@ export async function runAddChannel(
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .secrets/.env`);
   }
   const install =
-    detectRuntime(channelHome, await readPackageJson(channelHome)).runtime === "bun" ? "bun install" : "npm install";
+    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
   // Next steps are printed to someone standing in their CWD, usually the workspace — but every path
   // and the install itself belong to the AGENT dir. Prefix them, or the install hits the workspace's
   // manifest (the wrong one, or none) and the file paths point at nothing. `init` does the same.

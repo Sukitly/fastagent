@@ -105,6 +105,12 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     expect(() => resolvePlacement(join(dir, "agent", "fastagent", "tools"))).toThrow(
       /is inside the agent .*fastagent but is not its root/,
     );
+
+    // …but ONLY when that ancestor really is an agent: the same evidence rule findAgentDir uses. A
+    // same-named directory holding no definition must never be reported as "the agent you are in" —
+    // the `cd` it suggests would land on this very refusal.
+    await mkdir(join(dir, "checkout", "fastagent", "examples"), { recursive: true });
+    expect(() => resolvePlacement(join(dir, "checkout", "fastagent", "examples"))).toThrow(/is not a fastagent agent/);
   });
 });
 

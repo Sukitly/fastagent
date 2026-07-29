@@ -108,7 +108,7 @@ fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--
 
 Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
 live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
-`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`.
+`tools/`, `channels/`, `schedules/`, `fastagent.config.*`, `package.json`, `.secrets/.env`.
 
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
