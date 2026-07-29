@@ -27,6 +27,7 @@
  *  never a forked Dockerfile. The build must be linux/arm64 (the platform requirement) — the ONE
  *  host where the build runs on the operator's machine (docker buildx) instead of remotely.
  */
+import { createHash } from "node:crypto";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
@@ -179,7 +180,12 @@ export function toEventBridgeCron(cron: string): { expression: string } | { erro
   if (fields.length !== 5) {
     return { error: `EventBridge supports 5-field cron only (got ${fields.length} fields)` };
   }
-  const [min, hour, dom, mon, dow] = fields as [string, string, string, string, string];
+  const [min, hour, rawDom, mon, rawDow] = fields as [string, string, string, string, string];
+  // Croner accepts `?` as a synonym for `*` in either day field; EventBridge gives it a DIFFERENT
+  // meaning (exactly one of the two must be `?`, the other restricted). Normalise to `*` FIRST, or a
+  // valid `0 9 ? * MON` reads as "both days restricted" and a valid `0 9 * * ?` emits two `?`.
+  const dom = rawDom === "?" ? "*" : rawDom;
+  const dow = rawDow === "?" ? "*" : rawDow;
   if (/[L#]/i.test(dow) || /[L#]/i.test(dom)) {
     return { error: "L/# day forms don't translate to EventBridge numbering — set this schedule up manually" };
   }
@@ -275,6 +281,8 @@ async function invoke(envelope) {
     )).FunctionUrl;
   }
   if (ownUrl) envelope.wake = { url: ownUrl };
+  // Authenticates this envelope as coming from the forwarder (see the template's FastagentIngressSecret).
+  envelope.auth = process.env.INGRESS_SECRET;
   // 12 h: comfortably longer than a session's 8 h compute ceiling, so the pair minted with an
   // envelope stays usable for that session's whole life (the snapshot may be pushed much later,
   // when background work finally settles).
@@ -300,9 +308,20 @@ async function syncAlarms(alarms, ctx) {
   const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = require("@aws-sdk/client-scheduler");
   const sch = new SchedulerClient({});
   let failed = 0;
+  // Alarm name = a stable hash of the WHOLE wake id. A prefix of the id would collide (two wakes
+  // sharing 8 hex chars), and a collision is INDISTINGUISHABLE from the legitimate re-arm below:
+  // the second wake would "update" the first's alarm and silently steal its fire time.
+  const names = new Map();
   for (const a of alarms) {
+    const name = process.env.WAKE_PREFIX + crypto.createHash("sha256").update(a.id).digest("hex").slice(0, 16);
+    if (names.has(name)) {
+      failed += 1;
+      console.log(\`alarm name collision \${name}: \${names.get(name)} vs \${a.id}\`);
+      continue;
+    }
+    names.set(name, a.id);
     const p = {
-      Name: process.env.WAKE_PREFIX + a.id.slice(0, 8),
+      Name: name,
       ScheduleExpression: \`at(\${a.at.slice(0, 19)})\`,
       ScheduleExpressionTimezone: "UTC",
       FlexibleTimeWindow: { Mode: "OFF" },
@@ -375,11 +394,32 @@ exports.handler = async (event, ctx) => {
 `;
 }
 
+/**
+ * The EventBridge physical name for a schedule. A schedule's local name is an arbitrary MODULE FILE
+ * NAME (`schedules/晨报.ts`, `schedules/deploy check.ts`), while AWS requires `[0-9A-Za-z-_.]+` within
+ * 64 chars — and the `fa-<agent>-` prefix already eats up to 44 of them. So: sanitize, bound the
+ * readable part, and end with a hash of the ORIGINAL name, which keeps distinct schedules distinct
+ * where sanitizing or truncation would have merged them (one rule silently firing for two).
+ */
+export function scheduleResourceName(agent: string, schedule: string): string {
+  const prefix = `fa-${agent}-`;
+  const hash = createHash("sha256").update(schedule).digest("hex").slice(0, 8);
+  const safe = schedule.replace(/[^0-9A-Za-z\-_.]+/g, "-").replace(/^-+|-+$/g, "");
+  const room = Math.max(0, 64 - prefix.length - hash.length - 1);
+  return `${prefix}${safe.slice(0, room)}-${hash}`;
+}
+
 /** The CloudFormation template — the whole topology in one stack. */
 function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; expression: string }[]): string {
   const runtimeName = toRuntimeName(input.name);
   // selfSchedule needs the forwarder too: it is both the wake-alarm registrar and the poke target.
+  // TWO distinct needs, deliberately not one flag: the Lambda exists whenever something must reach the
+  // runtime from outside (EventBridge targets included), but a PUBLIC Function URL is only justified by
+  // an inbound sender that cannot SigV4-sign — a webhook channel, or selfSchedule's alarm callback. A
+  // schedule-only deployment that also minted a URL would expose the builtin unauthenticated
+  // POST /invoke (serve.ts mounts it when a workspace has no channels) to the whole internet.
   const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
+  const needsFunctionUrl = input.routeChannels.length > 0 || input.selfSchedule;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
@@ -426,6 +466,21 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     if (!s.required) params.push(`    Default: ""`);
     params.push(`    NoEcho: true`, `    Description: ${s.hint}`);
     envLines.push(`        ${s.name}: !Ref ${p}`);
+  }
+  if (needsForwarder) {
+    // The INGRESS secret authenticates forwarder→runtime envelopes. Without it the envelope union is
+    // an unauthenticated control plane: `InvokeAgentRuntime` is an ordinary IAM action, so any
+    // principal holding it could forge a `schedule-fire`, or ride `state`/`wake` on a public `invoke`
+    // to redirect the state snapshot (exfiltrating auth.json) or the wake-alarm callback (leaking the
+    // wake secret) to an address of their choosing. Public `invoke` stays unauthenticated by design —
+    // it is the programmatic data plane — but it may not carry internal fields.
+    params.push(
+      `  FastagentIngressSecret:`,
+      `    Type: String`,
+      `    NoEcho: true`,
+      `    Description: shared secret authenticating forwarder→runtime envelopes (any random string; --run mints one)`,
+    );
+    envLines.push(`        FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret`);
   }
   if (input.selfSchedule) {
     // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder
@@ -568,6 +623,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
             `          WAKE_PREFIX: fa-${input.name}-wk-`,
           ]
         : []),
+      `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
       `          STATE_BUCKET: !Ref StateBucket`,
       `          STATE_KEY: ${STATE_KEY}`,
       `      # From S3, not inline: the forwarder mints SigV4-presigned URLs for the state snapshot and`,
@@ -576,6 +632,10 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `      Code:`,
       `        S3Bucket: !Ref StateBucket`,
       `        S3Key: !Ref ForwarderS3Key`,
+    );
+  }
+  if (needsFunctionUrl) {
+    lines.push(
       ``,
       `  ForwarderUrl:`,
       `    Type: AWS::Lambda::Url`,
@@ -595,15 +655,16 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       ``,
       `  # Function URLs created after Oct 2025 require lambda:InvokeFunction IN ADDITION to`,
       `  # lambda:InvokeFunctionUrl for public (NONE) access — with only the first, every request 403s`,
-      `  # (found by the first real deploy). This action cannot carry the FunctionUrlAuthType condition;`,
-      `  # the bare * principal is security-equivalent to the public URL itself — unauthenticated senders`,
-      `  # were already the model, and authenticity is verified downstream by each channel's signature check.`,
+      `  # (found by the first real deploy). InvokedViaFunctionUrl scopes it to URL traffic: without it`,
+      `  # the bare * principal would also let any AWS principal call the Lambda API directly, bypassing`,
+      `  # the Function URL event shape to forge internal events.`,
       `  ForwarderInvokePermission:`,
       `    Type: AWS::Lambda::Permission`,
       `    Properties:`,
       `      FunctionName: !Ref Forwarder`,
       `      Action: lambda:InvokeFunction`,
       `      Principal: "*"`,
+      `      InvokedViaFunctionUrl: true`,
     );
     if (input.selfSchedule) {
       lines.push(
@@ -663,7 +724,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
         `  Schedule${logicalId(fact.name)}:`,
         `    Type: AWS::Scheduler::Schedule`,
         `    Properties:`,
-        `      Name: fastagent-${input.name}-${fact.name}`,
+        `      Name: ${scheduleResourceName(input.name, fact.name)}`,
         `      ScheduleExpression: ${expression}`,
         `      ScheduleExpressionTimezone: ${fact.tz ?? "Etc/UTC"}`,
         `      FlexibleTimeWindow: { Mode: "OFF" }`,
@@ -678,7 +739,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
   }
 
   lines.push(``, `Outputs:`, `  RuntimeArn:`, `    Value: !GetAtt Runtime.AgentRuntimeArn`);
-  if (needsForwarder) {
+  if (needsFunctionUrl) {
     lines.push(`  ForwarderUrl:`, `    Value: !GetAtt ForwarderUrl.FunctionUrl`);
   }
   return `${lines.join("\n")}\n`;
@@ -728,7 +789,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     paramNames.set(p, s.name);
   }
 
+  // TWO distinct needs, deliberately not one flag: the Lambda exists whenever something must reach the
+  // runtime from outside (EventBridge targets included), but a PUBLIC Function URL is only justified by
+  // an inbound sender that cannot SigV4-sign — a webhook channel, or selfSchedule's alarm callback. A
+  // schedule-only deployment that also minted a URL would expose the builtin unauthenticated
+  // POST /invoke (serve.ts mounts it when a workspace has no channels) to the whole internet.
   const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
+  const needsFunctionUrl = input.routeChannels.length > 0 || input.selfSchedule;
   const artifacts: Artifact[] = [
     { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated) },
     ...(needsForwarder ? [{ path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() }] : []),
@@ -750,7 +817,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# 1. ECR repository + the deployment bucket (one-time; skip what exists). The bucket lives OUTSIDE`,
     `#    the stack on purpose: it holds the agent's state snapshot, which must survive a delete-stack.`,
     `aws ecr create-repository --repository-name ${repo}`,
-    `aws s3api create-bucket --bucket ${bucketHint} --region <region>`,
+    `aws s3api create-bucket --bucket ${bucketHint} --region us-east-1   # us-east-1 ONLY`,
+    `aws s3api create-bucket --bucket ${bucketHint} --region <region> \\   # every OTHER region`,
+    `  --create-bucket-configuration LocationConstraint=<region>`,
     `aws s3api put-public-access-block --bucket ${bucketHint} \\`,
     `  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true`,
     ``,
@@ -795,7 +864,12 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       needsForwarder ? ` StateBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
     }${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
     ``,
-    `# 4. Read the outputs (the runtime ARN + the public webhook URL):`,
+    needsFunctionUrl
+      ? `# 4. Read the outputs (the runtime ARN + the public webhook URL):`
+      : `# 4. Read the outputs (the runtime ARN — this topology has NO public URL: nothing outside AWS`,
+    ...(needsFunctionUrl
+      ? []
+      : [`#    sends to it, so no Function URL is created and the agent is reachable only via SigV4).`]),
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
   );
 

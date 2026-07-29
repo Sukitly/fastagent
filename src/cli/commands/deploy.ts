@@ -7,6 +7,7 @@
  * Read-only on the definition; the only writes are generated artifacts (never clobbered without
  * --force). `--run` drives the target CLI instead of printing.
  */
+import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore.ts";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -282,6 +283,16 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       const msg = `schedule "${u.name}" cannot be expressed as an EventBridge rule — ${u.reason}`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg} — it will NOT fire on this deployment`);
+    }
+    // Host capability limit, stated at plan time. GitHub's own webhook contract is 25 MiB, but a
+    // Lambda Function URL request caps at 6 MB — so on this host a large payload cannot arrive at
+    // all. Better a sentence here than an opaque 502 the first time someone pushes a big diff.
+    if (channels.includes("github")) {
+      console.error(
+        `[fastagent] note: on AgentCore a webhook body is capped at ~${Math.round(MAX_WEBHOOK_BODY_BYTES / (1 << 20))} MiB ` +
+          `(the forwarder's Function URL limit); the GitHub channel accepts 25 MiB on a resident host, so the largest ` +
+          `payloads are rejected here rather than delivered`,
+      );
     }
     // The template IS the topology (EventBridge rules, wake wiring, secrets) — a kept generated
     // template that no longer matches the definition would deploy a stack silently missing the
@@ -616,6 +627,9 @@ async function runDeployAgentcore(params: {
   // The wake-alarm shared secret (container ↔ forwarder). Minted fresh each run — both sides receive
   // the SAME parameter, so rotation is atomic; it never needs to be remembered locally.
   if (selfSchedule) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
+  // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM
+  // principal's. Minted fresh each run — both sides receive the SAME parameter, so rotation is atomic.
+  if (params.needsForwarder) secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
   if (needsModelCredential) {
     failStartup(
       new Error(

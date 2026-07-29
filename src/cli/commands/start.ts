@@ -109,12 +109,16 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
   // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment
   // degrades to awake-only wakes — warned, never silent.
+  let onStateReady: (() => void) | undefined;
   if (agentcore && config.selfSchedule) {
     const wakeSecret = process.env.FASTAGENT_WAKE_SECRET;
     if (wakeSecret) {
       const sink = createWakeAlarmSink({ secret: wakeSecret });
       setWakeupsSink(sink);
-      reconcileWakeAlarms(stateRoot, sink); // pending wakes may have lost their alarms across a redeploy
+      // NOT here: at boot the state mount is whatever the platform just provisioned — after a runtime
+      // version update that is EMPTY, so a reconcile now would see no pending wake-ups and conclude
+      // there is nothing to re-arm. It runs once the snapshot has been restored (mountAgentcore).
+      onStateReady = () => reconcileWakeAlarms(stateRoot, sink);
       log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
     } else {
       log.warn(
@@ -129,7 +133,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   let routes = withControl.routes;
   if (agentcore) {
     try {
-      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules });
+      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules, onStateReady });
     } catch (e) {
       failStartup(e);
     }

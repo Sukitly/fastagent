@@ -178,9 +178,9 @@ export function mountSessionControl(
  */
 export function mountAgentcore(
   routes: Routes,
-  options: { agent: Agent; stateRoot: string; schedules: LoadedSchedule[] },
+  options: { agent: Agent; stateRoot: string; schedules: LoadedSchedule[]; onStateReady?: () => void },
 ): Routes {
-  const { agent, stateRoot, schedules } = options;
+  const { agent, stateRoot, schedules, onStateReady } = options;
   const mounted = agentcoreRoutes({
     routes,
     agent,
@@ -191,6 +191,10 @@ export function mountAgentcore(
     // forwarder mints per envelope. Always wired on this path — the platform gives no other way to
     // keep an agent's memory across a deploy.
     stateSync: createStateSync({ stateRoot }),
+    // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call. Absent =
+    // no forwarder in this topology, so only the public `invoke` kind is servable.
+    ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
+    onStateReady,
     fire:
       schedules.length === 0
         ? undefined

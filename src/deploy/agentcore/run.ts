@@ -211,40 +211,53 @@ export async function deployAgentcoreRun(
       if ((await aws(createArgs)).code !== 0) {
         return gate(`\`aws s3api create-bucket --bucket ${bucket}\` failed — see the output above; fix and re-run`);
       }
-      if (
-        (
-          await aws([
-            "s3api",
-            "put-public-access-block",
-            "--bucket",
-            bucket,
-            "--public-access-block-configuration",
-            "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
-          ])
-        ).code !== 0
-      ) {
-        return gate(`could not block public access on ${bucket} — refusing to store agent state in it`);
+    }
+    // CONVERGE the properties on EVERY deploy, not just at creation. They are what makes the bucket
+    // safe (nothing public) and recoverable (a bad write is not the end of the agent's memory); doing
+    // them only in the create branch means a run that failed halfway leaves a bucket that looks
+    // finished forever after, and ignoring the exit codes means "deployed" would be reported over a
+    // world-readable or unversioned store of the agent's credentials.
+    const converge: { label: string; args: string[] }[] = [
+      {
+        label: "block public access",
+        args: [
+          "s3api",
+          "put-public-access-block",
+          "--bucket",
+          bucket,
+          "--public-access-block-configuration",
+          "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+        ],
+      },
+      {
+        label: "enable versioning",
+        args: ["s3api", "put-bucket-versioning", "--bucket", bucket, "--versioning-configuration", "Status=Enabled"],
+      },
+      {
+        label: "set the snapshot lifecycle",
+        args: [
+          "s3api",
+          "put-bucket-lifecycle-configuration",
+          "--bucket",
+          bucket,
+          "--lifecycle-configuration",
+          JSON.stringify({
+            Rules: [
+              {
+                ID: "fastagent-expire-old-snapshots",
+                Status: "Enabled",
+                Filter: { Prefix: "state/" },
+                NoncurrentVersionExpiration: { NoncurrentDays: 7 },
+              },
+            ],
+          }),
+        ],
+      },
+    ];
+    for (const step of converge) {
+      if ((await aws(step.args)).code !== 0) {
+        return gate(`could not ${step.label} on ${bucket} — refusing to store agent state in it; fix and re-run`);
       }
-      // Versioning + a short noncurrent expiry: the snapshot is the agent's whole memory, so one bad
-      // write should be recoverable, but keeping every turn's copy forever would be a slow leak.
-      await aws(["s3api", "put-bucket-versioning", "--bucket", bucket, "--versioning-configuration", "Status=Enabled"]);
-      await aws([
-        "s3api",
-        "put-bucket-lifecycle-configuration",
-        "--bucket",
-        bucket,
-        "--lifecycle-configuration",
-        JSON.stringify({
-          Rules: [
-            {
-              ID: "fastagent-expire-old-snapshots",
-              Status: "Enabled",
-              Filter: { Prefix: "state/" },
-              NoncurrentVersionExpiration: { NoncurrentDays: 7 },
-            },
-          ],
-        }),
-      ]);
     }
     // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so
     // identical source must map to an identical key (hence the deterministic zip) and changed source
@@ -343,9 +356,41 @@ export async function deployAgentcoreRun(
   //     image (the exact silent trap the first real deploy hit). Failure is advisory, never a gate:
   //     on a first deploy the session does not exist yet, and the stop is an immediacy optimization
   //     — the platform's reclaim gets there eventually. An in-flight turn on the old compute is cut;
-  //     channels with replay (telegram) re-run it on the new compute. Only when a forwarder exists
+  //     the checkpoint above is what lets a replaying channel re-run it. Only when a forwarder exists
   //     (the ingress session is the forwarder's session; pure-invoke deployments have none).
-  if (url) {
+  // Keyed on the FORWARDER, not on the public URL: a schedule-only deployment has no URL but still
+  // has an ingress session, and its next EventBridge fire would otherwise land on compute still
+  // running the previous image.
+  if (plan.needsForwarder) {
+    // CHECKPOINT FIRST. The stop cuts whatever turn is running, and that turn's durable intent was
+    // written to a mount the version update erases — so without this flush "replay re-runs it" would
+    // be false: the intent never reaches S3 and the message is simply gone. Best-effort: a session
+    // that is not up has nothing to lose, and a failure here must not block the (already applied)
+    // deploy — it only downgrades the promise, so say so.
+    const checkpoint = await aws(
+      [
+        "bedrock-agentcore",
+        "invoke-agent-runtime",
+        "--agent-runtime-arn",
+        runtimeArn,
+        "--runtime-session-id",
+        ingressSessionId(plan.name),
+        "--payload",
+        JSON.stringify({ kind: "checkpoint", auth: plan.secrets.FASTAGENT_INGRESS_SECRET }),
+        "--cli-binary-format",
+        "raw-in-base64-out",
+        "/dev/stdout",
+      ],
+      { capture: true, captureStderr: true },
+    );
+    if (checkpoint.code === 0) {
+      log("checkpointed the ingress session (an interrupted turn can be replayed)");
+    } else {
+      log(
+        "note: could not checkpoint before stopping — a turn in flight right now would be lost rather " +
+          "than replayed (a session that is not running has nothing to checkpoint)",
+      );
+    }
     log("stopping the ingress session so the new image serves immediately…");
     const stopCommand = [
       "bedrock-agentcore",

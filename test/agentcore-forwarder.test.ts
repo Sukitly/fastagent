@@ -27,6 +27,7 @@ function loadForwarder(options: HarnessOptions = {}) {
   const env = {
     RUNTIME_ARN: "arn:aws:bedrock-agentcore:us-east-1:1:runtime/x",
     INGRESS_SESSION_ID: "fastagent-ingress-x-0000000000000000",
+    INGRESS_SECRET: "ingress-s3cret",
     ...options.env,
   };
   const envelopes: Envelope[] = [];
@@ -246,7 +247,7 @@ describe("agentcore forwarder (executed)", () => {
         {
           type: "create",
           input: expect.objectContaining({
-            Name: "fa-x-wk-abcd1234",
+            Name: expect.stringMatching(/^fa-x-wk-[0-9a-f]{16}$/),
             ScheduleExpression: "at(2026-07-28T10:30:00)",
             ActionAfterCompletion: "DELETE",
             Target: expect.objectContaining({
@@ -396,5 +397,59 @@ describe("agentcore forwarder (executed)", () => {
       await f.handler(webhookEvent());
       expect(f.envelopes[0]!.state).toBeUndefined();
     });
+  });
+});
+
+describe("agentcore forwarder: envelope authentication + alarm identity", () => {
+  it("stamps the ingress secret on EVERY envelope — the runtime cannot otherwise tell it from any IAM caller", async () => {
+    const f = loadForwarder();
+    await f.handler(webhookEvent());
+    await f.handler({ scheduleFire: { name: "digest", slot: "2026-07-28T09:00:00Z" } });
+    await f.handler({ wakePoke: true });
+    expect(f.envelopes.map((e) => e.auth)).toEqual(["ingress-s3cret", "ingress-s3cret", "ingress-s3cret"]);
+  });
+
+  it("names an alarm by a hash of the WHOLE wake id — a shared prefix must not steal another's fire time", async () => {
+    const env = { WAKE_SECRET: "s", WAKE_ROLE_ARN: "r", WAKE_PREFIX: "fa-x-wk-" };
+    const shared = "abcd1234";
+    const f = loadForwarder({ env });
+    const res = await f.handler(
+      webhookEvent({
+        rawPath: "/__fastagent/wake-alarm",
+        body: JSON.stringify({
+          secret: "s",
+          alarms: [
+            { id: `${shared}-first-wake`, at: "2026-07-28T10:30:00.000Z" },
+            { id: `${shared}-second-wake`, at: "2026-07-28T22:00:00.000Z" },
+          ],
+        }),
+      }),
+    );
+
+    expect(res.statusCode).toBe(200);
+    const names = f.scheduleCalls.map((c) => c.input.Name as string);
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2); // two wakes, two alarms — not one silently overwritten
+    for (const name of names) expect(name).toMatch(/^fa-x-wk-[0-9a-f]{16}$/);
+    expect(f.scheduleCalls.map((c) => c.type)).toEqual(["create", "create"]); // no bogus "update"
+  });
+
+  it("a genuine name collision is a FAILURE, not a silent update", async () => {
+    const env = { WAKE_SECRET: "s", WAKE_ROLE_ARN: "r", WAKE_PREFIX: "fa-x-wk-" };
+    const f = loadForwarder({ env });
+    const res = await f.handler(
+      webhookEvent({
+        rawPath: "/__fastagent/wake-alarm",
+        body: JSON.stringify({
+          secret: "s",
+          alarms: [
+            { id: "same-id", at: "2026-07-28T10:30:00.000Z" },
+            { id: "same-id", at: "2026-07-28T22:00:00.000Z" },
+          ],
+        }),
+      }),
+    );
+    expect(res.statusCode).toBe(500);
+    expect(f.scheduleCalls).toHaveLength(1);
   });
 });

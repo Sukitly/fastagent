@@ -20,10 +20,11 @@
  */
 import { Buffer } from "node:buffer";
 import type { Dirent } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { log } from "../log.ts";
+import { beginWork } from "./busy.ts";
 
 /** Snapshot envelope version — an unknown version fails the restore loudly (never a silent skip). */
 export const SNAPSHOT_VERSION = 1;
@@ -34,13 +35,20 @@ export const MAX_SNAPSHOT_BYTES = 64 << 20;
 /** Warn past this — the operator should know the snapshot is getting expensive to round-trip. */
 const WARN_SNAPSHOT_BYTES = 16 << 20;
 
+/** Upload deadline. Generous (a large snapshot on a cold network) but finite. */
+const PUT_TIMEOUT_MS = 60_000;
+
 /**
- * Restored ABSENT-ONLY: the deploy materializes `auth.json` from FASTAGENT_AUTH_SEED (captured on
- * the builder machine at deploy time, so it is at least as fresh as the snapshot's) before the first
- * invocation. Overwriting it with an older snapshot copy could hand back a rotated-away OAuth
- * refresh token. Everything else — sessions, channel state, wake-ups — must come back verbatim.
+ * Files the snapshot must NOT carry. `control.json` is a PER-BOOT artifact (this process's control
+ * URL + token, written once the port is known): snapshotting it would hand the next boot a file
+ * advertising a dead endpoint and a token that no longer matches the one in memory.
+ *
+ * Everything else is durable and restores VERBATIM — including `auth.json`. The deploy seeds that
+ * file from the builder machine, but the box's own copy is the one that has been REFRESHED, and this
+ * snapshot is its volume: the same rule every other host states ("a credential already refreshed on
+ * the volume is never overwritten"). The seed is bootstrap for a snapshot that has none.
  */
-const PREFER_LOCAL = new Set(["auth.json"]);
+const EXCLUDED = new Set(["control.json"]);
 
 interface StateSnapshot {
   v: number;
@@ -73,16 +81,15 @@ async function walk(root: string, dir = root, out: string[] = []): Promise<strin
 }
 
 /** Pack the whole state root into one gzipped snapshot object. */
-export async function packStateRoot(stateRoot: string): Promise<Buffer> {
+export async function packStateRoot(stateRoot: string, maxBytes = MAX_SNAPSHOT_BYTES): Promise<Buffer> {
   const files: Record<string, string> = {};
   let raw = 0;
   for (const rel of await walk(stateRoot)) {
+    if (EXCLUDED.has(rel)) continue;
     const content = await readFile(join(stateRoot, rel));
     raw += content.byteLength;
-    if (raw > MAX_SNAPSHOT_BYTES) {
-      throw new Error(
-        `state root exceeds ${MAX_SNAPSHOT_BYTES} bytes — it cannot be snapshotted for cross-deploy durability`,
-      );
+    if (raw > maxBytes) {
+      throw new Error(`state root exceeds ${maxBytes} bytes — it cannot be snapshotted for cross-deploy durability`);
     }
     files[rel] = content.toString("base64");
   }
@@ -110,22 +117,13 @@ export async function unpackIntoStateRoot(stateRoot: string, packed: Buffer): Pr
     if (rel.startsWith("/") || rel.split("/").includes("..")) {
       throw new Error(`state snapshot contains an unsafe path (${rel})`);
     }
+    if (EXCLUDED.has(rel)) continue; // never write a per-boot artifact from an older boot
     const target = join(stateRoot, rel);
-    if (PREFER_LOCAL.has(rel) && (await exists(target))) continue;
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, Buffer.from(b64, "base64"));
     written += 1;
   }
   return written;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export interface StateSyncOptions {
@@ -165,13 +163,18 @@ export function createStateSync(options: StateSyncOptions): StateSync {
   let restored = false;
   let saving: Promise<void> | undefined;
   let queued = false;
+  // Whether the upload loop is still able to pick up another round. Counting the upload as in-flight
+  // work (below) means ITS completion is itself a 0-in-flight edge, which re-enters save() — without
+  // this the snapshot would queue a redundant follow-up after every single upload.
+  let looping = false;
 
   const runRestore = async (urls: StateUrls): Promise<void> => {
     const res = await doFetch(urls.getUrl, { method: "GET" });
-    if (res.status === 404 || res.status === 403) {
-      // 403 is what S3 returns for a missing key when the caller may not ListBucket — the forwarder's
-      // role is object-scoped, so "absent" arrives either way. A genuinely broken signature also
-      // lands here; the deploy just created the pair, so treating it as first boot is the safe read.
+    // ONLY a proven 404 is "first deploy". The signer holds s3:GetObject on exactly this key, so a
+    // missing object answers NoSuchKey/404; a 403 means an expired or malformed signature, or a
+    // revoked permission — i.e. the snapshot may well exist. Reading 403 as "absent" would serve an
+    // empty agent and then overwrite the real snapshot with that emptiness.
+    if (res.status === 404) {
       log.info("[agentcore] no state snapshot yet — starting from an empty state root (first deploy)");
       restored = true;
       return;
@@ -183,13 +186,28 @@ export function createStateSync(options: StateSyncOptions): StateSync {
   };
 
   const runSave = async (): Promise<void> => {
-    do {
-      queued = false;
-      if (!restored || !urls) return;
-      const body = await packStateRoot(stateRoot);
-      const res = await doFetch(urls.putUrl, { method: "PUT", body: new Uint8Array(body) });
-      if (!res.ok) throw new Error(`state snapshot PUT failed: ${res.status}`);
-    } while (queued);
+    // Counted as in-flight work for its whole duration: `save()` fires on the 0-in-flight edge, the
+    // exact moment /ping starts answering Healthy — without this the platform may reclaim the microVM
+    // mid-upload and the turn that just finished is lost with only a log line. Bounded too: a hung
+    // PUT would otherwise pin `saving` forever and block every later snapshot.
+    const workDone = beginWork();
+    looping = true;
+    try {
+      do {
+        queued = false;
+        if (!restored || !urls) return;
+        const body = await packStateRoot(stateRoot);
+        const res = await doFetch(urls.putUrl, {
+          method: "PUT",
+          body: new Uint8Array(body),
+          signal: AbortSignal.timeout(PUT_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`state snapshot PUT failed: ${res.status}`);
+      } while (queued);
+    } finally {
+      looping = false;
+      workDone();
+    }
   };
 
   return {
@@ -212,7 +230,7 @@ export function createStateSync(options: StateSyncOptions): StateSync {
     save() {
       if (!restored) return; // never overwrite a good snapshot with a state root we failed to fill
       if (saving) {
-        queued = true;
+        if (looping) queued = true; // otherwise this is the upload's own completion edge, not new work
         return;
       }
       saving = runSave()

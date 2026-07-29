@@ -13,6 +13,7 @@ import {
 } from "../src/channels/agentcore.ts";
 import type { StateSync } from "../src/channels/agentcore-state.ts";
 import type { Routes } from "../src/host/node.ts";
+import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../src/schedule/scheduler.ts";
 
 /** A fake agent yielding a scripted stream (the invoke-envelope SSE path). */
@@ -24,12 +25,17 @@ function scriptedAgent(events: AgentEvent[] = [{ type: "text", delta: "hi" }, { 
   };
 }
 
+/** The forwarder→runtime shared secret (FASTAGENT_INGRESS_SECRET) in these tests. */
+const SECRET = "ingress-s3cret";
+
 interface AdapterOverrides {
   routes?: Routes;
   agent?: Agent;
   isBusy?: () => boolean;
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
   stateSync?: StateSync;
+  ingressSecret?: string;
+  onStateReady?: () => void;
 }
 
 /** A StateSync double: records the lifecycle without touching S3 or the disk. */
@@ -58,12 +64,19 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     isBusy: over.isBusy ?? (() => false),
     fire: over.fire,
     stateSync: over.stateSync,
+    ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
+    onStateReady: over.onStateReady,
   });
 
 const post = (routes: Routes, body: string): Promise<Response> | Response =>
   routes["POST /invocations"]!(new Request("http://x/invocations", { method: "POST", body }));
 
+/** Post as the FORWARDER (authenticated). */
 const postEnvelope = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Response> | Response =>
+  post(routes, JSON.stringify({ auth: SECRET, ...envelope }));
+
+/** Post as ANY IAM principal holding InvokeAgentRuntime (no shared secret). */
+const postUntrusted = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Response> | Response =>
   post(routes, JSON.stringify(envelope));
 
 describe("agentcore adapter: /ping", () => {
@@ -222,14 +235,14 @@ describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
       agent: scriptedAgent(),
       stateRoot: root,
       isBusy: () => false,
+      ingressSecret: SECRET,
     });
     await routes["POST /invocations"]!(
       new Request("http://x/invocations", {
         method: "POST",
-        body: JSON.stringify({ kind: "wake-poke", wake: { url: "https://fn.lambda-url.on.aws/" } }),
+        body: JSON.stringify({ auth: SECRET, kind: "wake-poke", wake: { url: "https://fn.lambda-url.on.aws/" } }),
       }),
     );
-    const { readWakeAlarmUrl } = await import("../src/schedule/wake-alarm.ts");
     expect(readWakeAlarmUrl(root)).toBe("https://fn.lambda-url.on.aws/");
   });
 });
@@ -249,9 +262,13 @@ describe("agentcore adapter: invoke envelope", () => {
 describe("agentcore adapter: envelope validation", () => {
   it("rejects invalid json / a missing kind / an unknown kind", async () => {
     const routes = adapter();
+    const auth = `"auth":"${SECRET}",`;
     expect((await post(routes, "{nope")).status).toBe(400);
-    expect((await post(routes, '{"no":"kind"}')).status).toBe(400);
-    expect((await post(routes, '{"kind":"mystery"}')).status).toBe(400);
+    expect((await post(routes, `{${auth}"no":"kind"}`)).status).toBe(400);
+    expect((await post(routes, `{${auth}"kind":"mystery"}`)).status).toBe(400);
+    // An unknown kind from an UNAUTHENTICATED caller is 403, not 400: the boundary runs first and the
+    // public plane is not told which kinds exist.
+    expect((await post(routes, '{"kind":"mystery"}')).status).toBe(403);
   });
 
   it("caps the envelope body", async () => {
@@ -329,5 +346,92 @@ describe("agentcore adapter: cross-deploy state", () => {
     const res = await postEnvelope(adapter({ stateSync: sync }), { kind: "invoke", session: "cli", text: "hi" });
     expect(res.status).toBe(200);
     expect(sync.seen).toEqual([]);
+  });
+});
+
+describe("agentcore adapter: the authentication boundary", () => {
+  it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
+    const fire = vi.fn(async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome);
+    const routes = adapter({ fire, routes: { "POST /hook": () => new Response("must not run") } });
+
+    for (const envelope of [
+      { kind: "schedule-fire", name: "digest", slot: "2026-07-28T09:00:00Z" },
+      { kind: "webhook", method: "POST", path: "/hook" },
+      { kind: "wake-poke" },
+    ] as AgentcoreEnvelope[]) {
+      const res = await postUntrusted(routes, envelope);
+      expect(res.status).toBe(403);
+    }
+    expect(fire).not.toHaveBeenCalled();
+  });
+
+  it("a WRONG secret is not a secret", async () => {
+    const res = await post(
+      adapter({ fire: async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome }),
+      JSON.stringify({ auth: "guessed", kind: "schedule-fire", name: "d", slot: "2026-07-28T09:00:00Z" }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("public invoke still works, but its internal fields are DROPPED (no snapshot or alarm redirect)", async () => {
+    const sync = fakeStateSync();
+    const routes = adapter({ stateSync: sync });
+
+    const res = await postUntrusted(routes, {
+      kind: "invoke",
+      session: "cli",
+      text: "hi",
+      // An attacker's addresses: exfiltrate the state snapshot / capture the wake secret.
+      state: { getUrl: "https://attacker/get", putUrl: "https://attacker/put" },
+      wake: { url: "https://attacker/" },
+    } as AgentcoreEnvelope);
+
+    expect(res.status).toBe(200); // the public data plane keeps working
+    expect(sync.seen).toEqual([]); // …but never adopted the caller's URLs
+    expect(readWakeAlarmUrl(stateRoot)).not.toBe("https://attacker/");
+  });
+
+  it("with no ingress secret configured (invoke-only topology) nothing internal is servable", async () => {
+    const routes = adapter({ ingressSecret: undefined });
+    expect((await postEnvelope(routes, { kind: "wake-poke" })).status).toBe(403);
+    expect((await postEnvelope(routes, { kind: "invoke", session: "s", text: "hi" })).status).toBe(200);
+  });
+});
+
+describe("agentcore adapter: post-restore hooks", () => {
+  it("runs onStateReady ONCE, after the restore — a boot-time reconcile would see the wiped mount", async () => {
+    const order: string[] = [];
+    const sync = fakeStateSync({
+      ready: async () => {
+        order.push("restore");
+      },
+    });
+    const onStateReady = () => order.push("reconcile");
+    const routes = adapter({ stateSync: sync, onStateReady });
+
+    await postEnvelope(routes, { kind: "wake-poke", state: { getUrl: "g", putUrl: "p" } });
+    await postEnvelope(routes, { kind: "wake-poke", state: { getUrl: "g", putUrl: "p" } });
+
+    expect(order.filter((step) => step === "reconcile")).toEqual(["reconcile"]); // exactly once
+    expect(order[0]).toBe("restore"); // …and never before the state root is authoritative
+  });
+
+  it("adopts the CURRENT envelope's wake URL after restore — a stale snapshot copy must not win", async () => {
+    const routes = adapter({
+      stateSync: fakeStateSync({
+        ready: async () => {
+          // The snapshot restores an older deployment's URL…
+          rememberWakeAlarmUrl(stateRoot, "https://old-deployment.lambda-url.on.aws/");
+        },
+      }),
+    });
+
+    await postEnvelope(routes, {
+      kind: "wake-poke",
+      state: { getUrl: "g", putUrl: "p" },
+      wake: { url: "https://current.lambda-url.on.aws/" },
+    });
+
+    expect(readWakeAlarmUrl(stateRoot)).toBe("https://current.lambda-url.on.aws/");
   });
 });

@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { crc32 } from "node:zlib";
+import { cronError } from "../src/schedule/cron.ts";
 import { describe, expect, it } from "vitest";
 import {
   type AgentcorePlanInput,
@@ -14,6 +15,7 @@ import {
   isGeneratedAgentcoreTemplate,
   ingressSessionId,
   planAgentcoreDeploy,
+  scheduleResourceName,
   stateBucketName,
   toEventBridgeCron,
   toRuntimeName,
@@ -237,6 +239,32 @@ describe("deploy agentcore: the plan", () => {
     expect(isGeneratedAgentcoreTemplate("# my hand-written template\n")).toBe(false);
   });
 
+  describe("cron translation vs the Croner dialect the workspace actually accepts", () => {
+    // Every case below is one Croner ACCEPTS: a mistranslation here either refuses a valid schedule
+    // or emits an expression EventBridge rejects at deploy time.
+    it.each([
+      ["0 9 * * MON", "cron(0 9 ? * MON *)"],
+      ["0 9 1 * *", "cron(0 9 1 * ? *)"],
+      // `?` is a Croner synonym for `*`, but carries EventBridge's "the other field is restricted"
+      // meaning — without normalising first these produced a false rejection and a double-`?`.
+      ["0 9 ? * MON", "cron(0 9 ? * MON *)"],
+      ["0 9 * * ?", "cron(0 9 * * ? *)"],
+      ["0 9 ? * *", "cron(0 9 * * ? *)"],
+    ])("%s → %s", (cron, expression) => {
+      expect(cronError(cron, undefined)).toBeUndefined(); // the premise: the workspace would accept it
+      expect(toEventBridgeCron(cron)).toEqual({ expression });
+    });
+
+    it("emits exactly one `?` — EventBridge rejects both fields wildcarded or both restricted", () => {
+      for (const cron of ["0 9 * * MON", "0 9 1 * *", "0 9 ? * MON", "0 9 * * ?", "*/5 * * * *"]) {
+        const out = toEventBridgeCron(cron);
+        expect("expression" in out).toBe(true);
+        const fields = (out as { expression: string }).expression.slice(5, -1).split(" ");
+        expect([fields[2], fields[4]].filter((f) => f === "?")).toHaveLength(1);
+      }
+    });
+  });
+
   it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
     const plan = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
@@ -302,6 +330,57 @@ describe("deploy agentcore: the plan", () => {
       const twice = zipSingleFile("index.js", Buffer.from("exports.handler = 1;"));
       expect(once.equals(twice)).toBe(true);
       expect(once.equals(zipSingleFile("index.js", Buffer.from("exports.handler = 2;")))).toBe(false);
+    });
+  });
+
+  describe("the public attack surface", () => {
+    it("a schedule-only deployment mints NO Function URL — it would expose the builtin POST /invoke", () => {
+      // serve.ts mounts an unauthenticated POST /invoke when a workspace has no channels; a public
+      // URL in front of that is an open prompt-execution endpoint for the whole internet.
+      const template = planAgentcoreDeploy(baseInput({ schedules: [{ name: "digest", cron: "0 9 * * *" }] }))
+        .artifacts[0]!.content;
+      expect(template).toContain("AWS::Lambda::Function"); // the forwarder still exists (EventBridge target)
+      expect(template).toContain("AWS::Scheduler::Schedule");
+      expect(template).not.toContain("AWS::Lambda::Url");
+      expect(template).not.toContain("lambda:InvokeFunctionUrl");
+      expect(template).not.toContain("ForwarderUrl:\n    Value");
+    });
+
+    it("a webhook channel mints one, and scopes the second permission to URL traffic", () => {
+      const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
+        .artifacts[0]!.content;
+      expect(template).toContain("AWS::Lambda::Url");
+      expect(template).toContain("Action: lambda:InvokeFunctionUrl");
+      // Without this the bare * principal would also permit direct Lambda API calls from any AWS
+      // account — bypassing the Function URL event shape to forge internal events.
+      expect(template).toContain("InvokedViaFunctionUrl: true");
+    });
+
+    it("declares the ingress secret whenever a forwarder exists, and stamps it on both sides", () => {
+      const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
+        .artifacts[0]!.content;
+      expect(template).toContain("  FastagentIngressSecret:");
+      expect(template).toContain("FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret"); // runtime
+      expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret"); // forwarder
+      // An invoke-only deployment has no forwarder, so nothing to authenticate.
+      expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).not.toContain("FastagentIngressSecret");
+    });
+  });
+
+  describe("EventBridge physical names", () => {
+    it("sanitizes, bounds and disambiguates a schedule's module name", () => {
+      const names = (n: string) => scheduleResourceName("agentcore-test", n);
+      expect(names("digest")).toMatch(/^fa-agentcore-test-digest-[0-9a-f]{8}$/);
+      // AWS requires [0-9A-Za-z-_.] within 64 chars; a module file name guarantees neither.
+      for (const raw of ["晨报", "deploy check", "a".repeat(120), "x/y"]) {
+        const out = names(raw);
+        expect(out).toMatch(/^[0-9A-Za-z\-_.]+$/);
+        expect(out.length).toBeLessThanOrEqual(64);
+      }
+      // Names that sanitize or truncate to the same readable part stay distinct — otherwise one rule
+      // would silently serve two schedules.
+      expect(names("deploy check")).not.toBe(names("deploy-check"));
+      expect(names(`${"a".repeat(120)}1`)).not.toBe(names(`${"a".repeat(120)}2`));
     });
   });
 

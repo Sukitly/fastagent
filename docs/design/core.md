@@ -472,6 +472,11 @@ mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping 
 and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
 the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
 is first boot. `auth.json` restores absent-only — the deploy seeds a fresher copy than the snapshot's.
+Only the INGRESS session is snapshotted: a direct-invoke session runs in its own storage, which the
+platform wipes on a version update, so cross-deploy memory is a property of the ingress path and the
+docs say so. `--run` sends a `checkpoint` envelope before `stop-runtime-session` — the stop cuts an
+in-flight turn whose durable intent (written pre-ACK by every replaying channel) would otherwise sit
+only on the mount the version update erases, which is what makes replay real rather than aspirational.
 The bucket is created OUTSIDE the stack (like the ECR repo) so `delete-stack` cannot take the agent's
 memory with it; a durable MOUNT instead (EFS/S3 Files) requires VPC mode and therefore a NAT gateway for
 model/channel egress, which would replace pay-per-use with a fixed ~$33/mo floor. The same bucket hosts

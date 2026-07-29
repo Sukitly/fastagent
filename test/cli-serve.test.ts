@@ -53,17 +53,26 @@ describe("mountAgentcore", () => {
 
   it("binds schedule fires by name — an unknown name 404s through the adapter", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-fire-"));
+    // schedule-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
+    // routing (see the adapter's authentication boundary), so the mount must carry it.
+    process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const routes = mountAgentcore({}, { agent, stateRoot: dir, schedules: [schedule] });
     const fire = (name: string): Promise<Response> | Response =>
       routes["POST /invocations"]!(
         new Request("http://x/invocations", {
           method: "POST",
-          body: JSON.stringify({ kind: "schedule-fire", name, slot: "2026-07-07T10:00:00Z" }),
+          body: JSON.stringify({
+            auth: "ingress-s3cret",
+            kind: "schedule-fire",
+            name,
+            slot: "2026-07-07T10:00:00Z",
+          }),
         }),
       );
     expect((await fire("nope")).status).toBe(404);
     const res = await fire("job");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
+    process.env.FASTAGENT_INGRESS_SECRET = undefined;
   });
 });

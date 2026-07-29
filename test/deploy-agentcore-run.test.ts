@@ -80,12 +80,26 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
     expect(params.some((p) => /^ForwarderS3Key=forwarder\/[0-9a-f]{16}\.zip$/.test(p))).toBe(true);
   });
 
-  it("skips creation when it already exists — a redeploy must not touch the stored snapshot", async () => {
+  it("skips CREATION when it exists, but re-converges its safety/durability properties every deploy", async () => {
     const { cli: aws, cmds } = fakeCli(happyAws); // head-bucket succeeds
     await run(withForwarder, aws, fakeCli().cli);
     expect(cmds().join("\n")).not.toContain("create-bucket");
-    expect(cmds().join("\n")).not.toContain("put-bucket-versioning");
+    // A half-finished first run must not leave a world-readable, unversioned store of the agent's
+    // credentials looking "done" forever after.
+    expect(cmds().join("\n")).toContain("put-public-access-block");
+    expect(cmds().join("\n")).toContain("put-bucket-versioning");
+    expect(cmds().join("\n")).toContain("put-bucket-lifecycle-configuration");
     expect(cmds().some((c) => c.startsWith("s3 cp"))).toBe(true); // the code still uploads
+  });
+
+  it("gates when a safety property cannot be established — never store state in an unsecured bucket", async () => {
+    const { cli: aws, cmds } = fakeCli((a) =>
+      a[1] === "put-bucket-versioning" ? { code: 1 } : a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+    );
+    const out = await run(withForwarder, aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: false });
+    expect((out as { gate: string }).gate).toContain("enable versioning");
+    expect(cmds().join("\n")).not.toContain("cloudformation deploy");
   });
 
   it("omits LocationConstraint in us-east-1 (the one region whose create-bucket rejects it)", async () => {
@@ -125,7 +139,11 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     const { cli: docker, cmds: dockerCmds, calls: dockerCalls } = fakeCli();
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
-      plan({ channels: ["telegram"], secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" } }),
+      plan({
+        channels: ["telegram"],
+        needsForwarder: true,
+        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
+      }),
       aws,
       docker,
       tg,
@@ -139,11 +157,29 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(awsCmds()).toEqual([
       "sts get-caller-identity --output json",
       "ecr describe-repositories --repository-names fastagent/my-agent",
+      // The deployment bucket: created if absent, its safety/durability properties re-converged every
+      // deploy, then the content-hashed forwarder package uploaded.
+      "s3api head-bucket --bucket fa-my-agent-123456789012",
+      "s3api put-public-access-block --bucket fa-my-agent-123456789012 --public-access-block-configuration " +
+        "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+      "s3api put-bucket-versioning --bucket fa-my-agent-123456789012 --versioning-configuration Status=Enabled",
+      "s3api put-bucket-lifecycle-configuration --bucket fa-my-agent-123456789012 --lifecycle-configuration " +
+        '{"Rules":[{"ID":"fastagent-expire-old-snapshots","Status":"Enabled","Filter":{"Prefix":"state/"},' +
+        '"NoncurrentVersionExpiration":{"NoncurrentDays":7}}]}',
+      expect.stringMatching(
+        /^s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip$/,
+      ),
       "ecr get-login-password",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
+      // Flush the snapshot BEFORE cutting the session: the interrupted turn's durable intent lives on
+      // a mount the version update erases, so without this "replay re-runs it" would be false.
+      "bedrock-agentcore invoke-agent-runtime " +
+        "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
+        `--runtime-session-id ${ingressSessionId("my-agent")} ` +
+        '--payload {"kind":"checkpoint"} --cli-binary-format raw-in-base64-out /dev/stdout',
       // The redeploy-immediacy step: a live ingress session would keep serving the OLD image.
       "bedrock-agentcore stop-runtime-session " +
         "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
@@ -159,9 +195,14 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(dockerCalls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");
     expect(tg).toHaveBeenCalledWith("https://xyz.lambda-url.us-west-2.on.aws");
     // Secrets ride the params FILE (0600 temp), never argv.
+    const forwarderKey = awsCmds()
+      .find((c) => c.startsWith("s3 cp"))!
+      .split(`s3://fa-my-agent-123456789012/`)[1]!;
     expect(writeParams).toHaveBeenCalledWith(
       `${JSON.stringify([
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
+        "StateBucket=fa-my-agent-123456789012",
+        `ForwarderS3Key=${forwarderKey}`,
         "TelegramBotToken=t",
         "TelegramSecretToken=s",
       ])}\n`,
@@ -278,7 +319,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         : happyAws(a),
     );
     const out = await deployAgentcoreRun(
-      plan(),
+      plan({ needsForwarder: true }),
       aws,
       fakeCli().cli,
       (m) => logs.push(m),
@@ -299,7 +340,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         : happyAws(a),
     );
     const out = await deployAgentcoreRun(
-      plan(),
+      plan({ needsForwarder: true }),
       aws,
       fakeCli().cli,
       (m) => logs.push(m),

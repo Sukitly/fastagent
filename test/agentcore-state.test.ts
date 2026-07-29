@@ -7,8 +7,9 @@ import { Buffer } from "node:buffer";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { activeWork } from "../src/channels/busy.ts";
 import {
   MAX_SNAPSHOT_BYTES,
   SNAPSHOT_VERSION,
@@ -65,14 +66,27 @@ describe("agentcore state snapshot", () => {
     expect(await readFile(join(target, "schedule/wakeups.json"), "utf8")).toBe('{"pending":[{"id":"a"}]}');
   });
 
-  it("keeps a LOCAL auth.json — the deploy just seeded a fresher one than the snapshot's", async () => {
-    const source = await stateRoot({ "auth.json": "SNAPSHOT-OLD", "sessions/s.jsonl": "keep" });
+  it("the snapshot's auth.json WINS over the deploy seed — the box's copy is the refreshed one", async () => {
+    // Same rule as every other host's volume: "a credential already refreshed is never overwritten".
+    // The seed is bootstrap for a snapshot that has none, not an authority over one that does.
+    const source = await stateRoot({ "auth.json": "REFRESHED-ON-THE-BOX", "sessions/s.jsonl": "keep" });
     const target = await stateRoot({ "auth.json": "SEEDED-BY-THIS-DEPLOY" });
 
     await unpackIntoStateRoot(target, await packStateRoot(source));
 
-    expect(await readFile(join(target, "auth.json"), "utf8")).toBe("SEEDED-BY-THIS-DEPLOY");
-    expect(await readFile(join(target, "sessions/s.jsonl"), "utf8")).toBe("keep"); // everything else lands
+    expect(await readFile(join(target, "auth.json"), "utf8")).toBe("REFRESHED-ON-THE-BOX");
+    expect(await readFile(join(target, "sessions/s.jsonl"), "utf8")).toBe("keep");
+  });
+
+  it("never carries control.json — it is this boot's URL+token, worthless (and misleading) to the next", async () => {
+    const source = await stateRoot({ "control.json": '{"url":"http://127.0.0.1:8787","token":"old"}' });
+    const target = await stateRoot({ "control.json": '{"url":"http://127.0.0.1:9000","token":"current"}' });
+
+    const packed = await packStateRoot(source);
+    expect(JSON.parse(gunzipSync(packed).toString()).files["control.json"]).toBeUndefined();
+
+    await unpackIntoStateRoot(target, packed);
+    expect(await readFile(join(target, "control.json"), "utf8")).toContain("current"); // untouched
   });
 
   it("packing an empty/absent state root is valid (first boot), and restores as zero files", async () => {
@@ -97,9 +111,11 @@ describe("agentcore state snapshot", () => {
 
   it("caps the packed size — a runaway state root fails visibly instead of OOMing the microVM", async () => {
     const dir = await stateRoot();
-    await writeFile(join(dir, "huge.bin"), Buffer.alloc(1024));
-    // Re-point the guard rather than write 64 MiB: the branch, not the constant, is what matters.
-    expect(MAX_SNAPSHOT_BYTES).toBeGreaterThan(1 << 20);
+    await writeFile(join(dir, "big.bin"), Buffer.alloc(4096));
+
+    // Drive the real guard through an injected cap (writing 64 MiB to prove a branch is not a test).
+    await expect(packStateRoot(dir, 1024)).rejects.toThrow(/exceeds 1024 bytes/);
+    await expect(packStateRoot(dir, MAX_SNAPSHOT_BYTES)).resolves.toBeInstanceOf(Buffer);
   });
 
   describe("sync lifecycle", () => {
@@ -189,6 +205,28 @@ describe("agentcore state snapshot", () => {
       await sync.flush();
 
       expect(calls.filter((c) => c.method === "PUT")).toHaveLength(2); // the in-flight one + one catch-up
+    });
+
+    it("counts the upload as in-flight work — the platform may reclaim the microVM the instant it idles", async () => {
+      const local = await stateRoot({ "a.json": "1" });
+      const base = activeWork();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const { impl } = fakeFetch(async (_u, init) => {
+        if (init?.method === "PUT") await gate;
+        return new Response(init?.method === "PUT" ? null : null, { status: init?.method === "PUT" ? 200 : 404 });
+      });
+      const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+      sync.use(urls);
+      await sync.ready();
+
+      sync.save();
+      await vi.waitFor(() => expect(activeWork()).toBe(base + 1)); // /ping still says HealthyBusy
+      release();
+      await sync.flush();
+      expect(activeWork()).toBe(base);
     });
 
     it("an upload failure is logged, not thrown — the local mount still holds the data until next settle", async () => {
