@@ -287,7 +287,7 @@ export async function appendChannelDotEnv(
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
-  await mkdir(dirname(file), { recursive: true }); // .secrets/ may not exist yet (a --minimal agent)
+  await mkdir(dirname(file), { recursive: true }); // may not exist yet (a relocated dir, a hand-made agent)
   let current = "";
   try {
     current = await readFile(file, "utf8");

@@ -41,6 +41,12 @@ export async function runAddChannel(
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
+  // Paths are printed to someone standing in their CWD, usually the workspace, while every file
+  // belongs to the AGENT dir — prefix them, or they point at nothing. And the `.env` label names the
+  // file actually WRITTEN (FASTAGENT_SECRETS_DIR relocates it), never the default spelling.
+  const fromCwd = relative(process.cwd(), target);
+  const inAgent = (p: string): string => (fromCwd === "" ? p : join(fromCwd, p));
+  const envLabel = relative(process.cwd(), dotEnvPath(target)) || dotEnvPath(target);
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
   // and only path there). The retired --create-app spelling gets a pointer, not silence.
   if (opts.createApp) {
@@ -79,7 +85,7 @@ export async function runAddChannel(
     }
   }
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
-    console.error(`[fastagent] added ${channelKind} env vars to .secrets/.env.example`);
+    console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
   }
   // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
   // written into `.secrets/.env` — make the secrets dir exist and self-ignore FIRST, so the CLI never
@@ -109,7 +115,7 @@ export async function runAddChannel(
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          "Slack internal app created/configured/installed through OAuth; runtime credentials are in .secrets/.env",
+          `Slack internal app created/configured/installed through OAuth; runtime credentials are in ${envLabel}`,
           "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
           "invite the app to every channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
@@ -129,15 +135,10 @@ export async function runAddChannel(
     ingress,
   ).catch(failStartup);
   if (dotEnv.written.length > 0) {
-    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .secrets/.env`);
+    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to ${envLabel}`);
   }
   const install =
     detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
-  // Next steps are printed to someone standing in their CWD, usually the workspace — but every path
-  // and the install itself belong to the AGENT dir. Prefix them, or the install hits the workspace's
-  // manifest (the wrong one, or none) and the file paths point at nothing. `init` does the same.
-  const fromCwd = relative(process.cwd(), target);
-  const inAgent = (p: string): string => (fromCwd === "" ? p : join(fromCwd, p));
   console.error(`  next steps:`);
   console.error(
     `    ${fromCwd === "" ? install : `(cd ${fromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,
@@ -147,14 +148,12 @@ export async function runAddChannel(
     if (dotEnv.written.includes(e.name)) {
       // Written, but its hint may still carry an action (github: paste the same value into the webhook
       // UI) — keep the variable visible instead of silently absorbing it.
-      console.error(
-        `    ${e.name} — ${e.generate ? "generated and " : ""}written to ${inAgent(join(SECRETS_DIRNAME, ".env"))}   # ${e.hint}`,
-      );
+      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to ${envLabel}   # ${e.hint}`);
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
     const action = e.required ? "set" : "optionally set";
-    console.error(`    ${action} ${e.name}${value} in ${inAgent(join(SECRETS_DIRNAME, ".env"))}   # ${e.hint}`);
+    console.error(`    ${action} ${e.name}${value} in ${envLabel}   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
   // knowledge) — resolve them to the real agent-dir-relative locations here.

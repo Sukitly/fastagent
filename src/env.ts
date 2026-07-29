@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "./log.ts";
-import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
+import { AGENT_DIR, SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -76,9 +76,10 @@ export function loadDotEnv(agentDir: string): void {
   }
   // A `.env` at the AGENT ROOT is the file habit puts there (the scaffold's .gitignore anticipates it),
   // and nothing reads it. Left silent, the symptom is a channel missing its token — with no way back
-  // to the cause. Say where the values actually belong.
+  // to the cause. Say where the values actually belong. Only inside a real agent: `login` outside one
+  // anchors on $HOME, where a plain `~/.env` is the user's own business, not a misplaced agent file.
   const stray = join(agentDir, ".env");
-  if (stray !== path && existsSync(stray)) {
+  if (stray !== path && basename(agentDir) === AGENT_DIR && existsSync(stray)) {
     log.warn(`[fastagent] ${stray} is NOT read — the agent's env lives at ${path}; move the values there`);
   }
 }

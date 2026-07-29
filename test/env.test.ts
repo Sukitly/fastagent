@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,5 +95,32 @@ describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () =>
     // A directory AT the .env path makes readFileSync throw EISDIR — a non-ENOENT error that must surface.
     await mkdir(join(dir, ".secrets", ".env"), { recursive: true });
     expect(() => loadDotEnv(dir)).toThrow(expect.objectContaining({ code: "EISDIR" }));
+  });
+});
+
+describe("env: a stray .env at the agent root is announced, not silently ignored", () => {
+  it("warns inside an agent (the file habit puts there), stays quiet outside one", async () => {
+    const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir, homedir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadDotEnv } = await import("../src/env.ts");
+    const { log } = await import("../src/log.ts");
+
+    const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
+    await mkdir(agent);
+    await writeFile(join(agent, ".env"), "K=v\n"); // NOT the file fastagent reads
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      loadDotEnv(agent);
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read.*\.secrets\/\.env/);
+      expect(process.env.K).toBeUndefined(); // announced, never loaded behind the user's back
+
+      // `login` outside any agent anchors on $HOME, where a plain ~/.env is the user's own business.
+      warn.mockClear();
+      loadDotEnv(homedir());
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -11,8 +11,11 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
   await writeFile(join(host, "AGENTS.md"), "You are terse.\n"); // ② context, lives in the workspace
   const dir = join(host, AGENT_DIR);
-  await mkdir(dir);
+  await mkdir(join(dir, ".secrets"), { recursive: true });
   await writeFile(join(dir, "persona.md"), "You are terse.\n"); // what makes it an agent, not a same-named dir
+  // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
+  await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
+  await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
   for (const [name, content] of Object.entries(files)) await writeFile(join(dir, name), content);
   return dir;
 }
@@ -96,7 +99,10 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // somewhere else in the baked tree is invisible to them, and `COPY . .` would ship the credential.
     const agentDir = await workspace();
     const host = dirname(agentDir);
-    const env = { ...process.env, FASTAGENT_SECRETS_DIR: join(host, "creds") };
+    const creds = join(host, "creds");
+    await mkdir(creds);
+    await writeFile(join(creds, "auth.json"), "{}\n"); // exists → the gate has something to protect
+    const env = { ...process.env, FASTAGENT_SECRETS_DIR: creds };
     const call2 = (over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
       preflightDeploy({
         agentDir,

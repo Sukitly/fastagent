@@ -14,8 +14,9 @@ const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
  *  the AGENT dir; the workspace around it is what commands are pointed at. */
 async function agentWorkspace(prefix: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
-  await mkdir(join(dir, "fastagent"), { recursive: true });
+  await mkdir(join(dir, "fastagent", ".secrets"), { recursive: true });
   await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n"); // an agent, not an empty dir
+  await writeFile(join(dir, "fastagent", ".secrets", "auth.json"), "{}\n"); // a real credential to leak
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, "fastagent", dirname(name)), { recursive: true });
     await writeFile(join(dir, "fastagent", name), content);
