@@ -129,6 +129,10 @@ export async function resolveAgentAssembly(
   // consumer of this assembly can WRITE under them (serving: sessions/channels; the session builder:
   // pi's `/login` writing auth.json), so resolving an agent must make them leak-safe.
   await ensureStateRootSelfIgnored(agentDir, stateRoot);
+  // The guard's "outside" outcome is deliberately NOT surfaced here, unlike in `login`/`add`: an
+  // out-of-agent secrets dir is the normal DEPLOYED posture (FASTAGENT_SECRETS_DIR at the volume), so
+  // warning would fire on every production boot. The commands that MINT a secret locally warn; the
+  // opener, which only resolves one, does not.
   await ensureSecretsDirSelfIgnored(agentDir, resolveSecretsDir(agentDir));
   return {
     config,

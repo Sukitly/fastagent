@@ -13,6 +13,7 @@
  * empty secrets dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import {
   AGENT_DIR,
@@ -20,9 +21,8 @@ import {
   findAgentDir,
   resolveAuthPath,
   resolvePlacement,
-  resolveSecretsDir,
 } from "../../engines/pi/config.ts";
-import { ensureSecretsDirSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
@@ -43,7 +43,6 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   const loginDir = agentDir ?? homedir();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
-  const secretsDir = resolveSecretsDir(loginDir);
   const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path,
   // the credential lands somewhere no agent will read. An explicit `--auth-path`/FASTAGENT_AUTH_PATH
@@ -56,12 +55,19 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     );
   }
   // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
-  // in the opener): on an adapted project dir, a `login` before the first dev/start would otherwise
-  // leave the secret untracked-but-committable. Unlike the opener (which always guards the machinery
-  // dirs), login writes ONLY auth.json — so guard iff the credential actually lands under the in-tree
-  // secrets dir. An external `--auth-path`/`FASTAGENT_AUTH_PATH` writes nothing in-tree (don't create
-  // an empty `.secrets`); the guard also skips the HOME-global dir.
-  if (isUnderDir(authPath, secretsDir)) await ensureSecretsDirSelfIgnored(loginDir, secretsDir);
+  // in the opener): a `login` before the first dev/start would otherwise leave the secret
+  // untracked-but-committable. login writes ONLY auth.json, so the dir to protect is that file's OWN
+  // parent — not the default secrets dir: an in-agent `--auth-path`/`FASTAGENT_AUTH_PATH` (e.g.
+  // `fastagent/creds/auth.json`) lands somewhere else in the tree and needs the same protection. A
+  // genuinely out-of-agent path is nothing of ours (no empty dir created); it is announced instead,
+  // because the credential still gets written. The guard itself skips the HOME-global dir.
+  const authHome = dirname(authPath);
+  if ((await ensureSecretsDirSelfIgnored(loginDir, authHome)) === "outside") {
+    console.error(
+      `[fastagent] warn: ${authPath} is outside the agent — fastagent does not write a .gitignore there, ` +
+        `so make sure the credential cannot be committed`,
+    );
+  }
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
   // prompts for a key). In a non-TTY (a pipe, CI, a coding-agent shell) the menu can't receive keystrokes
   // and would hang; --no-input asks for the same posture explicitly. Fail fast with the reason instead

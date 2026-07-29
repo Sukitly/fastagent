@@ -277,7 +277,8 @@ export async function preflightDeploy(input: {
     if (leaks.length > 0) {
       const text =
         `your .dockerignore (kept) does not exclude ${leaks.map((p) => `\`${p}\``).join(", ")} — the build ` +
-        `context would BAKE SECRETS INTO THE IMAGE. Add \`**/.secrets\` and \`**/.env\` before deploying.`;
+        `context would BAKE SECRETS INTO THE IMAGE. Add ${leaks.map((p) => `\`/${p}\``).join(" and ")} ` +
+        `before deploying (the same lines the generated .dockerignore writes).`;
       if (run) return { ok: false, gate: text };
       messages.push({ level: "warn", text });
     }

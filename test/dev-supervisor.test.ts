@@ -53,3 +53,20 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ig(join(nestedRoot, ".secrets", ".env"))).toBe(false);
   });
 });
+
+describe("dev-supervisor: the watched .env follows FASTAGENT_SECRETS_DIR", () => {
+  const root = "/agent";
+  it("allow-lists the RESOLVED .env and its ancestors; siblings still prune", () => {
+    const ig = devWatchIgnored(root, "/agent/creds/.env"); // an in-agent dir not named .secrets
+    expect(ig("/agent/creds")).toBe(false); // descend
+    expect(ig("/agent/creds/.env")).toBe(false); // watched
+    expect(ig("/agent/creds/auth.json")).toBe(true); // rotation must not restart the worker
+    expect(ig("/agent/.secrets/.env")).toBe(true); // the default name is NOT special
+  });
+
+  it("prunes everything when the .env resolves outside the agent (the supervisor warns instead)", () => {
+    const ig = devWatchIgnored(root, "/data/.secrets/.env");
+    expect(ig("/agent/.secrets/.env")).toBe(true);
+    expect(ig("/agent/tools/x.ts")).toBe(false); // code inputs unaffected
+  });
+});

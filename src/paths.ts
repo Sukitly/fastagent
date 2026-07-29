@@ -27,6 +27,10 @@ export const GLOBAL_HOME_DIR = ".fastagent";
  *  `FASTAGENT_SECRETS_DIR` relocates the RESOLVED dir ({@link resolveSecretsDir}), never this name. */
 export const SECRETS_DIRNAME = ".secrets";
 
+/** The state segment inside an agent dir — same ownership rule; `FASTAGENT_STATE_DIR` relocates the
+ *  resolved dir ({@link resolveStateRoot}), never this name. */
+export const STATE_DIRNAME = ".state";
+
 /**
  * Resolve a user-supplied path override (a CLI flag or an env var) to an absolute path, expanding a
  * leading `~`/`~/` to the home dir FIRST. Path-valued config from `.env` (or any non-shell source)
@@ -73,7 +77,7 @@ function machineryHome(dir: string): string {
  * DEFAULT (`<root>/.state`) is dir-anchored.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(machineryHome(dir), ".state");
+  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(machineryHome(dir), STATE_DIRNAME);
 }
 
 /**

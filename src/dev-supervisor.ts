@@ -11,7 +11,7 @@
  * product, including editing its own AGENTS.md) never has its in-flight turn killed by the watcher.
  */
 import { spawn } from "node:child_process";
-import { relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { resolveStateRoot, resolvePlacement } from "./engines/pi/config.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
@@ -33,7 +33,14 @@ const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.con
  * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
  * out of scope by design (keep it under tools/, or restart manually) — the startup log names the set.
  */
-export function devWatchIgnored(root: string): (path: string) => boolean {
+export function devWatchIgnored(
+  root: string,
+  envFile: string = join(root, SECRETS_DIRNAME, ".env"),
+): (path: string) => boolean {
+  // The `.env` is allow-listed by its RESOLVED path, not by the `.secrets` name: FASTAGENT_SECRETS_DIR
+  // can put it in an in-agent directory called anything, and a name-based rule would prune the very
+  // file the worker loads (a credential edit would then silently never restart it).
+  const envRel = relative(root, envFile).split(sep);
   return (path: string): boolean => {
     if (path === root) return false; // the root itself must not be pruned
     const rel = relative(root, path);
@@ -42,15 +49,13 @@ export function devWatchIgnored(root: string): (path: string) => boolean {
     // live-read — pruned, no restart.
     if (/^fastagent\.config\.[cm]?[jt]s$/.test(rel)) return false;
     if (rel === "package.json") return false;
-    const [head, ...tail] = rel.split(sep);
-    if (head === "tools" || head === "channels" || head === "schedules") return false;
-    // `.secrets/.env` restarts too (credentials are process-bound). The `.secrets` directory entry
-    // itself must stay un-pruned so chokidar can descend to the .env; everything else inside
-    // (auth.json, .env.example) never triggers.
-    if (head === SECRETS_DIRNAME) {
-      if (tail.length === 0) return false; // the dir itself: descend, don't prune
-      return !(tail.length === 1 && tail[0] === ".env");
-    }
+    const segments = rel.split(sep);
+    if (segments[0] === "tools" || segments[0] === "channels" || segments[0] === "schedules") return false;
+    // The `.env` restarts too (credentials are process-bound). Keep it AND its ancestor directories
+    // un-pruned so chokidar can descend to it; every sibling inside them (auth.json, .env.example)
+    // prunes normally. An out-of-agent `.env` yields a `..`-prefixed envRel that matches nothing here
+    // — the supervisor warns about that case instead of pretending to watch it.
+    if (segments.length <= envRel.length && segments.every((seg, i) => seg === envRel[i])) return false;
     return true;
   };
 }
@@ -130,7 +135,7 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
   // cannot; devWatchIgnored (above) narrows the scope to the process-bound code inputs.
   const watcher = watchTree(ws.agentDir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(ws.agentDir),
+    ignored: devWatchIgnored(ws.agentDir, dotEnvPath(ws.agentDir)),
   });
   watcher.on("all", () => {
     clearTimeout(timer);
@@ -142,9 +147,9 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
   log.info(
     `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
   );
-  // The watch scope is the agent dir, but FASTAGENT_SECRETS_DIR can move the `.env` outside it — the
-  // worker would then load a file no watcher sees, and a credential edit would silently never take
-  // effect. Say so once instead of leaving the hint above lying.
+  // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely; the watcher follows it
+  // anywhere inside (the resolved path is allow-listed above), but outside the watch root the worker
+  // would load a file no watcher sees. Say so once instead of leaving the hint above lying.
   if (!isUnderDir(dotEnvPath(ws.agentDir), ws.agentDir)) {
     log.warn(
       `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(ws.agentDir)}) — it is NOT watched; restart dev after editing it`,

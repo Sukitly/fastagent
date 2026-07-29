@@ -9,7 +9,7 @@
  * Deps install under `/app/fastagent`, and the Dockerfile lives there too — namespaced so it never
  * collides with one the workspace already owns.
  */
-import { AGENT_DIR } from "../paths.ts";
+import { AGENT_DIR, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 
 export interface Artifact {
   path: string;
@@ -154,14 +154,14 @@ CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
 const dockerignore = (input: ContainerInput): string =>
   DOCKERIGNORE_BASE +
   (input.secretPaths ?? [])
-    .filter((p) => !p.startsWith(`${AGENT_DIR}/.secrets/`)) // already covered by **/.secrets
+    .filter((p) => !p.startsWith(`${AGENT_DIR}/${SECRETS_DIRNAME}/`)) // already covered by the name-based rule below
     .map((p) => `# resolved secrets path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH)\n/${p}\n`)
     .join("");
 
 const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).
 **/node_modules
-**/.secrets
-**/.state
+**/${SECRETS_DIRNAME}
+**/${STATE_DIRNAME}
 **/.cache
 **/.env
 **/.env.*
