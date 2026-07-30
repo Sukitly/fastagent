@@ -4,9 +4,9 @@
  * the schedule's stable session (faithful to the served behavior). Does NOT advance the schedule's fire
  * state — a test run must never make the scheduler skip the real next run.
  */
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { AGENT_DIR } from "../../paths.ts";
+import { displayPath } from "../../scaffold/init.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
@@ -39,7 +39,8 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
     // should read as "wrong place", not "broken file".
     failStartup(
       new Error(
-        `unknown schedule "${name}" (looked in ${AGENT_DIR}/schedules). available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
+        `unknown schedule "${name}" (looked in ${displayPath(process.cwd(), join(ws.agentDir, "schedules")) ?? "schedules"}). ` +
+          `available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
       ),
     );
   }

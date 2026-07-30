@@ -272,7 +272,9 @@ describe("cli papercuts", () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/unknown schedule "nope"/);
     expect(stderr).toMatch(/available: daily/); // found in fastagent/schedules — the same set dev/start serve
-    expect(stderr).toMatch(/looked in fastagent\/schedules/); // a misplaced schedule reads as "wrong place", not "broken file"
+    // The path is REPORTED, not spelled from the nested default — a flat agent's schedules live at its
+    // own root, and pointing at `fastagent/schedules` there would invent a directory.
+    expect(stderr).toMatch(/looked in .*fastagent\/schedules/);
   });
 
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {

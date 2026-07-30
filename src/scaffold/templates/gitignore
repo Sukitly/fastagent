@@ -9,8 +9,8 @@ node_modules
 .state
 .cache
 
-# fastagent reads the agent's env from .secrets/.env, but a bare .env at this level is the file
-# habit puts here — `dev` says so when it finds one; this keeps it uncommittable meanwhile.
+# fastagent reads the agent's env from .secrets/.env (which un-ignores its own .env.example). A bare
+# .env at THIS level is the file habit puts here — `dev` says so when it finds one; this keeps it
+# uncommittable meanwhile.
 .env
 .env.*
-!.env.example

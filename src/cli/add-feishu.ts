@@ -160,9 +160,10 @@ export async function configureGroupBehavior(input: {
 }
 
 /**
- * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the AGENT DIR
- * — credentials land in `<target>/.secrets/.env` (the caller has already ensured the secrets dir
- * is excluded by the agent's scaffolded .gitignore). Returns credentials for the
+ * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the AGENT DIR;
+ * credentials land in its `.env` — whose real path is {@link dotEnvPath}, printed rather than spelled,
+ * because `FASTAGENT_SECRETS_DIR` moves it and a hardcoded `.secrets/.env` would name a file this run
+ * did not write. Returns credentials for the
  * caller's generic .env write (the guided Lark path), or undefined when nothing remains to write —
  * the feishu path persists its own two credential stages internally (the App ID/Secret boundary is
  * irreversible and must not wait for the caller). Throws on refusal (a non-interactive lark run);
@@ -174,6 +175,7 @@ export async function onboardFeishuCloudApp(
   ingress: FeishuSubscriptionMode = "webhook",
   groupBehavior: GroupBehaviorChoice = { behavior: "context", explicit: false },
 ): Promise<Record<string, string> | undefined> {
+  const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
   const requiredNames = [
     `${envPrefix}_APP_ID`,
@@ -182,7 +184,7 @@ export async function onboardFeishuCloudApp(
   ];
   const existing = await activeDotEnvValues(target, requiredNames);
   if (Object.keys(existing).length === requiredNames.length) {
-    console.error(`[fastagent] ${requiredNames.join("/")} already set in .secrets/.env — keeping them`);
+    console.error(`[fastagent] ${requiredNames.join("/")} already set in ${env} — keeping them`);
     // WebSocket still needs its console mode/publish guidance. A complete webhook can skip the rest of
     // onboarding, but group visibility must still be inspected/configured on every explicit re-run.
     if (ingress === "webhook") {
@@ -299,14 +301,15 @@ async function createFeishuAppFlow(
   ingress: FeishuSubscriptionMode,
   groupBehavior: GroupBehaviorChoice,
 ): Promise<void> {
+  const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { apiBase } = cloudFor("feishu");
   let appId = existing.FEISHU_APP_ID;
   let appSecret = existing.FEISHU_APP_SECRET;
   if (appId && appSecret) {
     console.error(
       ingress === "webhook"
-        ? `[fastagent] resuming Feishu app ${appId} from .secrets/.env to capture its missing Verification Token`
-        : `[fastagent] reusing Feishu app ${appId} from .secrets/.env for WebSocket ingress`,
+        ? `[fastagent] resuming Feishu app ${appId} from ${env} to capture its missing Verification Token`
+        : `[fastagent] reusing Feishu app ${appId} from ${env} for WebSocket ingress`,
     );
   } else {
     console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
@@ -353,8 +356,8 @@ async function createFeishuAppFlow(
     await appendChannelDotEnv(target, "feishu", staged, Object.keys(staged), ingress);
     console.error(
       ingress === "webhook"
-        ? `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .secrets/.env before Token bootstrap`
-        : `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .secrets/.env`,
+        ? `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to ${env} before Token bootstrap`
+        : `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to ${env}`,
     );
   }
 
@@ -423,10 +426,10 @@ async function createFeishuAppFlow(
     // Persist the second credential stage immediately too — opening the publish page and generic
     // scaffold finalization happen only after the complete runtime credential set is durable.
     const staged = await appendChannelDotEnv(target, "feishu", { [tokenVar]: token }, [tokenVar]);
-    console.error(`[fastagent] wrote ${staged.written.join(", ")} to .secrets/.env`);
+    console.error(`[fastagent] wrote ${staged.written.join(", ")} to ${env}`);
   } else {
     console.error(
-      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in .secrets/.env`,
+      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in ${env}`,
     );
   }
   if (webhookModeChanged) {

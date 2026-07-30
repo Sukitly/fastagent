@@ -34,9 +34,10 @@ export function failStartup(error: unknown): never {
  * refusals ("not a fastagent agent", plus the two dead ends with their own exits) are user-fixable,
  * which means a one-line `Error:` and exit 1, never a stack.
  *
- * Commands that may legitimately run WITHOUT an agent do not call it: `login` outside any agent
- * (global credential) and `attach --url/--token` (nothing local is read). Both say so where they
- * decide, and there are only those two.
+ * Not every command calls it — and the exceptions are the useful part of this note. `init` CREATES the
+ * agent (it must run where there is none). `models` is directory-independent. `login` needs one only for
+ * the project-level credential and falls back to the global one, and `attach --url/--token` reads
+ * nothing local. Everything else needs an agent, so it comes through here.
  */
 export function placementOrExit(dir: string): ResolvedPlacement {
   try {

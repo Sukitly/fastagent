@@ -23,7 +23,8 @@ async function promptValue(message: string, hidden = false, initialValue?: strin
 
 /** Interactive single-workspace internal-app creation + installation. Safe to re-run after interruption. */
 export async function onboardSlackInternalApp(input: {
-  /** The AGENT DIR — credentials land in `<target>/.secrets/.env`. */
+  /** The AGENT DIR — credentials land in its `.env` ({@link dotEnvPath}: `FASTAGENT_SECRETS_DIR` moves
+   *  it, so messages print the resolved path rather than the default spelling). */
   target: string;
   stateRoot: string;
   groupBehavior: GroupBehaviorChoice;
@@ -63,7 +64,8 @@ export async function onboardSlackInternalApp(input: {
     ].filter((name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""));
     if (missingRuntime.length > 0) {
       throw new Error(
-        `Slack app ${state.appId ?? "(unknown)"} is installed but .secrets/.env is missing ${missingRuntime.join(", ")} — ` +
+        `Slack app ${state.appId ?? "(unknown)"} is installed but ${dotEnvPath(input.target)} is missing ` +
+          `${missingRuntime.join(", ")} — ` +
           "restore them from the Slack app console, or delete the app + onboarding state and create a new one",
       );
     }
@@ -215,7 +217,7 @@ export async function onboardSlackInternalApp(input: {
       },
     );
     console.error(
-      "[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to .secrets/.env",
+      `[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to ${dotEnvPath(input.target)}`,
     );
     console.error(
       `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +

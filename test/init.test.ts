@@ -67,12 +67,17 @@ describe("init: scaffoldAgent", () => {
     expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# Project spec\n"); // ②, untouched
 
     // The agent-root .gitignore covers the .env habit puts there (fastagent reads .secrets/.env, but
-    // an unignored root .env is the plausible mistake this layout invites); the example still travels.
+    // an unignored root .env is the plausible mistake this layout invites). `.env.example` lives under
+    // `.secrets/`, whose own ignore file un-ignores it — so no negation is needed (or wanted) here.
     const rootIgnore = await readFile(join(dir, "fastagent", ".gitignore"), "utf8");
     const ig = ignore({ ignorecase: false }).add(rootIgnore);
     expect(ig.ignores(".env")).toBe(true);
     expect(ig.ignores(".env.local")).toBe(true);
-    expect(ig.ignores(".env.example")).toBe(false);
+    const secretsIgnore = ignore({ ignorecase: false }).add(
+      await readFile(join(dir, "fastagent", ".secrets", ".gitignore"), "utf8"),
+    );
+    expect(secretsIgnore.ignores(".env")).toBe(true);
+    expect(secretsIgnore.ignores(".env.example")).toBe(false); // the template travels
 
     // Both ignore files travel with the directory; `.secrets/` protects itself independently of the
     // root one, which is the file the author is expected to edit.
