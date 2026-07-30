@@ -8,8 +8,8 @@
  *
  * Placement — no detection and no prompt, just a default and one flag. By DEFAULT the whole agent —
  * definition, config, `.secrets/`, machinery — lands in `<dir>/fastagent/`; the surrounding tree gets
- * ZERO writes and becomes the workspace the agent works on. `--agentDir <name>` picks another name for
- * that directory (the name is never a rule — `fastagent.config.*` is the marker), and `--agentDir .`
+ * ZERO writes and becomes the workspace the agent works on. `--agent-dir <name>` picks another name for
+ * that directory (the name is never a rule — `fastagent.config.*` is the marker), and `--agent-dir .`
  * (spelled `--flat`) lands the identical shape in `dir` itself, for the case where the directory IS the
  * agent (a standalone agent repo, a monorepo package).
  *

@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
- * The directory name `init` gives a nested agent (`<workspace>/fastagent/`) unless `--agentDir` names
+ * The directory name `init` gives a nested agent (`<workspace>/fastagent/`) unless `--agent-dir` names
  * another. A DEFAULT, not a rule: resolution reads the config marker and never a name, so renaming an
  * agent directory changes nothing about how it resolves. Visible on purpose — the agent directory holds
  * the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it follows the

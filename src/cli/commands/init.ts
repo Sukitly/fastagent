@@ -2,7 +2,7 @@
  * `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. Where the files land is
  * a default plus one knob, never a detection and never a prompt — non-interactive executors (coding
  * agents) get deterministic behavior they can read. By default the agent goes into `./fastagent/` and the
- * directory around it is untouched; `--agentDir <name>` names that directory anything, and `--agentDir .`
+ * directory around it is untouched; `--agent-dir <name>` names that directory anything, and `--agent-dir .`
  * (spelled `--flat`) makes the directory itself the agent (a standalone agent repo, a monorepo package).
  */
 import { spawn } from "node:child_process";
