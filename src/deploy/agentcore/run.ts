@@ -385,8 +385,8 @@ export async function deployAgentcoreRun(
   //     — the platform's reclaim gets there eventually. An in-flight turn on the old compute is cut;
   //     the checkpoint above is what lets a replaying channel re-run it. Only when a forwarder exists
   //     (the ingress session is the forwarder's session; pure-invoke deployments have none).
-  // Keyed on the FORWARDER, not on the public URL: a schedule-only deployment has no URL but still
-  // has an ingress session, and its next EventBridge fire would otherwise land on compute still
+  // Keyed on the FORWARDER: every current forwarder has a callback URL for state-capability refresh,
+  // and every forwarder topology has an ingress session whose next event would otherwise land on compute still
   // running the previous image.
   if (plan.needsForwarder) {
     // CHECKPOINT FIRST. The stop cuts whatever turn is running, and that turn's durable intent was

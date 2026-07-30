@@ -410,22 +410,24 @@ describe("deploy agentcore: the plan", () => {
   });
 
   describe("the public attack surface", () => {
-    it("a schedule-only deployment mints NO Function URL — it would expose the builtin POST /invoke", () => {
-      // serve.ts mounts an unauthenticated POST /invoke when a workspace has no channels; a public
-      // URL in front of that is an open prompt-execution endpoint for the whole internet.
+    it("a schedule-only deployment exposes ONLY the authenticated state-URL refresh channel", () => {
+      // Long cron turns can outlive the credentials that signed their initial snapshot URL. The URL
+      // exists to re-mint it, while WEBHOOKS_ENABLED remains absent so arbitrary HTTP never wakes
+      // AgentCore; start also suppresses the builtin /invoke under AgentCore.
       const template = planAgentcoreDeploy(baseInput({ schedules: [{ name: "digest", cron: "0 9 * * *" }] }))
         .artifacts[0]!.content;
-      expect(template).toContain("AWS::Lambda::Function"); // the forwarder still exists (EventBridge target)
+      expect(template).toContain("AWS::Lambda::Function");
       expect(template).toContain("AWS::Scheduler::Schedule");
-      expect(template).not.toContain("AWS::Lambda::Url");
-      expect(template).not.toContain("lambda:InvokeFunctionUrl");
-      expect(template).not.toContain("ForwarderUrl:\n    Value");
+      expect(template).toContain("AWS::Lambda::Url");
+      expect(template).toContain("STATE_REFRESH_SECRET: !Ref FastagentIngressSecret");
+      expect(template).not.toContain('WEBHOOKS_ENABLED: "1"');
     });
 
     it("a webhook channel mints one, and scopes the second permission to URL traffic", () => {
       const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
         .artifacts[0]!.content;
       expect(template).toContain("AWS::Lambda::Url");
+      expect(template).toContain('WEBHOOKS_ENABLED: "1"');
       expect(template).toContain("Action: lambda:InvokeFunctionUrl");
       // Without this the bare * principal would also permit direct Lambda API calls from any AWS
       // account — bypassing the Function URL event shape to forge internal events.

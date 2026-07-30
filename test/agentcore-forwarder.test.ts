@@ -29,6 +29,7 @@ function loadForwarder(options: HarnessOptions = {}) {
     RUNTIME_ARN: "arn:aws:bedrock-agentcore:us-east-1:1:runtime/x",
     INGRESS_SESSION_ID: "fastagent-ingress-x-0000000000000000",
     INGRESS_SECRET: "ingress-s3cret",
+    WEBHOOKS_ENABLED: "1",
     ...options.env,
   };
   const envelopes: Envelope[] = [];
@@ -181,6 +182,13 @@ const webhookEvent = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("agentcore forwarder (executed)", () => {
+  it("a schedule-only URL rejects arbitrary HTTP before waking AgentCore", async () => {
+    const f = loadForwarder({ env: { WEBHOOKS_ENABLED: "" } });
+    const res = await f.handler(webhookEvent());
+    expect(res.statusCode).toBe(404);
+    expect(f.envelopes).toHaveLength(0);
+  });
+
   it("rejects an original webhook body above the advertised host limit", async () => {
     const f = loadForwarder();
     const res = await f.handler(webhookEvent({ body: "x".repeat(MAX_WEBHOOK_BODY_BYTES + 1) }));

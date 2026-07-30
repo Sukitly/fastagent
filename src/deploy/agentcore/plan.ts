@@ -421,6 +421,9 @@ exports.handler = async (event, ctx) => {
   const webhookBytes = event.body === undefined ? 0
     : event.isBase64Encoded ? Buffer.byteLength(event.body, "base64") : Buffer.byteLength(event.body);
   if (webhookBytes > ${MAX_WEBHOOK_BODY_BYTES}) return { statusCode: 413, body: "payload too large\\n" };
+  // A schedule-only deployment has a Function URL solely for the authenticated refresh callback.
+  // Reject arbitrary public traffic BEFORE it can wake AgentCore (cost/DoS) or reach an inner route.
+  if (process.env.WEBHOOKS_ENABLED !== "1") return { statusCode: 404, body: "not found\\n" };
   // Function URL webhook — forward the original request verbatim (signature material included).
   const r = await invoke({
     kind: "webhook",
@@ -463,13 +466,12 @@ export function scheduleResourceName(agent: string, schedule: string): string {
 function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; expression: string }[]): string {
   const runtimeName = toRuntimeName(input.name);
   // selfSchedule needs the forwarder too: it is both the wake-alarm registrar and the poke target.
-  // TWO distinct needs, deliberately not one flag: the Lambda exists whenever something must reach the
-  // runtime from outside (EventBridge targets included), but a PUBLIC Function URL is only justified by
-  // an inbound sender that cannot SigV4-sign — a webhook channel, or selfSchedule's alarm callback. A
-  // schedule-only deployment that also minted a URL would expose the builtin unauthenticated
-  // POST /invoke (serve.ts mounts it when a workspace has no channels) to the whole internet.
+  // Every forwarder also gets a Function URL as the authenticated state-capability refresh channel:
+  // a schedule turn can outlive both its original presigned URL and the Lambda credentials that signed
+  // it. Schedule-only URLs reject every non-reserved HTTP path before invoking AgentCore, so they do
+  // not expose a webhook/data plane (and start never mounts the builtin /invoke under AgentCore).
   const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
-  const needsFunctionUrl = input.routeChannels.length > 0 || input.selfSchedule;
+  const needsFunctionUrl = needsForwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
@@ -673,6 +675,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
       `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
       ...(needsFunctionUrl ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
+      ...(input.routeChannels.length > 0 ? [`          WEBHOOKS_ENABLED: "1"`] : []),
       ...(input.selfSchedule
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,
@@ -846,13 +849,10 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     paramNames.set(p, s.name);
   }
 
-  // TWO distinct needs, deliberately not one flag: the Lambda exists whenever something must reach the
-  // runtime from outside (EventBridge targets included), but a PUBLIC Function URL is only justified by
-  // an inbound sender that cannot SigV4-sign — a webhook channel, or selfSchedule's alarm callback. A
-  // schedule-only deployment that also minted a URL would expose the builtin unauthenticated
-  // POST /invoke (serve.ts mounts it when a workspace has no channels) to the whole internet.
+  // Every forwarder needs its authenticated Function URL to refresh S3 snapshot capabilities during
+  // a long turn. Without route channels, ordinary HTTP paths are rejected before AgentCore is invoked.
   const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
-  const needsFunctionUrl = input.routeChannels.length > 0 || input.selfSchedule;
+  const needsFunctionUrl = needsForwarder;
   const artifacts: Artifact[] = [
     { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated) },
     ...(needsForwarder ? [{ path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() }] : []),
@@ -922,7 +922,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     }${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
     ``,
     needsFunctionUrl
-      ? `# 4. Read the outputs (the runtime ARN + the public webhook URL):`
+      ? `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`
       : `# 4. Read the outputs (the runtime ARN — this topology has NO public URL: nothing outside AWS`,
     ...(needsFunctionUrl
       ? []
