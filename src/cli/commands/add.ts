@@ -13,7 +13,7 @@ import { resolveStateRoot } from "../../paths.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
-import { displayPath } from "../../scaffold/init.ts";
+import { displayPath } from "../../paths.ts";
 import {
   type ChannelKind,
   type GroupBehavior,
@@ -25,7 +25,7 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "../../scaffold/add-channel.ts";
-import { exists } from "../../scaffold/init.ts";
+import { exists } from "../../paths.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 

@@ -42,7 +42,8 @@ src/
 ├── paths.ts                # PLACEMENT: resolvePlacement — the agent is a `fastagent/` dir holding a
 │                           # definition (parent = workspace), or a dir holding a config (--flat: it IS
 │                           # the workspace); ORDERED, never ambiguous + the machinery paths that follow
-│                           # (.secrets/.state + env overrides) + the containment guard. Engine-neutral,
+│                           # (.secrets/.state + env overrides), the containment guard, and the neutral
+│                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
 ├── version.ts              # package version (deploy pins it into the image)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)

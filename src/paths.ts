@@ -6,6 +6,7 @@
  * would make neutral modules depend on it for something the engine has no say in.
  */
 import { existsSync, statSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -196,6 +197,28 @@ export function resolvePlacement(dir: string): ResolvedPlacement {
     );
   }
   return placement;
+}
+
+/** How to WRITE a path for someone standing in `cwd`: relative when it is inside `cwd`, absolute when
+ *  it climbs out (a `../../..` is noise), and undefined when it IS `cwd` (nothing to say). ONE policy,
+ *  shared by `init`'s `cd` step, `add`'s next-steps paths and `fire`'s "looked in" hint — they all answer
+ *  the same question, which is a placement-PRESENTATION question, not a scaffolding one. */
+export function displayPath(cwd: string, dir: string): string | undefined {
+  const rel = relative(cwd, dir);
+  if (rel === "") return undefined;
+  // "Climbs out" is a path-SEGMENT check — rel is ".." or starts with "../" (or "..\" on Windows). A
+  // bare startsWith("..") would wrongly flag an in-cwd directory literally named "..agent".
+  const escapes = rel === ".." || /^\.\.[/\\]/.test(rel);
+  return escapes ? dir : rel;
+}
+
+/** Does a path exist? Plain fs, no placement in it — it lives here because `paths.ts` is where the
+ *  neutral path helpers are, and the scaffolder is not a utility home for the CLI and deploy. */
+export async function exists(p: string): Promise<boolean> {
+  return access(p).then(
+    () => true,
+    () => false,
+  );
 }
 
 /**

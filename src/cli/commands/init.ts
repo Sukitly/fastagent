@@ -8,7 +8,8 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
-import { displayPath, scaffoldAgent } from "../../scaffold/init.ts";
+import { scaffoldAgent } from "../../scaffold/init.ts";
+import { displayPath } from "../../paths.ts";
 import { failStartup } from "../fail.ts";
 
 export interface InitOptions {

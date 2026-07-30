@@ -19,7 +19,7 @@ import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
-import { exists } from "../scaffold/init.ts";
+import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";

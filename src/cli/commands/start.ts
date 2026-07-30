@@ -14,7 +14,7 @@ import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { exists } from "../../scaffold/init.ts";
+import { exists } from "../../paths.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromDir } from "../src/index.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
-import { displayPath, scaffoldAgent } from "../src/scaffold/init.ts";
+import { scaffoldAgent } from "../src/scaffold/init.ts";
+import { displayPath } from "../src/paths.ts";
 
 /** A path inside the scaffolded agent dir, as scaffoldAgent reports it (relative to the workspace). */
 const agentPath = (...parts: string[]) => join("fastagent", ...parts);

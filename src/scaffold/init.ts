@@ -24,10 +24,17 @@
  * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`). The files
  * this module writes are real templates under templates/, read through templates.ts.
  */
-import { access, lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { AGENT_CONFIG_NAMES, AGENT_DIR, agentDefinitionOwner, findAgentDir } from "../paths.ts";
-import { SECRETS_DIRNAME } from "../paths.ts";
+import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import {
+  AGENT_CONFIG_NAMES,
+  AGENT_DIR,
+  SECRETS_DIRNAME,
+  agentDefinitionOwner,
+  displayPath,
+  exists,
+  findAgentDir,
+} from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 
@@ -55,26 +62,6 @@ export interface ScaffoldResult {
    *  is proven empty first): adopting a directory means its `.gitignore`/`package.json` are the
    *  author's. The caller surfaces them — silently skipping a file the user expected would be worse. */
   kept: string[];
-}
-
-/** How to WRITE a path for someone standing in `cwd`: relative when it is inside `cwd`, absolute when
- *  it climbs out (a `../../..` is noise), and undefined when it IS `cwd` (nothing to say). ONE policy,
- *  shared by `init`'s `cd` step and `add`'s next-steps paths — both answer the same question. */
-export function displayPath(cwd: string, dir: string): string | undefined {
-  const rel = relative(cwd, dir);
-  if (rel === "") return undefined;
-  // "Climbs out" is a path-SEGMENT check — rel is ".." or starts with "../" (or "..\" on Windows). A
-  // bare startsWith("..") would wrongly flag an in-cwd directory literally named "..agent".
-  const escapes = rel === ".." || /^\.\.[/\\]/.test(rel);
-  return escapes ? dir : rel;
-}
-
-/** Does a path exist? (async; shared with the sibling scaffold modules). */
-export async function exists(p: string): Promise<boolean> {
-  return access(p).then(
-    () => true,
-    () => false,
-  );
 }
 
 /**
