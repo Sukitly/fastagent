@@ -59,6 +59,8 @@ interface StateSnapshot {
 export interface StateUrls {
   getUrl: string;
   putUrl: string;
+  /** Authenticated forwarder callback that re-mints URLs with current Lambda credentials. */
+  refresh?: { url: string; auth: string };
 }
 
 /** Every regular file under `root`, as root-relative POSIX paths (stable across platforms). */
@@ -198,6 +200,22 @@ export function createStateSync(options: StateSyncOptions): StateSync {
     restored = true;
   };
 
+  const refreshUrls = async (): Promise<void> => {
+    if (!urls?.refresh) return;
+    const res = await doFetch(urls.refresh.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ auth: urls.refresh.auth }),
+      signal: AbortSignal.timeout(PUT_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`state snapshot URL refresh failed: ${res.status}`);
+    const fresh = (await res.json()) as { getUrl?: unknown; putUrl?: unknown };
+    if (typeof fresh.getUrl !== "string" || typeof fresh.putUrl !== "string") {
+      throw new Error("state snapshot URL refresh returned an invalid response");
+    }
+    urls = { ...urls, getUrl: fresh.getUrl, putUrl: fresh.putUrl };
+  };
+
   const runSave = async (): Promise<void> => {
     // Counted as in-flight work for its whole duration: `save()` fires on the 0-in-flight edge, the
     // exact moment /ping starts answering Healthy — without this the platform may reclaim the microVM
@@ -209,13 +227,20 @@ export function createStateSync(options: StateSyncOptions): StateSync {
       do {
         queued = false;
         if (!restored || !urls) return;
+        // A webhook turn may settle hours after its envelope. Re-mint immediately before every PUT
+        // instead of assuming the Lambda credentials that signed the envelope outlive the turn.
+        await refreshUrls();
         const body = await packStateRoot(stateRoot);
         const res = await doFetch(urls.putUrl, {
           method: "PUT",
           body: new Uint8Array(body),
           signal: AbortSignal.timeout(PUT_TIMEOUT_MS),
         });
-        if (!res.ok) throw new Error(`state snapshot PUT failed: ${res.status}`);
+        if (!res.ok) {
+          const hint =
+            res.status === 403 ? " (presigned URL or its temporary signing credentials may have expired)" : "";
+          throw new Error(`state snapshot PUT failed: ${res.status}${hint}`);
+        }
       } while (queued);
     } finally {
       looping = false;

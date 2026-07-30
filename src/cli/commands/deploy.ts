@@ -7,7 +7,7 @@
  * Read-only on the definition; the only writes are generated artifacts (never clobbered without
  * --force). `--run` drives the target CLI instead of printing.
  */
-import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore.ts";
+import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";

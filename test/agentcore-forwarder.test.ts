@@ -7,6 +7,7 @@
 import { Buffer } from "node:buffer";
 import * as nodeCrypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
 
 type Envelope = Record<string, unknown> & { kind?: string; wake?: { url: string } };
@@ -180,6 +181,13 @@ const webhookEvent = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("agentcore forwarder (executed)", () => {
+  it("rejects an original webhook body above the advertised host limit", async () => {
+    const f = loadForwarder();
+    const res = await f.handler(webhookEvent({ body: "x".repeat(MAX_WEBHOOK_BODY_BYTES + 1) }));
+    expect(res.statusCode).toBe(413);
+    expect(f.envelopes).toHaveLength(0);
+  });
+
   it("forwards a webhook verbatim — method/path/QUERY/headers/body — and re-emits the reply", async () => {
     const f = loadForwarder();
     const res = await f.handler(webhookEvent({ rawQueryString: "code=abc&x=1" }));
@@ -335,8 +343,8 @@ describe("agentcore forwarder (executed)", () => {
           expect(parsed.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
           expect(parsed.searchParams.get("X-Amz-Credential")).toMatch(/AKIAIOSFODNN7EXAMPLE\/\d{8}\/us-east-1\/s3\//);
           expect(parsed.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
-          // 12 h — longer than a session's 8 h compute ceiling, so a late settle can still push.
-          expect(parsed.searchParams.get("X-Amz-Expires")).toBe("43200");
+          // Short-lived by design; Function-URL deployments re-mint immediately before a late PUT.
+          expect(parsed.searchParams.get("X-Amz-Expires")).toBe("3600");
         }
         // The method is part of the canonical request: one signature cannot serve both verbs.
         expect(state.getUrl).not.toBe(state.putUrl);
@@ -376,10 +384,34 @@ describe("agentcore forwarder (executed)", () => {
             host: "fa-agent-123456789012.s3.us-east-1.amazonaws.com",
             key: "state/snapshot.json.gz",
             stamp: "20260728T090000Z",
-            expires: 43200,
+            expires: 3600,
           }),
         );
       }
+    });
+
+    it("offers an authenticated callback that re-mints URLs with the current Lambda credentials", async () => {
+      const f = loadForwarder({ env: { ...stateEnv, STATE_REFRESH_SECRET: "refresh-secret" } });
+      await f.handler(webhookEvent());
+      const state = f.envelopes[0]!.state as {
+        refresh: { url: string; auth: string };
+      };
+      expect(state.refresh).toEqual({
+        url: "https://self.lambda-url.on.aws/__fastagent/state-urls",
+        auth: "refresh-secret",
+      });
+
+      const denied = await f.handler(
+        webhookEvent({ rawPath: "/__fastagent/state-urls", body: JSON.stringify({ auth: "wrong" }) }),
+      );
+      expect(denied.statusCode).toBe(403);
+      const refreshed = await f.handler(
+        webhookEvent({ rawPath: "/__fastagent/state-urls", body: JSON.stringify({ auth: "refresh-secret" }) }),
+      );
+      expect(refreshed.statusCode).toBe(200);
+      const pair = JSON.parse(refreshed.body as string) as { getUrl: string; putUrl: string };
+      expect(new URL(pair.getUrl).searchParams.get("X-Amz-Expires")).toBe("3600");
+      expect(pair.getUrl).not.toBe(pair.putUrl);
     });
 
     it("carries the role's session token when present — Lambda credentials are always temporary", async () => {

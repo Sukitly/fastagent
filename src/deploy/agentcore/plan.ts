@@ -28,6 +28,7 @@
  *  host where the build runs on the operator's machine (docker buildx) instead of remotely.
  */
 import { createHash } from "node:crypto";
+import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
@@ -297,7 +298,7 @@ function presign(method, seconds) {
 }
 
 async function invoke(envelope) {
-  if (process.env.WAKE_SECRET && !ownUrl) {
+  if ((process.env.WAKE_SECRET || process.env.STATE_REFRESH_SECRET) && !ownUrl) {
     const { LambdaClient, GetFunctionUrlConfigCommand } = require("@aws-sdk/client-lambda");
     ownUrl = (await new LambdaClient({}).send(
       new GetFunctionUrlConfigCommand({ FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME }),
@@ -306,10 +307,16 @@ async function invoke(envelope) {
   if (ownUrl) envelope.wake = { url: ownUrl };
   // Authenticates this envelope as coming from the forwarder (see the template's FastagentIngressSecret).
   envelope.auth = process.env.INGRESS_SECRET;
-  // 12 h: comfortably longer than a session's 8 h compute ceiling, so the pair minted with an
-  // envelope stays usable for that session's whole life (the snapshot may be pushed much later,
-  // when background work finally settles).
-  if (process.env.STATE_BUCKET) envelope.state = { getUrl: presign("GET", 43200), putUrl: presign("PUT", 43200) };
+  // Keep each capability short-lived. Function-URL deployments also carry an authenticated refresh
+  // endpoint, so a background turn settling hours after its webhook never depends on the temporary
+  // Lambda credentials that signed the original pair still being alive.
+  if (process.env.STATE_BUCKET) envelope.state = {
+    getUrl: presign("GET", 3600),
+    putUrl: presign("PUT", 3600),
+    ...(ownUrl && process.env.STATE_REFRESH_SECRET ? {
+      refresh: { url: ownUrl.replace(/\\/$/, "") + "/__fastagent/state-urls", auth: process.env.STATE_REFRESH_SECRET },
+    } : {}),
+  };
   const res = await client.send(new InvokeAgentRuntimeCommand({
     agentRuntimeArn: process.env.RUNTIME_ARN,
     runtimeSessionId: process.env.INGRESS_SESSION_ID,
@@ -384,6 +391,21 @@ exports.handler = async (event, ctx) => {
   }
   const http = event && event.requestContext && event.requestContext.http;
   if (!http) throw new Error("unrecognized event shape");
+  // Refresh the snapshot capabilities with THIS Lambda invocation's current temporary credentials.
+  // The container may settle long after the webhook Lambda (and its credentials) expired.
+  if (event.rawPath === "/__fastagent/state-urls") {
+    const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
+    const actual = Buffer.from(typeof req.auth === "string" ? req.auth : "");
+    const expected = Buffer.from(process.env.STATE_REFRESH_SECRET || "");
+    if (!expected.length || actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
+      return { statusCode: 403, body: "forbidden\\n" };
+    }
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ getUrl: presign("GET", 3600), putUrl: presign("PUT", 3600) }),
+    };
+  }
   // The container's wake-alarm callback (reserved path, shared secret) — handled HERE, never forwarded.
   if (event.rawPath === "/__fastagent/wake-alarm") {
     const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
@@ -394,6 +416,11 @@ exports.handler = async (event, ctx) => {
     if (failed > 0) return { statusCode: 500, body: \`\${failed} alarm(s) failed\\n\` };
     return { statusCode: 200, body: "ok\\n" };
   }
+  // Enforce the advertised ORIGINAL-body ceiling before base64 adds another 4/3 inside the runtime
+  // envelope. This also leaves deterministic room for headers/query/JSON under Lambda's 6 MB cap.
+  const webhookBytes = event.body === undefined ? 0
+    : event.isBase64Encoded ? Buffer.byteLength(event.body, "base64") : Buffer.byteLength(event.body);
+  if (webhookBytes > ${MAX_WEBHOOK_BODY_BYTES}) return { statusCode: 413, body: "payload too large\\n" };
   // Function URL webhook — forward the original request verbatim (signature material included).
   const r = await invoke({
     kind: "webhook",
@@ -619,7 +646,11 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
             `              - Effect: Allow # hand the poke schedules their invoke role`,
             `                Action: iam:PassRole`,
             `                Resource: !GetAtt WakeSchedulerRole.Arn`,
-            `              - Effect: Allow # self-resolve the public URL ridden on every envelope`,
+          ]
+        : []),
+      ...(needsFunctionUrl
+        ? [
+            `              - Effect: Allow # self-resolve callback URL for state-URL refresh / wake alarms`,
             `                Action: lambda:GetFunctionUrlConfig`,
             `                Resource: ${forwarderFnArn}`,
           ]
@@ -641,6 +672,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `        Variables:`,
       `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
       `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
+      ...(needsFunctionUrl ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
       ...(input.selfSchedule
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,

@@ -6,11 +6,11 @@ import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import {
   type AgentcoreEnvelope,
-  MAX_ENVELOPE_BYTES,
   UnknownScheduleError,
   type WebhookReply,
   agentcoreRoutes,
 } from "../src/channels/agentcore.ts";
+import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { StateSync } from "../src/channels/agentcore-state.ts";
 import type { Routes } from "../src/host/node.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
@@ -122,6 +122,19 @@ describe("agentcore adapter: webhook envelope", () => {
     expect(reply.headers["content-type"]).toBe("application/json");
     expect(Buffer.from(reply.bodyB64, "base64").toString()).toBe('{"challenge":"pong"}');
     expect(seen).toEqual([{ method: "POST", secret: "s3cret", body: '{"update_id":1}' }]);
+  });
+
+  it("enforces the original webhook-body limit even if a caller bypasses the public forwarder", async () => {
+    const routes = adapter({ routes: { "POST /hook": () => new Response("must not run") } });
+    const res = await postEnvelope(routes, {
+      kind: "webhook",
+      method: "POST",
+      path: "/hook",
+      bodyB64: Buffer.alloc(MAX_WEBHOOK_BODY_BYTES + 1).toString("base64"),
+    });
+    expect(res.status).toBe(200);
+    const reply = (await res.json()) as WebhookReply;
+    expect(reply.status).toBe(413);
   });
 
   it("carries a non-2xx channel response inside the envelope (transport stays 200)", async () => {

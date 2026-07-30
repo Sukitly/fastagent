@@ -137,6 +137,31 @@ describe("agentcore state snapshot", () => {
       expect(calls[1]!.body!.byteLength).toBeGreaterThan(0);
     });
 
+    it("re-mints presigned URLs immediately before a late snapshot PUT", async () => {
+      const local = await stateRoot({ "sessions/a.jsonl": "history" });
+      const expiring = {
+        ...urls,
+        refresh: { url: "https://forwarder/__fastagent/state-urls", auth: "refresh-secret" },
+      };
+      const { impl, calls } = fakeFetch((url, init) => {
+        if (url === expiring.refresh.url) {
+          return Response.json({ getUrl: "https://s3/fresh-get", putUrl: "https://s3/fresh-put" });
+        }
+        return new Response(null, { status: init?.method === "PUT" ? 200 : 404 });
+      });
+      const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+      sync.use(expiring);
+      await sync.ready();
+      sync.save();
+      await sync.flush();
+
+      expect(calls.map(({ url, method }) => [method, url])).toEqual([
+        ["GET", "https://s3/get"],
+        ["POST", "https://forwarder/__fastagent/state-urls"],
+        ["PUT", "https://s3/fresh-put"],
+      ]);
+    });
+
     it("a 404 is first boot (empty root, no error) — and only then may a snapshot be written", async () => {
       const local = await stateRoot();
       const { impl, calls } = fakeFetch((_u, init) =>

@@ -139,6 +139,9 @@ describe("deploy agentcore: the plan", () => {
     // BOTH url permissions — post-Oct-2025 Function URLs 403 with only InvokeFunctionUrl.
     expect(template).toContain("Action: lambda:InvokeFunctionUrl");
     expect(template).toContain("Action: lambda:InvokeFunction\n");
+    // Background turns refresh short-lived S3 capabilities through this same authenticated URL.
+    expect(template).toContain("STATE_REFRESH_SECRET: !Ref FastagentIngressSecret");
+    expect(template).toContain("Action: lambda:GetFunctionUrlConfig");
     // CommonJS on purpose — CFN inline code lands as index.js where ESM import is a syntax error.
     expect(forwarderSource()).toContain('require("@aws-sdk/client-bedrock-agentcore")');
     expect(forwarderSource()).toContain("exports.handler");

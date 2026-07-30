@@ -37,6 +37,7 @@ import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
+import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
 /**
  * The HOST's webhook body limit, and the one place it is computed. Lambda Function URLs cap a request
@@ -46,11 +47,6 @@ import { text } from "./respond.ts";
  * contract is 25 MiB — so `deploy agentcore` says so at plan time rather than letting an oversized
  * payload surface as an opaque 502.
  */
-const FUNCTION_URL_REQUEST_LIMIT = 6 * 1000 * 1000;
-export const MAX_WEBHOOK_BODY_BYTES = Math.floor((FUNCTION_URL_REQUEST_LIMIT * 3) / 4) - (64 << 10);
-
-/** Envelope cap: the largest deliverable body after base64 expansion, plus envelope overhead. */
-export const MAX_ENVELOPE_BYTES = FUNCTION_URL_REQUEST_LIMIT;
 
 /** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
  *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
@@ -226,6 +222,16 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         const { method, path, query, headers, bodyB64 } = envelope;
         if (typeof method !== "string" || typeof path !== "string" || !path.startsWith("/")) {
           return text('webhook envelope needs { "method": string, "path": "/..." }\n', 400);
+        }
+        if (typeof bodyB64 === "string" && Buffer.byteLength(bodyB64, "base64") > MAX_WEBHOOK_BODY_BYTES) {
+          return json(
+            {
+              status: 413,
+              headers: { "content-type": "text/plain" },
+              bodyB64: Buffer.from("payload too large\n").toString("base64"),
+            },
+            200,
+          );
         }
         const inner = new Request(
           `http://agentcore.local${path}${typeof query === "string" && query !== "" ? `?${query}` : ""}`,
