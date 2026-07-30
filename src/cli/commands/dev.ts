@@ -6,13 +6,13 @@
 import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
-import { resolvePlacement } from "../../paths.ts";
+
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";
 
@@ -29,7 +29,7 @@ export interface DevOptions {
 
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const ws = failStartupOn(() => resolvePlacement(dir));
+  const ws = placementOrExit(dir);
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
   // Pick a model interactively once, in the parent (both watch and --no-watch have a TTY); a spawned
@@ -52,7 +52,7 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
 async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
-  loadDotEnv(failStartupOn(() => resolvePlacement(dir)).agentDir);
+  loadDotEnv(placementOrExit(dir).agentDir);
   installProxyFetch();
 
   const a = await createPiAgentFromDir(dir, {

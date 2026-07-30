@@ -91,32 +91,50 @@ export function enclosingAgentDir(dir: string): string | undefined {
 }
 
 /**
+ * Why `dir` is not an agent, when it has its OWN way out — or undefined when it is simply not near
+ * one. Two positions qualify: standing INSIDE an agent (`fastagent/tools/`), and a directory NAMED
+ * `fastagent` that holds no definition. Both matter because the generic advice ("run `fastagent init`")
+ * is advice the scaffolder then refuses — it would build `fastagent/fastagent/`, which nothing resolves.
+ *
+ * Exported because `login` is the one command allowed to run outside an agent, and it must tell "truly
+ * outside" (→ the global credential) from "a dead end" (→ refuse, like every other command). Without
+ * this it re-derived the second case with its own `basename(dir) === AGENT_DIR` check, duplicating the
+ * rule stated below.
+ */
+export function placementDeadEnd(dir: string): string | undefined {
+  const base = resolve(dir);
+  const enclosing = enclosingAgentDir(base);
+  if (enclosing) {
+    return `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`;
+  }
+  if (basename(base) === AGENT_DIR) {
+    return (
+      `${base} is named "${AGENT_DIR}" but holds no definition — that name is reserved for agent ` +
+      `directories, so an agent cannot be scaffolded here. \`cd ..\` and run \`fastagent init\`, or rename it`
+    );
+  }
+  return undefined;
+}
+
+/**
  * Resolve a directory into its placement — the ONE owner of the rule, and it has exactly one shape:
  * the agent lives in a directory named `fastagent/` that holds a definition, and the directory around
  * it is the workspace. Placement is STRUCTURAL — never configured, never detected from the
  * surroundings, and never dependent on where you invoked from: `<dir>` and `<dir>/fastagent` resolve
- * identically, because the SAME name + evidence test ({@link findAgentDir}) decides both. Anything
- * else is not an agent → throw (fail visibly), with the way out that fits which dead end it is.
+ * identically, because the SAME name + evidence test ({@link findAgentDir}) decides both.
+ *
+ * Anything else throws (fail visibly). Resolution itself never walks UP — the answer must not depend
+ * on how deep you stand — but the MESSAGE reads the path, so each dead end gets the exit that fits it
+ * ({@link placementDeadEnd}).
  */
 export function resolvePlacement(dir: string): ResolvedPlacement {
   const base = resolve(dir);
   const agentDir = findAgentDir(base);
   if (!agentDir) {
-    // Resolution never walks UP (that would make the answer depend on how deep you stand), but the
-    // most likely way to land here is standing INSIDE an agent — in `fastagent/tools/`, say. Telling
-    // that user to run `fastagent init` would send them to build `fastagent/fastagent/`, the one
-    // shape scaffolding refuses. Name the enclosing agent instead. Third dead end, third way out: a
-    // directory NAMED `fastagent` that holds no definition cannot host one either (init refuses the
-    // reserved name), so the generic "run `fastagent init`" would be advice the next guard rejects.
-    const enclosing = enclosingAgentDir(base);
     throw new Error(
-      enclosing
-        ? `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`
-        : basename(base) === AGENT_DIR
-          ? `${base} is named "${AGENT_DIR}" but holds no definition — that name is reserved for agent ` +
-            `directories, so an agent cannot be scaffolded here. \`cd ..\` and run \`fastagent init\`, or rename it`
-          : `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory holding a definition here; ` +
-            `run \`fastagent init\` to scaffold one`,
+      placementDeadEnd(base) ??
+        `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory holding a definition here; ` +
+          `run \`fastagent init\` to scaffold one`,
     );
   }
   return { agentDir, workspace: dirname(agentDir) };

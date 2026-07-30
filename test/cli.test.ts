@@ -391,7 +391,7 @@ describe("cli papercuts", () => {
 
   it("a directory that is not an agent fails as a one-line startup error, not a raw stack", async () => {
     // resolvePlacement throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
-    // the failStartupOn wrapper the refusal surfaced as an uncaught stack trace (found in acceptance).
+    // placementOrExit the refusal surfaced as an uncaught stack trace (found in acceptance).
     const dir = await mkdtemp(join(tmpdir(), "fa-not-an-agent-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n"); // a config is NOT the marker
     const { code, stderr } = await run(["info", dir]);

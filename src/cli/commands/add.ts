@@ -9,7 +9,7 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { dotEnvPath, loadDotEnv } from "../../env.ts";
-import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
@@ -27,7 +27,7 @@ import {
 } from "../../scaffold/add-channel.ts";
 import { exists } from "../../scaffold/init.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
-import { failStartup, failStartupOn, failUsage } from "../fail.ts";
+import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 export async function runAddChannel(
@@ -37,7 +37,7 @@ export async function runAddChannel(
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
   // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
-  const { agentDir: target } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const { agentDir: target } = placementOrExit(resolve(dirArg));
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
@@ -280,7 +280,7 @@ export async function runAddSkill(
   dirArg: string,
   opts: { update?: boolean },
 ): Promise<void> {
-  const { agentDir: target } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const { agentDir: target } = placementOrExit(resolve(dirArg));
   if (!source) {
     // A missing source is a usage error (exit 2), but the guide is worth more than a bare
     // missing-argument line — the common path (writing your own skill) needs no command at all.

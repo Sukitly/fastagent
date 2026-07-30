@@ -6,14 +6,14 @@
  */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { AGENT_DIR, resolvePlacement } from "../../paths.ts";
+import { AGENT_DIR } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { scheduleSession } from "../../schedule/scheduler.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface FireOptions {
@@ -25,7 +25,7 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const fireDir = resolve(dirArg);
-  const ws = failStartupOn(() => resolvePlacement(fireDir));
+  const ws = placementOrExit(fireDir);
   loadDotEnv(ws.agentDir);
   installProxyFetch();
   await resolveFirstRunModel(ws.agentDir, opts);

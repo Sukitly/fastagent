@@ -13,13 +13,13 @@
  * its own directory, mode 0700.
  */
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
-import { AGENT_DIR, GLOBAL_HOME_DIR, enclosingAgentDir, findAgentDir, resolvePlacement } from "../../paths.ts";
+import { AGENT_DIR, GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
@@ -29,16 +29,12 @@ export interface LoginOptions {
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
-  const agentDir = findAgentDir(process.cwd());
-  // "Outside an agent" must mean exactly that. Standing inside one (`fastagent/tools/`), or in a
-  // directory NAMED `fastagent` that holds no definition, are both positions resolvePlacement refuses
-  // with a specific way out — and taking the global fallback there would write a credential to a
-  // different scope under a message saying there is no agent here. Route all of them through the one
-  // owner, so login's story matches every other command's.
   const cwd = process.cwd();
-  if (!agentDir && (enclosingAgentDir(cwd) || basename(cwd) === AGENT_DIR)) {
-    failStartupOn(() => resolvePlacement(cwd));
-  }
+  const agentDir = findAgentDir(cwd);
+  // "Outside an agent" must mean exactly that: a position with its own way out (inside an agent, or the
+  // reserved name) is a dead end every other command refuses, and taking the global fallback there
+  // would write a credential to a different scope under a message saying there is no agent here.
+  if (!agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the
   // path resolvers need no "is this $HOME?" special case to infer it.
   const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);

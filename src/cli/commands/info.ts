@@ -9,14 +9,14 @@ import {
   resolveModelSpec,
   resolveSessionsDirOverride,
 } from "../../engines/pi/config.ts";
-import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -27,7 +27,7 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const { agentDir, workspace } = failStartupOn(() => resolvePlacement(dir));
+  const { agentDir, workspace } = placementOrExit(dir);
   loadDotEnv(agentDir); // skills/tools may read env at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);

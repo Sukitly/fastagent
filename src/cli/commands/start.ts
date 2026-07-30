@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import { authSeedBytes } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import { resolveSecretsDir, resolvePlacement } from "../../paths.ts";
+import { resolveSecretsDir } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
@@ -15,7 +15,7 @@ import { log, setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../scaffold/init.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";
 
@@ -34,7 +34,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
   // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
-  const ws = failStartupOn(() => resolvePlacement(dir));
+  const ws = placementOrExit(dir);
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
   loadDotEnv(ws.agentDir);
   installProxyFetch();

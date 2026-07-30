@@ -2,11 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolvePlacement } from "../../paths.ts";
+
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface InvokeOptions {
@@ -18,7 +18,7 @@ export interface InvokeOptions {
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   const invokeDir = resolve(dirArg);
-  const ws = failStartupOn(() => resolvePlacement(invokeDir));
+  const ws = placementOrExit(invokeDir);
   loadDotEnv(ws.agentDir);
   installProxyFetch();
   await resolveFirstRunModel(ws.agentDir, opts);

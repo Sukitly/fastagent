@@ -1,13 +1,13 @@
 /** `fastagent chat [dir]`: open the SAME assembled agent in pi's interactive TUI. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolvePlacement } from "../../paths.ts";
+
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 export async function runChat(dirArg: string, opts: { model?: string; authPath?: string }): Promise<void> {
-  const ws = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const ws = placementOrExit(resolve(dirArg));
   loadDotEnv(ws.agentDir);
   installProxyFetch(); // model calls (and the login dialog) must go through the proxy too
   // First-run funnel, FULL picker: chat authenticates through fastagent's credential store like every

@@ -13,13 +13,13 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
-import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
 import type { SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
-import { failStartup, failStartupOn } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface AttachOptions {
   /** Override the control endpoint (skip control.json discovery) — for a remote serve. */
@@ -126,7 +126,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // A REMOTE attach reads nothing under `dir` — no control.json to discover, no agent to assemble —
   // so requiring one would refuse the command's whole point (a laptop attaching to a deployed box).
   // Placement is resolved only for the local-discovery path, which genuinely needs an agent.
-  const dir = remote ? resolve(dirArg ?? ".") : failStartupOn(() => resolvePlacement(resolve(dirArg ?? "."))).agentDir;
+  const dir = remote ? resolve(dirArg ?? ".") : placementOrExit(resolve(dirArg ?? ".")).agentDir;
   if (!remote) loadDotEnv(dir);
   // For a discovered endpoint the FIRST read joins the startup budget below: the dev-watch
   // restart window has two halves — control.json unlinked (not yet rewritten) and port not yet

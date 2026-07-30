@@ -37,13 +37,13 @@ import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
-import { AGENT_DIR, type ResolvedPlacement, resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { AGENT_DIR, type ResolvedPlacement, resolveStateRoot } from "../../paths.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
-import { failStartup, failStartupOn, failUsage } from "../fail.ts";
+import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
@@ -66,7 +66,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
   // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
   // from the workspace, which is the build context.
-  const placement = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const placement = placementOrExit(resolve(dirArg));
   const { agentDir, workspace } = placement;
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.

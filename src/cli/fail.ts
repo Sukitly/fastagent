@@ -1,3 +1,5 @@
+import { type ResolvedPlacement, resolvePlacement } from "../paths.ts";
+
 /** stderr renders color: a color TTY, with Node's `hasColors()` carrying the NO_COLOR/TERM=dumb veto. */
 function stderrHasColors(): boolean {
   return process.stderr.isTTY === true && (process.stderr.hasColors?.() ?? false);
@@ -23,14 +25,22 @@ export function failStartup(error: unknown): never {
 }
 
 /**
- * Run a SYNC startup step under the startup-failure policy — the synchronous sibling of the
- * `.catch(failStartup)` every async chain carries. Layout resolution (`resolvePlacement`) runs before
- * any promise exists; a bare call would surface its user-fixable refusal (the ambiguous-layout error)
- * as a raw uncaught stack instead of the one-line `Error:` + exit 1 every other startup problem gets.
+ * THE placement entry point for commands: resolve `dir`, or exit 1 with the one-line refusal. Every
+ * command that needs an agent goes through this — the try/catch was hand-repeated at sixteen call
+ * sites, which is sixteen chances to forget it (`dev`'s supervisor did, and surfaced a raw stack).
+ *
+ * The catch is what makes it a function at all: placement resolves SYNCHRONOUSLY, before any promise
+ * exists, so it cannot ride the `.catch(failStartup)` every async startup chain carries — and its
+ * refusals ("not a fastagent agent", plus the two dead ends with their own exits) are user-fixable,
+ * which means a one-line `Error:` and exit 1, never a stack.
+ *
+ * Commands that may legitimately run WITHOUT an agent do not call it: `login` outside any agent
+ * (global credential) and `attach --url/--token` (nothing local is read). Both say so where they
+ * decide, and there are only those two.
  */
-export function failStartupOn<T>(fn: () => T): T {
+export function placementOrExit(dir: string): ResolvedPlacement {
   try {
-    return fn();
+    return resolvePlacement(dir);
   } catch (error) {
     failStartup(error);
   }

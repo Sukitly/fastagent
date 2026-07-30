@@ -2,17 +2,17 @@
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
-import { resolvePlacement } from "../../paths.ts";
+
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { turnContext } from "../../engines/pi/tool-context.ts";
-import { failStartup, failStartupOn, failUsage } from "../fail.ts";
+import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
   // Argument shape first: malformed JSON is a USAGE error (exit 2), independent of whether the
   // directory is an agent (a runtime failure, exit 1).
   const args = parseToolArgs(argsJson);
-  const { agentDir, workspace } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const { agentDir, workspace } = placementOrExit(resolve(dirArg));
   loadDotEnv(agentDir); // a tool may read a key from .env
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
