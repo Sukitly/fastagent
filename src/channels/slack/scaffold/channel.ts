@@ -20,14 +20,14 @@ export default slackChannel({
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
   groupBehavior: "context", // default; use "mentions" only for an explicit least-privilege setup
-  rendering: "native", // Slack Agent streams + task timeline; use "classic" only for compatibility
-  // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
+  // Slack Agent stream; its inline tool traces show each call's first argument and stay in the
+  // delivered message. "classic" settles into the answer alone (and gives up native streaming).
+  rendering: "native",
   // Optional per-reply footer, if your policy requires one: aiDisclaimer: "AI-generated; verify important information.",
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: a generic greeting)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-  // Direct and group asks default to independent sessions + Slack threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),
+  // and that thread is the session — see docs/design/participant-model.md.
   // Dev/personal bot: surface raw errors. Remove this for a customer-facing bot; details remain in logs.
   onError: (failed) => `⚠️ ${failed.details}`,
 });

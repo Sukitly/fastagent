@@ -12,6 +12,7 @@ The stable design center is the engine-neutral Agent Handler contract (`docs/SPE
 |---|---|
 | `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
+| `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
 
@@ -55,6 +56,7 @@ src/
 │   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + slack + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
 │   ├── context-buffer.ts    # SHARED: generic durable un-summoned-discussion buffer (peek→completed→commit) — entry shape/validator/line injected per channel
+│   ├── thread-participants.ts # SHARED: who the agent has HEARD in a thread (the participant model's summon rule) — observed per message, never read back from the platform
 │   ├── invoke-turn-kit.ts   # SHARED: busy-retry stream loop around agent.invoke (onCompleted commit point) + prompt-suffix wording (manifests/notes)
 │   ├── state.ts, seen.ts    # SHARED: atomic channel state + bounded durable delivery dedup
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
@@ -70,13 +72,12 @@ src/
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   ├── slack/               # Slack Agent: native streams/tasks, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
+│   ├── slack/               # Slack Agent: native streams + inline tool traces, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
 │   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
-│   │   ├── owned-threads.ts # durable index of Agent-created group threads (admits bare continuations)
 │   │   ├── context-buffer.ts# feishu's entry shape + resource selection over the shared generic buffer
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow

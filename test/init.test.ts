@@ -76,7 +76,9 @@ describe("init: scaffoldAgent", () => {
 
     // Both ignore files travel with the directory; `.secrets/` protects itself independently of the
     // root one, which is the file the author is expected to edit.
-    expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
+    // No trailing slash: `node_modules/` would miss a SYMLINKED one (this repo's own .gitignore
+    // carries the same fix, for the same reason).
+    expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules$/m);
     expect(await readFile(join(dir, "fastagent", ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
