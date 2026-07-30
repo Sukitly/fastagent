@@ -80,10 +80,16 @@ definition. That is not a separate placement mode; it is the one rule with the t
 | several do | throws: names them, point at the one you mean |
 | none | throws: not a fastagent agent, with the exit that fits the position |
 
-- **The marker is the config, at every position.** One file decides it, so an agent directory needs no
-  reserved name (`--agentDir` calls it anything) and nothing has to guess whether `tools/` and `skills/`
-  in some repository mean an agent. The trade is explicit: **there is no zero-config agent** — a config
-  may be `export default {}`, but the file must exist, and `init` always writes it.
+- **The marker is the config, at every position — and it is a DECLARATION, not configuration.** Nothing
+  in an agent directory is logically required to serve a turn (the model can come from `--model`, the
+  tools default from pi, the loop is fastagent); what a directory must do is SAY it is an agent, because
+  the alternative is guessing. `export default {}` is a signature. So the marker has to be the one
+  artifact present in EVERY agent and absent from every non-agent: `persona.md`, `skills/`, `tools/`,
+  `channels/` and `schedules/` are each optional by design, and generic enough that scanning for them
+  would read half the world's repositories as agents. Only the config qualifies — the same job
+  `package.json`, `Cargo.toml`, `go.mod` and `pyproject.toml` do for their tools, none of which sniff for
+  evidence or make the manifest optional. An agent directory needs no reserved name either
+  (`--agent-dir` calls it anything), and a directory holding nothing but a config IS a complete agent.
 - **The scan is ONE level.** Deeper is that directory's own workspace, not this one's agent: for
   `repo/packages/reviewer/` you point at the package (or run from inside it), and it works on itself.
 - Resolution never walks UP (an agent must not be claimed from arbitrarily deep inside it), but the
@@ -100,7 +106,7 @@ duty follows from the lookup: **the target must be an agent the lookup would ret
 when `dir` already resolves over something else (a config AT `dir` beats anything inside it; a second
 sibling agent would make `dir` name neither). Beyond that, a SUBDIRECTORY target must be empty (content
 there is an unfinished agent or something unrelated, and landing persona.md beside it would be a silent
-mix), while `--agentDir .` is a directory being adopted — content is expected, so every existing file is
+mix), while `--agent-dir .` is a directory being adopted — content is expected, so every existing file is
 KEPT (reported, never overwritten, never verified).
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret

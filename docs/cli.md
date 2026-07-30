@@ -51,7 +51,7 @@ Creates a self-iterating agent — it can edit its own definition (persona.md an
 
 `--agent-dir .` (spelled `--flat`) puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package, where the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.*` refuses, because that means it is already an agent.
 
-What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup would not return — an agent already resolving at `dir` (a config there beats anything inside it), or a second agent beside an existing one (`dir` would then name neither). **There is no zero-config agent**: the config may be `export default {}`, but the file must exist.
+What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup would not return — an agent already resolving at `dir` (a config there beats anything inside it), or a second agent beside an existing one (`dir` would then name neither). The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
 
 Options:
 
