@@ -87,12 +87,14 @@ function dockerfile(input: ContainerInput): string {
   const into = (p: string): string => `${prefix}${p}`;
   // A build step that must run IN the agent dir (`RUN` already gets a shell from docker).
   const at = (cmd: string): string => (prefix ? `cd ${prefix.replace(/\/$/, "")} && ${cmd}` : cmd);
-  // The entrypoint. Flat needs no shell at all, so it keeps exec form; nested needs one for the `cd`, and
-  // `exec` inside it hands PID 1 to the process — otherwise the shell holds it and swallows SIGTERM.
-  const cmd = (exe: string, ...argv: string[]): string =>
-    prefix
-      ? `["sh", "-c", "cd ${prefix.replace(/\/$/, "")} && exec ${[exe, ...argv].join(" ")}"]`
-      : `[${[exe, ...argv].map((a) => JSON.stringify(a)).join(", ")}]`;
+  // The entrypoint. Only the BUN path needs a working directory (`bun run` resolves the script from the
+  // package.json beside it), and a `cd` there means a shell — with `exec`, or sh stays PID 1 and swallows
+  // the container's SIGTERM. The npm path needs no shell at all: the binary path is context-relative and
+  // `start /app` is absolute, so exec form is both correct and signal-clean. (A `cd` on that path was a
+  // bug: after `cd fastagent`, `./fastagent/node_modules/...` resolves one level too deep.)
+  const bunCmd = prefix
+    ? `["sh", "-c", "cd ${prefix.replace(/\/$/, "")} && exec bun run fastagent start /app"]`
+    : `["bun", "run", "fastagent", "start", "/app"]`;
   const layoutNote = prefix
     ? `The whole directory is the agent's workspace; the agent itself lives in ${prefix}`
     : `The directory IS the agent — it is also its own workspace.`;
@@ -140,7 +142,7 @@ ${apt}WORKDIR /app
     return `${head}COPY ${into("package.json")} ${into("bun.lock*")} ./${prefix}
 RUN ${at(install)}
 COPY . .
-CMD ${cmd("bun", "run", "fastagent", "start", "/app")}
+CMD ${bunCmd}
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent);
@@ -154,7 +156,7 @@ CMD ${cmd("bun", "run", "fastagent", "start", "/app")}
   return `${head}COPY ${into("package.json")} ${into("package-lock.json*")} ./${prefix}
 RUN ${at(install)}
 COPY . .
-CMD ${cmd(`./${into("node_modules/.bin/fastagent")}`, "start", "/app")}
+CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]
 `;
 }
 

@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
 import { modelTravelIssue } from "../src/deploy/preflight.ts";
@@ -186,8 +187,12 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(df).toContain("COPY fastagent/package.json fastagent/package-lock.json* ./fastagent/"); // workspace deps…
     expect(df).toContain("cd fastagent && npm ci");
     expect(df).toContain("COPY . ."); // …then the whole workspace
-    // Nested needs a shell for the `cd`, and `exec` inside it so PID 1 is the agent, not sh (SIGTERM).
-    expect(df).toContain(`CMD ["sh", "-c", "cd fastagent && exec ./fastagent/node_modules/.bin/fastagent start /app"]`);
+    // The npm entrypoint needs NO shell: assert the property (the binary path resolves from the image's
+    // WORKDIR) rather than transcribing the line — a `cd` here once made it resolve one level too deep.
+    const cmdBin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(df)?.[1];
+    expect(cmdBin).toBeDefined();
+    expect(posix.normalize(posix.join("/app", cmdBin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
+    expect(df).not.toContain("sh"); // exec form: PID 1 is the agent, so SIGTERM reaches it
     const ignore = p.artifacts.find((a) => a.path === "fastagent/Dockerfile.dockerignore")?.content ?? "";
     expect(ignore).not.toMatch(/^\.git$/m); // write-back needs the repo's .git — NOT excluded
     // Recursive on purpose: dockerignore is root-anchored, and a bare `node_modules` would let the build
@@ -215,6 +220,8 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
     expect(bunDf).toContain("COPY fastagent/package.json fastagent/bun.lock* ./fastagent/");
     expect(bunDf).toContain("cd fastagent && bun install --frozen-lockfile");
+    // Bun DOES need a cwd (it resolves the script from the package.json beside it), so a shell — with
+    // `exec`, or sh stays PID 1 and swallows SIGTERM.
     expect(bunDf).toContain(`CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]`);
 
     const md = planFlyDeploy({
@@ -241,9 +248,9 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("code-workspace CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
     const npm = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
-    expect(npm).toContain(
-      'CMD ["sh", "-c", "cd fastagent && exec ./fastagent/node_modules/.bin/fastagent start /app"]',
-    );
+    // The LOCAL bin, resolved from the image WORKDIR — never npx (which would fetch an unrelated package).
+    const bin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(npm)?.[1];
+    expect(posix.normalize(posix.join("/app", bin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
     expect(npm).not.toContain("npx");
   });
 

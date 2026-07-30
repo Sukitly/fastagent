@@ -98,6 +98,18 @@ describe("cli papercuts", () => {
     await writeFile(join(dir, "fastagent", "Dockerfile"), hand);
     expect((await run(["deploy", "fly", dir, "--force"])).code).toBe(0);
     expect(await readFile(join(dir, "fastagent", "Dockerfile"), "utf8")).toBe(hand);
+
+    // …and it must know EVERY artifact kind. A kind missing from the ownership table reads as the
+    // author's forever, which silently turns --force into a no-op — `fly.toml`/`railway.json` were.
+    const flyToml = join(dir, "fastagent", "fly.toml");
+    const generatedFly = await readFile(flyToml, "utf8");
+    await writeFile(flyToml, generatedFly.replace(/primary_region = "\w+"/, 'primary_region = "fra"'));
+    expect((await run(["deploy", "fly", dir, "--force"])).code).toBe(0);
+    expect(await readFile(flyToml, "utf8")).toBe(generatedFly); // ours → reset by --force
+
+    await writeFile(flyToml, 'app = "mine"\n'); // no marker → the author's
+    expect((await run(["deploy", "fly", dir, "--force"])).code).toBe(0);
+    expect(await readFile(flyToml, "utf8")).toBe('app = "mine"\n');
   });
 
   it("deploy: generate mode succeeds with the WYSIWYG note; the agentDir config key is retired", async () => {

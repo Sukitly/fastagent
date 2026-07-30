@@ -65,10 +65,25 @@ export const dockerfilePathVar = (prefix: string): string => `/${prefix}Dockerfi
 
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
+/** railway.json is JSON, so its ownership marker is a KEY rather than a comment line. Railway ignores
+ *  unknown keys; the predicate below is what lets `--force` reset OUR file and keep a hand-written one. */
+const GENERATED_RAILWAY_KEY = "x-generated-by";
+const GENERATED_RAILWAY_VALUE = "fastagent deploy railway";
+
+/** Did fastagent generate this `railway.json`? Unparseable or unmarked reads as the author's. */
+export function isGeneratedRailwayJson(content: string): boolean {
+  try {
+    return (JSON.parse(content) as Record<string, unknown>)[GENERATED_RAILWAY_KEY] === GENERATED_RAILWAY_VALUE;
+  } catch {
+    return false;
+  }
+}
+
 function railwayJson(prefix: string): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
+      [GENERATED_RAILWAY_KEY]: GENERATED_RAILWAY_VALUE,
       // dockerfilePath is relative to the workspace root (`railway up`'s upload context).
       build: { builder: "DOCKERFILE", dockerfilePath: `${prefix}Dockerfile` },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
