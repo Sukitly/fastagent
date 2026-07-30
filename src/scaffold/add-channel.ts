@@ -287,22 +287,21 @@ export async function appendChannelDotEnv(
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
-  // The secrets dir may not exist yet (a hand-made agent, a relocated FASTAGENT_SECRETS_DIR). If WE
-  // create it, we write its `.gitignore` too — the directory and its self-protection are one unit, and
-  // handing back a half-formed secrets dir with an app secret in it would be our bug, not the author's.
-  // `mkdir` reports the first path it created, so an EXISTING directory is never revisited: fastagent
-  // still has no opinion about ignore files it did not create.
-  const created = await mkdir(dirname(file), { recursive: true });
-  if (created !== undefined) {
-    // Only EEXIST is tolerable (a concurrent writer). A permission/disk failure on the file that keeps
-    // credentials out of git must surface — swallowing it would leave the secret below unprotected and
-    // silent, the one combination this whole path exists to avoid.
-    await writeFile(join(dirname(file), ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
-      (e: NodeJS.ErrnoException) => {
-        if (e.code !== "EEXIST") throw e;
-      },
-    );
-  }
+  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into
+  // carries its own `.gitignore`. `init` writes it, and so does this — because the reachable cases where
+  // it is missing (a hand-made agent, a `FASTAGENT_SECRETS_DIR` pointed at an existing directory) are
+  // exactly the ones where the next line mints an unrecoverable app secret. `wx`, so a file the author
+  // wrote is never touched. The accepted cost: someone who DELETED it to track secrets deliberately gets
+  // it back once. The risk is not symmetric — that is an annoyance; the other way is a published credential.
+  const secretsDir = dirname(file);
+  await mkdir(secretsDir, { recursive: true });
+  // Only EEXIST is tolerable (already protected, or a concurrent writer). A permission/disk failure on
+  // the file that keeps credentials out of git must surface, not be swallowed.
+  await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
+    (e: NodeJS.ErrnoException) => {
+      if (e.code !== "EEXIST") throw e;
+    },
+  );
   let current = "";
   try {
     current = await readFile(file, "utf8");

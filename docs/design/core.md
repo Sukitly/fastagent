@@ -101,8 +101,10 @@ marked differently, and the asymmetry is deliberate:
   the path so each dead end gets its own exit: inside an agent (nested or flat) → `cd` there; a
   directory named `fastagent` holding no definition → rename it, since `init` refuses that name too.
 
-`init` mirrors the same discipline — it either creates, or refuses with the reason. The two placements
-differ there in exactly one way: a NESTED target must be empty (content there is an unfinished agent or
+`init` mirrors the same discipline — it either creates, or refuses with the reason. One refusal follows
+from the ORDERING above: creating the loser is a silent no-op, so `init --flat` where a `fastagent/` agent
+already exists is refused, and so is plain `init` inside a flat agent (either scaffold would be shadowed
+and never served). Beyond that the two placements differ in exactly one way: a NESTED target must be empty (content there is an unfinished agent or
 something unrelated, and landing persona.md beside it would be a silent mix), while a FLAT target is
 expected to have content — adopting a directory is the point, so every existing file is KEPT (reported,
 never overwritten, never verified).
@@ -111,10 +113,15 @@ The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through t
 store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
 point both at it in a container).
 
-**Git is the author's, not fastagent's.** `init` scaffolds two ignore files — the agent's own
-(`node_modules/`, `.state/`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the template) — and
-that is the last time fastagent has an opinion about git. No command writes, rewrites, reads or
-verifies an ignore file at runtime. They are split because the root one is the file an author has
+**Git is the author's, not fastagent's — with one stated exception.** `init` scaffolds two ignore files:
+the agent's own (`node_modules`, `.state`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the
+template). No command reads, verifies or rewrites an ignore file, ever. The exception is narrow and
+one-directional: **the directory fastagent writes secrets into carries its own `.gitignore`** — so
+`add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`, never over an existing
+one) when the resolved secrets dir has none. The reachable cases are a hand-made agent and a
+`FASTAGENT_SECRETS_DIR` pointed at an existing directory; the accepted cost is that someone who deleted
+that file to track secrets deliberately gets it back once. The risk is not symmetric — that is an
+annoyance, the other way is a published credential. They are split because the root one is the file an author has
 reason to edit: git's nested-ignore precedence keeps the credentials protected whatever happens to
 it. The
 version that did carried a decision procedure ("is this path under a directory we control?") that

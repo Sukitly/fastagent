@@ -202,10 +202,16 @@ describe("init: scaffoldAgent", () => {
     for (const noise of [".DS_Store", ".gitkeep"]) await writeFile(join(dir3, "fastagent", noise), "");
     expect((await scaffoldAgent(dir3)).created).toContain(agentPath("persona.md"));
 
-    // A config OUTSIDE fastagent/ is not a marker at all — placement is the directory NAME.
-    const dir4 = await freshDir();
-    await writeFile(join(dir4, "fastagent.config.ts"), "export default {};\n");
-    expect((await scaffoldAgent(dir4)).created).toContain(agentPath("persona.md"));
+    // A config at the root makes it a FLAT agent, so nesting one inside would SHADOW it (nested wins) —
+    // the scaffold would never be served. Refused in both directions, since either loser is a silent no-op.
+    const flatAlready = await freshDir();
+    await writeFile(join(flatAlready, "fastagent.config.ts"), "export default {};\n");
+    await expect(scaffoldAgent(flatAlready)).rejects.toThrow(/already resolves to the agent at .*would be shadowed/s);
+
+    const nestedAlready = await freshDir();
+    await mkdir(join(nestedAlready, "fastagent"), { recursive: true });
+    await writeFile(join(nestedAlready, "fastagent", "persona.md"), "You are terse.\n");
+    await expect(scaffoldAgent(nestedAlready, { flat: true })).rejects.toThrow(/would be shadowed/);
   });
 
   it("refuses init INSIDE an agent dir — fastagent/fastagent/ is a scaffold no command could resolve", async () => {

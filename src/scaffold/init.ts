@@ -25,8 +25,8 @@
  * this module writes are real templates under templates/, read through templates.ts.
  */
 import { access, lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, sep } from "node:path";
-import { AGENT_CONFIG_NAMES, AGENT_DIR, agentDefinitionOwner } from "../paths.ts";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { AGENT_CONFIG_NAMES, AGENT_DIR, agentDefinitionOwner, findAgentDir } from "../paths.ts";
 import { SECRETS_DIRNAME } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
@@ -185,6 +185,19 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       throw e;
     })
   ).filter((f) => ![".DS_Store", ".gitkeep", ".keep"].includes(f));
+  // Would this scaffold be SHADOWED? Resolution is ordered (nested wins over flat), so creating the
+  // loser is a silent no-op: `init --flat` where a `fastagent/` agent already exists writes a config that
+  // nothing will ever read, and plain `init` inside a flat agent buries it the same way. The reserved-name
+  // refusal above is one special case of this rule; this is the general one.
+  const shadowing = findAgentDir(dir);
+  if (shadowing !== undefined && shadowing !== resolve(dir, root)) {
+    throw new Error(
+      `"${dir}" already resolves to the agent at ${shadowing} — an agent scaffolded ${flat ? "here" : `in ./${root}/`} ` +
+        `would be shadowed by it and never served (a nested agent wins over a flat one). Use that agent, ` +
+        `move it away, or init in a different directory.`,
+    );
+  }
+
   // ONE coordinate system for both refusals — `displayPath` is the shared policy (relative inside the
   // cwd, absolute when it climbs out); the earlier pair mixed an absolute path with a basename-relative
   // one, in adjacent branches of the same command.
