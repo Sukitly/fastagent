@@ -10,7 +10,6 @@ import {
   defaultSessionsDir,
   loadConfig,
   resolveAuthPath,
-  resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
 } from "../src/engines/pi/config.ts";
@@ -183,13 +182,15 @@ describe("models: createPiModels honors authPath (the project-level credential s
   });
 });
 
-describe("config: resolveAuthPathOverride (auth-file precedence)", () => {
-  it("precedence --auth-path > FASTAGENT_AUTH_PATH > none; a given value resolves to absolute", () => {
+describe("config: resolveAuthPath (auth-file precedence)", () => {
+  it("precedence --auth-path > FASTAGENT_AUTH_PATH > the agent default; a given value goes absolute", () => {
+    // Asserted through the ONE function commands call, not its internal override step: same coverage,
+    // one less export existing only for a test.
     const env = { FASTAGENT_AUTH_PATH: "envauth.json" } as NodeJS.ProcessEnv;
-    expect(resolveAuthPathOverride("flagauth.json", env)).toBe(resolve("flagauth.json")); // flag beats env
-    expect(resolveAuthPathOverride(undefined, env)).toBe(resolve("envauth.json")); // env when no flag
-    expect(resolveAuthPathOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
-    expect(resolveAuthPathOverride("/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
+    expect(resolveAuthPath("/app", "flagauth.json", env)).toBe(resolve("flagauth.json")); // flag beats env
+    expect(resolveAuthPath("/app", undefined, env)).toBe(resolve("envauth.json")); // env when no flag
+    expect(resolveAuthPath("/app", undefined, {} as NodeJS.ProcessEnv)).toBe("/app/.secrets/auth.json"); // neither
+    expect(resolveAuthPath("/app", "/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
   });
 
   it("resolveAuthPath falls back to the workspace project auth file (not the global default)", () => {
@@ -204,8 +205,8 @@ describe("config: resolveAuthPathOverride (auth-file precedence)", () => {
     const { homedir } = await import("node:os");
     const env = { FASTAGENT_AUTH_PATH: "~/.fastagent/auth.json" } as NodeJS.ProcessEnv;
     // the footgun this guards: a bare resolve("~/x") makes a literal `<cwd>/~` dir and the secret lands there
-    expect(resolveAuthPathOverride(undefined, env)).toBe(join(homedir(), ".fastagent", "auth.json"));
-    expect(resolveAuthPathOverride("~", {} as NodeJS.ProcessEnv)).toBe(homedir());
+    expect(resolveAuthPath("/app", undefined, env)).toBe(join(homedir(), ".fastagent", "auth.json"));
+    expect(resolveAuthPath("/app", "~", {} as NodeJS.ProcessEnv)).toBe(homedir());
     expect(resolveSessionsDirOverride(undefined, { FASTAGENT_SESSIONS_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(
       join(homedir(), "s"),
     ); // symmetric: sessions had the same latent bug

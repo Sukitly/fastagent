@@ -344,7 +344,7 @@ export async function preflightDeploy(input: {
   }
 
   // Write-back mechanics are fastagent's (the policy is the persona's): the image carries the git
-  // BINARY iff the baked workspace ships a `.git` — layout-neutral (history without the binary is a
+  // BINARY iff the baked workspace ships a `.git` (history without the binary is a
   // dead loop; the binary without history is dead weight). A non-git workspace that still needs git
   // (the agent clones repos as its job) declares config.deploy.apt: ["git"] explicitly. Merged with
   // (never duplicating) config.deploy.apt.

@@ -118,7 +118,7 @@ export async function buildWorkspaceSessionRuntime(
   }
 
   async function resolveAssembly(cwd: string) {
-    // The shared front half — the SAME layout/config/model-spec/tool/auth resolution the serving
+    // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving
     // opener uses (open.ts); those inputs cannot drift between the two consumption shapes.
     // (Definition→prompt assembly is NOT shared: serving re-reads live per invoke, this runtime is a
     // startup snapshot and pi appends skills/env itself — see the header.) `tools` arrives with

@@ -31,8 +31,7 @@ export const GLOBAL_HOME_DIR = ".fastagent";
  *  their rules out as literal text — renaming this constant means editing them too. */
 export const SECRETS_DIRNAME = ".secrets";
 
-/** The state segment inside an agent dir — same rule, same template caveat; `FASTAGENT_STATE_DIR`
- *  relocates the resolved dir ({@link resolveStateRoot}), never this name. */
+/** The state segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
 export const STATE_DIRNAME = ".state";
 
 /** The config filenames, in load precedence. ONE source: the loader (below) and `scaffoldAgent`'s

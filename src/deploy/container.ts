@@ -150,8 +150,8 @@ CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
  *  `.git` is deliberately SHIPPED: the deployed agent's write-back (pull/commit/push) needs the
  *  repo's history+remote — the WYSIWYG bake's freshness/durability loop runs through git, driven by
  *  the agent itself, not by deploy machinery. Shipping `.git` is only half of that loop: preflight
- *  bakes the git BINARY into the generated image iff the workspace ships a `.git` (layout-neutral,
- *  the `shipsGit` fact); a non-git workspace that still needs git declares config.deploy.apt. */
+ *  bakes the git BINARY into the generated image iff the workspace ships a `.git` (the `shipsGit`
+ *  fact); a non-git workspace that still needs git declares config.deploy.apt. */
 const dockerignore = (input: ContainerInput): string =>
   DOCKERIGNORE_BASE +
   (input.machineryPaths ?? [])

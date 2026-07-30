@@ -271,10 +271,7 @@ export function resolveSessionsDirOverride(
  * + fail-visibly; see auth.ts); to share one account across projects, point this at the global
  * `~/.fastagent/.secrets/auth.json` — sharing ONE file is safe under the store's cross-process refresh lock.
  */
-export function resolveAuthPathOverride(
-  flag: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+function resolveAuthPathOverride(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
   return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
 }
 
