@@ -155,10 +155,13 @@ describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", ()
     expect(defaultAuthPath("/data/.secrets")).toBe("/data/.secrets/auth.json");
   });
 
-  it("anchor == $HOME (login outside any agent) → machinery nests under ~/.fastagent, never bare ~/.state", async () => {
+  it("the global home carries the same shape, with no special case in the resolvers", async () => {
+    // `login` outside any agent hands them `~/.fastagent` directly, so `~/.state` / `~/.secrets` can
+    // never be created — not because the resolvers check for $HOME, but because nobody passes it.
     const { homedir } = await import("node:os");
-    expect(resolveStateRoot(homedir(), {} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".fastagent", ".state"));
-    expect(resolveSecretsDir(homedir(), {} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".fastagent", ".secrets"));
+    const global = join(homedir(), ".fastagent");
+    expect(resolveStateRoot(global, {} as NodeJS.ProcessEnv)).toBe(join(global, ".state"));
+    expect(resolveSecretsDir(global, {} as NodeJS.ProcessEnv)).toBe(join(global, ".secrets"));
   });
 
   it("sessions default derives from the resolved state root (one volume covers everything)", () => {

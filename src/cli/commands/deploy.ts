@@ -37,7 +37,7 @@ import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
-import { AGENT_DIR, resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { AGENT_DIR, type ResolvedPlacement, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -66,7 +66,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
   // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
   // from the workspace, which is the build context.
-  const { agentDir, workspace } = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const placement = failStartupOn(() => resolvePlacement(resolve(dirArg)));
+  const { agentDir, workspace } = placement;
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
@@ -84,8 +85,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // their warnings) lives in deploy/preflight.ts — testable in isolation. The CLI prints its messages and
   // stops on its gate; the host branch below adds only the host-specific artifacts + runbook + run drive.
   const pre = await preflightDeploy({
-    agentDir,
-    workspace,
+    placement,
     config,
     modelSpec,
     run: !!opts.run,
@@ -374,18 +374,18 @@ function deployEnvironment(agentDir: string, channels: ChannelKind[]): NodeJS.Pr
  * user-owned local topology. Docker owns container/network/volume lifecycle. A Compose tunnel service,
  * when present, yields an ephemeral URL that reuses the same webhook announcer as `dev --tunnel`.
  */
-async function runDeployDocker(params: {
-  agentDir: string;
-  workspace: string;
-  composeFile: string;
-  port: number;
-  requireTunnel: boolean;
-  modelAuth: string | undefined;
-  authPath: string;
-  channels: ChannelKind[];
-  longConnectionChannels: string[];
-  extraSecrets: string[];
-}): Promise<void> {
+async function runDeployDocker(
+  params: ResolvedPlacement & {
+    composeFile: string;
+    port: number;
+    requireTunnel: boolean;
+    modelAuth: string | undefined;
+    authPath: string;
+    channels: ChannelKind[];
+    longConnectionChannels: string[];
+    extraSecrets: string[];
+  },
+): Promise<void> {
   const {
     agentDir,
     workspace,
@@ -448,17 +448,17 @@ async function runDeployDocker(params: {
  * personal deploy runs on the SAME subscription) plus channel secrets — then runs the flyctl steps
  * behind the shared {@link spawnRunner} seam (spawned `fly`, cwd = the workspace so the build context is the whole workspace).
  */
-async function runDeployFly(params: {
-  agentDir: string;
-  workspace: string;
-  appName: string;
-  modelAuth: string | undefined;
-  authPath: string;
-  channels: ChannelKind[];
-  longConnectionChannels: string[];
-  flyTomlPath: string;
-  extraSecrets: string[];
-}): Promise<void> {
+async function runDeployFly(
+  params: ResolvedPlacement & {
+    appName: string;
+    modelAuth: string | undefined;
+    authPath: string;
+    channels: ChannelKind[];
+    longConnectionChannels: string[];
+    flyTomlPath: string;
+    extraSecrets: string[];
+  },
+): Promise<void> {
   const {
     agentDir,
     workspace,
@@ -523,19 +523,19 @@ async function runDeployFly(params: {
  * Railway-specific sequence (linked-check → init/add/volume when fresh → variables → up → domain →
  * webhook) lives in {@link deployRailwayRun}; see there for why Railway differs from Fly.
  */
-async function runDeployRailway(params: {
-  agentDir: string;
-  workspace: string;
-  name: string;
-  modelAuth: string | undefined;
-  authPath: string;
-  channels: ChannelKind[];
-  longConnectionChannels: string[];
-  extraSecrets: string[];
-  intoLinked: boolean;
-  /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
-  dockerfilePath: string;
-}): Promise<void> {
+async function runDeployRailway(
+  params: ResolvedPlacement & {
+    name: string;
+    modelAuth: string | undefined;
+    authPath: string;
+    channels: ChannelKind[];
+    longConnectionChannels: string[];
+    extraSecrets: string[];
+    intoLinked: boolean;
+    /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
+    dockerfilePath: string;
+  },
+): Promise<void> {
   const {
     agentDir,
     workspace,

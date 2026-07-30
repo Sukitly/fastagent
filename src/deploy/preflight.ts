@@ -14,7 +14,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { resolveAuthPath } from "../engines/pi/config.ts";
-import { AGENT_DIR, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
+import { AGENT_DIR, type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
@@ -90,12 +90,12 @@ function dockerignoreMatcher(text: string): (path: string) => boolean {
  * provider) — the CLI wraps the call in its `failStartup` so the fault surfaces and exits, never silently.
  */
 export async function preflightDeploy(input: {
-  /** The AGENT DIR (resolvePlacement().agentDir) — channels/schedules are discovered here, and the
-   *  container facts (package.json/lockfile) read it: the agent's manifest drives the image's
-   *  install step, never the workspace's (whose manifest belongs to its own deploy). */
-  agentDir: string;
-  /** The workspace — the agent dir's parent, and the build context (the whole tree is baked). */
-  workspace: string;
+  /** The resolved placement. `agentDir` is where channels/schedules are discovered and where the
+   *  container facts (package.json/lockfile) are read — the AGENT's manifest drives the image's install
+   *  step, never the workspace's (whose manifest belongs to its own deploy); `workspace` is the build
+   *  context (the whole tree is baked). One value, because one derives from the other: two loose
+   *  strings could be handed in disagreeing, and nothing would notice. */
+  placement: ResolvedPlacement;
   config: FastagentConfig;
   modelSpec: string | undefined;
   /** `--run` fully deploys, so a model that won't travel is a GATE (a known crash-loop); else it warns. */
@@ -106,7 +106,14 @@ export async function preflightDeploy(input: {
    *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
   authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {
-  const { agentDir, workspace, config, modelSpec, run, force, authPathFlag } = input;
+  const {
+    placement: { agentDir, workspace },
+    config,
+    modelSpec,
+    run,
+    force,
+    authPathFlag,
+  } = input;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via

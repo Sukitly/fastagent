@@ -23,8 +23,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
 
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
-    agentDir: target,
-    workspace: dirname(target),
+    placement: { agentDir: target, workspace: dirname(target) },
     config,
     modelSpec: config.model,
     run: false,
@@ -107,8 +106,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const env = { ...process.env, FASTAGENT_SECRETS_DIR: creds };
     const call2 = (over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
       preflightDeploy({
-        agentDir,
-        workspace: host,
+        placement: { agentDir, workspace: host },
         config: { model: "openai/gpt-4o-mini" },
         modelSpec: "openai/gpt-4o-mini",
         run: false,

@@ -5,7 +5,7 @@
  * planners, the dev watcher and env.ts all need these facts, and routing them through the engine
  * would make neutral modules depend on it for something the engine has no say in.
  */
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -19,7 +19,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 export const AGENT_DIR = "fastagent";
 
 /** The user-global machinery home under `$HOME` — hidden, per the dotfile convention for per-user
- *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link AGENT_DIR}, which names agent directories. */
+ *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link AGENT_DIR}, which names agent directories.
+ *  It carries the same shape inside it as an agent dir does (`~/.fastagent/.secrets/auth.json`), so the
+ *  resolvers below need no special case: `login` outside any agent simply hands them this directory. */
 export const GLOBAL_HOME_DIR = ".fastagent";
 
 /** The secrets segment inside an agent dir (or the global home): every PATH fastagent resolves —
@@ -134,26 +136,6 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
 }
 
 /**
- * The machinery home for an agent dir: the dir itself — EXCEPT when it IS the user's home directory,
- * where machinery lives under the user-global `~/.fastagent/` instead (so `~/.secrets` / `~/.state`
- * are never created). Placement resolution never yields `$HOME` as an agent dir, so the one caller
- * that reaches this branch is `login`'s outside-any-agent fallback, which passes `homedir()`
- * explicitly. The global home carries the same shape inside it (`~/.fastagent/.secrets/auth.json` —
- * GLOBAL_AUTH_PATH in auth.ts). Canonical comparison: `dir` arrives realpath-resolved
- * (process.cwd()), homedir() may be a symlink.
- */
-function machineryHome(dir: string): string {
-  const canonical = (p: string): string => {
-    try {
-      return realpathSync(resolve(p));
-    } catch {
-      return resolve(p);
-    }
-  };
-  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), GLOBAL_HOME_DIR) : resolve(dir);
-}
-
-/**
  * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/,
  * control.json): `FASTAGENT_STATE_DIR` env > `<agentDir>/.state`. Absolute, so channels and the
  * startup report agree regardless of cwd. Definition: mutable runtime state — single lifecycle
@@ -166,7 +148,7 @@ function machineryHome(dir: string): string {
  * DEFAULT (`<root>/.state`) is dir-anchored.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(machineryHome(dir), STATE_DIRNAME);
+  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(resolve(dir), STATE_DIRNAME);
 }
 
 /**
@@ -180,7 +162,7 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
  * auth.json but cannot move the file it is read from (env.ts dotEnvPath).
  */
 export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(machineryHome(dir), SECRETS_DIRNAME);
+  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(resolve(dir), SECRETS_DIRNAME);
 }
 
 /**

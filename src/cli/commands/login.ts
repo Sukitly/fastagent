@@ -13,10 +13,10 @@
  * its own directory, mode 0700.
  */
 import { homedir } from "node:os";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
-import { AGENT_DIR, enclosingAgentDir, findAgentDir, resolvePlacement } from "../../paths.ts";
+import { AGENT_DIR, GLOBAL_HOME_DIR, enclosingAgentDir, findAgentDir, resolvePlacement } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
@@ -39,7 +39,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   if (!agentDir && (enclosingAgentDir(cwd) || basename(cwd) === AGENT_DIR)) {
     failStartupOn(() => resolvePlacement(cwd));
   }
-  const loginDir = agentDir ?? homedir();
+  // Outside any agent the target is the user-global machinery home — handed over explicitly, so the
+  // path resolvers need no "is this $HOME?" special case to infer it.
+  const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
