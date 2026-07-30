@@ -40,16 +40,18 @@ Most commands take an optional workspace directory (the agent is there, or in it
 ## `fastagent init`
 
 ```bash
-fastagent init [dir] [--minimal] [--no-install] [--flat]
+fastagent init [dir] [--minimal] [--no-install] [--agentDir <name>|--flat]
 ```
 
 Creates a self-iterating agent — it can edit its own definition (persona.md and skills are re-read every turn). A fresh agent has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.secrets/.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore hygiene is two scaffolded files: the agent `.gitignore` (`node_modules/`, `.state/`, a stray `.env`) and `.secrets/.gitignore` (everything but `.env.example`). fastagent writes both once, at `init` — no later command reads, rewrites or verifies them, so they are yours. They are separate on purpose: the root one is the file you will edit, and a nested `.gitignore` outranks it, so the credentials stay protected either way.
 
-**Placement** — ONE shape, two places, no detection and no prompt. By default the WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it is the agent's WORKSPACE (its cwd, whose `AGENTS.md` is read as project context) and gets zero writes. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when `./fastagent/` already holds a `fastagent.config.*` (already an agent) or any other content.
+**Where the files land** — no detection and no prompt. By default the WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it gets zero writes and becomes the agent's WORKSPACE when you point fastagent there. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when the target already holds a `fastagent.config.*` (already an agent) or any other content.
 
-`--flat` puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package. Agent and workspace are then the same directory, so the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.*` refuses, because that means it is already an agent.
+`--agentDir <name>` names that directory anything you like: **the name is never a rule** — a `fastagent.config.*` is what makes a directory an agent, so `./bot/` and `./fastagent/` resolve identically. It must be a single directory name (a path would put the agent where fastagent's one-level lookup could not find it).
 
-Both placements are structural — nothing is configured, nothing is guessed — but the markers differ: nested is a directory NAMED `fastagent/` holding a definition; flat is a directory holding a `fastagent.config.*`. Hence **a flat agent cannot be zero-config** (a config declares it), and a directory satisfying both resolves NESTED. `fastagent` is a reserved directory name: `--flat` into one is refused, since it would serve with the PARENT as the workspace.
+`--agentDir .` (spelled `--flat`) puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package, where the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.*` refuses, because that means it is already an agent.
+
+What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup would not return — an agent already resolving at `dir` (a config there beats anything inside it), or a second agent beside an existing one (`dir` would then name neither). **There is no zero-config agent**: the config may be `export default {}`, but the file must exist.
 
 Options:
 
@@ -57,7 +59,8 @@ Options:
 |---|---|
 | `--minimal` | persona.md + the example skill + config only — no code tool, package.json, or install. |
 | `--no-install` | Scaffold everything but skip `npm install`. |
-| `--flat` | The directory IS the agent (no `fastagent/` level); existing files are kept. |
+| `--agentDir <name>` | Name the agent directory (default `fastagent`; `.` = `dir` itself). |
+| `--flat` | Alias for `--agentDir .` — the directory IS the agent; existing files are kept. |
 
 ## `fastagent info`
 

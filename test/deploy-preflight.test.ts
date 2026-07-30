@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { AGENT_DIR } from "../src/paths.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
 async function workspace(files: Record<string, string> = {}): Promise<string> {
   const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
   await writeFile(join(host, "AGENTS.md"), "You are terse.\n"); // ② context, lives in the workspace
-  const dir = join(host, AGENT_DIR);
+  const dir = join(host, "fastagent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
-  await writeFile(join(dir, "persona.md"), "You are terse.\n"); // what makes it an agent, not a same-named dir
+  await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n"); // THE marker
   // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
   await writeFile(join(dir, ".secrets", ".env"), "K=v\n");

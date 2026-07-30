@@ -9,7 +9,7 @@ import {
   resolveModelSpec,
   resolveSessionsDirOverride,
 } from "../../engines/pi/config.ts";
-import { resolveStateRoot } from "../../paths.ts";
+import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
@@ -108,6 +108,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
   line("agent", agentDir);
   line("workspace", workspace);
+  const hint = workspaceHint({ agentDir, workspace });
+  if (hint) console.log(`${"hint:".padEnd(13)} ${hint}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);

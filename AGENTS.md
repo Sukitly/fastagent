@@ -39,9 +39,9 @@ src/
 ├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
 ├── runtime.ts               # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts                # neutral ESM module discovery/loading for tools/ channels/ schedules/ config
-├── paths.ts                # PLACEMENT: resolvePlacement — the agent is a `fastagent/` dir holding a
-│                           # definition (parent = workspace), or a dir holding a config (--flat: it IS
-│                           # the workspace); ORDERED, never ambiguous + the machinery paths that follow
+├── paths.ts                # PLACEMENT: resolvePlacement — ONE marker (`fastagent.config.*`, at any
+│                           # NAME) and one rule: the workspace is the dir you point at, the agent is the
+│                           # single config holder at it or one level inside + the machinery paths that follow
 │                           # (.secrets/.state + env overrides), the containment guard, and the neutral
 │                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.

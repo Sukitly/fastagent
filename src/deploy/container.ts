@@ -55,8 +55,8 @@ export interface ContainerInput {
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
   /** Where deploy's artifacts and the agent's own files sit, relative to the BUILD CONTEXT (which is
-   *  always the workspace): `"fastagent/"` when the agent is nested, `""` when the directory IS the
-   *  agent (`--flat`). ONE derived value — the earlier two-placement shape branched on a `nested`
+   *  always the workspace): the agent directory's name plus a slash when it sits INSIDE the workspace,
+   *  `""` when the agent IS the workspace. ONE derived value — an earlier shape branched on a `nested`
    *  boolean at fifteen separate sites, and each site was a chance for the two to disagree. */
   agentPrefix: string;
   /** Workspace-relative machinery paths the NAME-based excludes below would miss — a
@@ -203,12 +203,12 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 /**
  * The Dockerfile + ignore artifacts — spread into any host's artifact list. Everything is prefixed with
  * {@link ContainerInput.agentPrefix}, so a NESTED agent's Dockerfile lands under `fastagent/` (never
- * colliding with one the workspace already owns) while a FLAT agent's lands at the root, where it IS
+ * colliding with one the workspace already owns) while an agent that IS the workspace lands it at the root, where it IS
  * the agent's own file. The ignore ships in TWO forms because context packing is host-CLI-owned and
  * inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own context packers
  * reliably read (kept if the workspace already has one — preflight then checks the machinery/secret
  * excludes it must carry) — and (2) a per-Dockerfile `Dockerfile.dockerignore` for plain docker/buildx
- * builds. For a nested agent that root file is the ONE write deploy makes outside the agent dir, and
+ * builds. When the agent sits inside the workspace that root file is the ONE write deploy makes outside the agent dir, and
  * only at deploy time — without it the host CLI's packer would bake `.secrets/` into the image.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {

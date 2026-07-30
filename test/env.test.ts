@@ -99,7 +99,7 @@ describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () =>
 });
 
 describe("env: a stray .env at the agent root is announced, not silently ignored", () => {
-  it("warns inside an agent (the file habit puts there), stays quiet outside one", async () => {
+  it("warns while the agent has no env of its own; silent once .secrets/.env exists", async () => {
     const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
     const { tmpdir, homedir } = await import("node:os");
     const { join } = await import("node:path");
@@ -108,7 +108,7 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
 
     const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
     await mkdir(agent);
-    await writeFile(join(agent, "persona.md"), "You are terse.\n"); // what makes it an agent at all
+    await writeFile(join(agent, "fastagent.config.mjs"), "export default {};\n"); // THE marker
     await writeFile(join(agent, ".env"), "K=v\n"); // NOT the file fastagent reads
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
@@ -116,18 +116,19 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
       expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read.*\.secrets\/\.env/);
       expect(process.env.K).toBeUndefined(); // announced, never loaded behind the user's back
 
-      // `login` outside any agent anchors on the global machinery home — a `.env` there is the user's.
+      // Once the agent HAS its env in the right place, a root `.env` is very likely the author's own
+      // application's (an agent directory can be their repository too) — and the warning would be noise
+      // on every boot. The gate is that fact, not the placement, which says nothing about whose file it is.
+      await mkdir(join(agent, ".secrets"), { recursive: true });
+      await writeFile(join(agent, ".secrets", ".env"), "REAL=1\n");
+      warn.mockClear();
+      loadDotEnv(agent);
+      expect(warn).not.toHaveBeenCalled();
+      expect(process.env.REAL).toBe("1");
+
+      // Nothing to warn about where fastagent's own machinery home lives (no root `.env` there).
       warn.mockClear();
       loadDotEnv(homedir());
-      expect(warn).not.toHaveBeenCalled();
-
-      // …and a FLAT agent's root is the author's repository, where a `.env` is very likely their
-      // application's. Telling them to move its values would break their app.
-      const flat = await mkdtemp(join(tmpdir(), "fa-stray-flat-"));
-      await writeFile(join(flat, "fastagent.config.mjs"), "export default {};\n"); // declares a flat agent
-      await writeFile(join(flat, ".env"), "DATABASE_URL=x\n"); // theirs, not a misplaced agent file
-      warn.mockClear();
-      loadDotEnv(flat);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();

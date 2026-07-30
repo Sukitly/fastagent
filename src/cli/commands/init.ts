@@ -1,9 +1,9 @@
 /**
- * `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. Placement is a default
- * plus one flag, never a detection and never a prompt — non-interactive executors (coding agents) get
- * deterministic behavior they can read. By default the agent goes into `./fastagent/` and the directory
- * around it, untouched, is the workspace; `--flat` makes the directory itself the agent (a standalone
- * agent repo, a monorepo package), in which case agent and workspace are the same directory.
+ * `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. Where the files land is
+ * a default plus one knob, never a detection and never a prompt — non-interactive executors (coding
+ * agents) get deterministic behavior they can read. By default the agent goes into `./fastagent/` and the
+ * directory around it is untouched; `--agentDir <name>` names that directory anything, and `--agentDir .`
+ * (spelled `--flat`) makes the directory itself the agent (a standalone agent repo, a monorepo package).
  */
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -17,8 +17,8 @@ export interface InitOptions {
   minimal: boolean;
   /** false ⇔ `--no-install`. */
   install: boolean;
-  /** The directory IS the agent (no `fastagent/` level). */
-  flat: boolean;
+  /** The agent directory's name inside `dir` — undefined = the default, `"."` = `dir` itself (`--flat`). */
+  agentDir?: string;
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
@@ -30,11 +30,11 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     kept,
   } = await scaffoldAgent(dir, {
     minimal: opts.minimal,
-    flat: opts.flat,
+    agentDir: opts.agentDir,
   }).catch(failStartup);
   const flat = rel === ".";
   // The agent dir is where the manifest lives, so any install runs there — never against a surrounding
-  // workspace's package.json (its deps are its own concern). Flat: they are the same directory.
+  // workspace's package.json (its deps are its own concern). With `.` they are the same directory.
   const agentDir = resolve(dir, rel);
   console.error(
     `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"} — ${flat ? "the directory IS the agent" : `agent in ./${rel}/`}`,

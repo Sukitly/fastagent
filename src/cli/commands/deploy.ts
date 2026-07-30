@@ -330,7 +330,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
  * which never licenses clobbering a file we did not write. To hand a path back to fastagent, delete it.
  *
  * That single rule replaced a second mechanism (a per-host list of paths exempt from `--force`), which
- * only described the nested placement: with the agent nested, the root `.dockerignore` is the
+ * only described one shape: with the agent inside the workspace, the root `.dockerignore` is the
  * WORKSPACE's file and was listed; with the agent flat, the list was empty — so `--force` would have
  * overwritten a hand-written root `Dockerfile` in a repository `init --flat` had explicitly adopted.
  * Ownership is a property of the file, not of where the agent sits.

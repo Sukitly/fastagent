@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import { authSeedBytes } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import { resolveSecretsDir } from "../../paths.ts";
+import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
@@ -17,7 +17,7 @@ import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";
+import { parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -71,6 +71,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 
   reportLine("agent", agentDir);
   reportLine("workspace", workspace);
+  reportWorkspaceHint(workspaceHint({ agentDir, workspace }));
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
   reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");

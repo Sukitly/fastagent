@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
-import { AGENT_DIR, GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -31,9 +31,9 @@ export interface LoginOptions {
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   const cwd = process.cwd();
   const agentDir = findAgentDir(cwd);
-  // "Outside an agent" must mean exactly that: a position with its own way out (inside an agent, or the
-  // reserved name) is a dead end every other command refuses, and taking the global fallback there
-  // would write a credential to a different scope under a message saying there is no agent here.
+  // "Outside an agent" must mean exactly that: a position with its own way out (inside an agent, or on a
+  // directory holding several) is a dead end every other command refuses, and taking the global fallback
+  // there would write a credential to a different scope under a message saying there is no agent here.
   if (!agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the
   // path resolvers need no "is this $HOME?" special case to infer it.
@@ -47,7 +47,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // does not write would be worse than saying nothing). The resolved path goes in the message.
   if (!agentDir && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
-      `[fastagent] no agent here (no ./${AGENT_DIR}/ holding a definition, and no fastagent.config.*) — ` +
+      `[fastagent] no agent here (no fastagent.config.*, here or one level inside) — ` +
         `logging in GLOBALLY (${authPath}). An agent reads its own .secrets/auth.json: \`cd\` into one ` +
         `first, or point this run at it with --auth-path.`,
     );

@@ -26,9 +26,9 @@ const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.con
 
 /**
  * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. When
- * the agent is nested (`<dir>/fastagent`) that means the surrounding workspace never triggers a restart
- * at all; when it is flat the root IS the workspace, and the allowlist below is what keeps the author's
- * own tree out of scope. Ignoring a directory prunes the whole subtree, so everything outside it —
+ * the agent sits INSIDE the workspace that means the surrounding tree never triggers a restart at all;
+ * when the agent IS the workspace the root is that tree, and the allowlist below is what keeps the
+ * author's own files out of scope. Ignoring a directory prunes the whole subtree, so everything outside it —
  * `.state/` machine state, node_modules, .git, and any file/dir the agent writes as work product —
  * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
  * out of scope by design (keep it under tools/, or restart manually) — the startup log names the set.

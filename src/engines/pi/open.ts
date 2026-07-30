@@ -84,7 +84,7 @@ export interface AgentAssembly {
   /** Absolute agent dir — definition + config + machinery live here (resolvePlacement().agentDir). */
   agentDir: string;
   /** Absolute workspace — the agent's cwd and the start of the ②-context walk: the agent dir's parent
-   *  when nested, the agent dir ITSELF when flat. */
+   *  when the agent sits inside it, the agent dir ITSELF when you point at the agent. */
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
@@ -158,7 +158,7 @@ export async function createPiAgentFromDir(
   modelSpec: string;
   /** Absolute agent dir in use — channels/tools/persona come from here. */
   agentDir: string;
-  /** Absolute workspace in use — the agent's cwd (the agent dir's parent when nested, itself when flat). */
+  /** Absolute workspace in use — the agent's cwd: ALWAYS the directory that was pointed at. */
   workspace: string;
   /** Absolute state root in use (FASTAGENT_STATE_DIR > <agentDir>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;

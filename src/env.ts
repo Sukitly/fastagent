@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "./log.ts";
-import { SECRETS_DIRNAME, findAgentDir, isNestedAgentDir, resolveSecretsDir } from "./paths.ts";
+import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -68,18 +68,21 @@ export function envExamplePath(agentDir: string): string {
  */
 export function loadDotEnv(agentDir: string): void {
   const path = dotEnvPath(agentDir);
+  let loaded = true;
   try {
     loadEnvFile(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    loaded = false;
   }
-  // A `.env` in fastagent's OWN directory is the file habit puts there, and nothing reads it. Left
-  // silent, the symptom is a channel missing its token with no way back to the cause. NESTED only: a
-  // flat agent's root is the author's repository, where a `.env` is very likely their application's —
-  // telling them to move its values would break their app. (`login` outside any agent anchors on the
-  // global machinery home, which is not an agent dir either.)
+  // A `.env` at the agent's root is the file habit puts there, and nothing reads it. Left silent, the
+  // symptom is a channel missing its token with no way back to the cause. Gated on the agent having NO
+  // env of its own: an agent directory can be the author's repository too, where a root `.env` is very
+  // likely their application's — and once `.secrets/.env` exists they have demonstrably found the right
+  // place, so the warning would be noise on every boot. Not gated on placement, which says nothing about
+  // whose file this is (the same directory serves as its own workspace or as a project's agent).
   const stray = join(agentDir, ".env");
-  if (stray !== path && isNestedAgentDir(agentDir) && findAgentDir(agentDir) === agentDir && existsSync(stray)) {
+  if (!loaded && stray !== path && existsSync(stray)) {
     log.warn(`[fastagent] ${stray} is NOT read — the agent's env lives at ${path}; move the values there`);
   }
 }

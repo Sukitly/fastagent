@@ -1,26 +1,39 @@
 /**
- * PLACEMENT: where an agent lives and what it works on — plus the machinery paths that follow from it.
- * Engine-neutral by nature (pure fs/path: a directory NAME and one shallow existence check), so it
- * lives here rather than under engines/pi. That is not a filing preference: the scaffold, the deploy
- * planners, the dev watcher and env.ts all need these facts, and routing them through the engine
- * would make neutral modules depend on it for something the engine has no say in.
+ * PLACEMENT: which directory holds the agent, and which directory the agent works ON — plus the
+ * machinery paths that follow from it.
+ *
+ * ONE marker and ONE rule. `fastagent.config.*` declares an agent; the WORKSPACE is the directory you
+ * pointed fastagent at. Nothing here reads a directory NAME, so an agent directory can be called
+ * anything — and the same tree answers two ways depending on where you aim it: point at the project and
+ * the agent directory inside it answers with the project as its workspace; point at the agent directory
+ * itself (all a container may have been shipped) and it works on itself. That is not an ambiguity to
+ * resolve but the honest answer — an agent alone on a box has no project to work on, and a rule that
+ * insisted otherwise would hand it the container root.
+ *
+ * Engine-neutral by nature (pure fs/path: existence checks and one shallow scan), so it lives here
+ * rather than under engines/pi. Not a filing preference: the scaffold, the deploy planners, the dev
+ * watcher and env.ts all need these facts, and routing them through the engine would make neutral
+ * modules depend on it for something the engine has no say in.
  */
-import { existsSync, statSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
- * The fixed name of an agent directory: `<workspace>/fastagent/`. Visible on purpose — the
- * agent directory holds the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it
- * follows the repo convention for code (a plain directory), while fastagent's own machinery inside it
- * (`.secrets/`, `.state/`) keeps the dot prefix.
+ * The directory name `init` gives a nested agent (`<workspace>/fastagent/`) unless `--agentDir` names
+ * another. A DEFAULT, not a rule: resolution reads the config marker and never a name, so renaming an
+ * agent directory changes nothing about how it resolves. Visible on purpose — the agent directory holds
+ * the AUTHOR's content (persona, skills, tool code: code, not tool configuration), so it follows the
+ * repo convention for code (a plain directory), while fastagent's own machinery inside it (`.secrets/`,
+ * `.state/`) keeps the dot prefix.
  */
-export const AGENT_DIR = "fastagent";
+export const DEFAULT_AGENT_DIRNAME = "fastagent";
 
 /** The user-global machinery home under `$HOME` — hidden, per the dotfile convention for per-user
- *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link AGENT_DIR}, which names agent directories.
+ *  tool homes (`~/.cargo`, `~/.docker`); unrelated to {@link DEFAULT_AGENT_DIRNAME}, which only names
+ *  what `init` creates.
  *  It carries the same shape inside it as an agent dir does (`~/.fastagent/.secrets/auth.json`), so the
  *  resolvers below need no special case: `login` outside any agent simply hands them this directory. */
 export const GLOBAL_HOME_DIR = ".fastagent";
@@ -43,66 +56,90 @@ export interface ResolvedPlacement {
   /** The AGENT directory — where the definition (persona.md/skills/tools/channels/schedules), the
    *  config, and the machinery dirs (`.secrets/`, `.state/`) live. Absolute. */
   agentDir: string;
-  /** The WORKSPACE — what the agent works ON: its cwd, and the start of the ② context walk. The agent
-   *  dir's PARENT when the agent is a nested `fastagent/`; the agent dir ITSELF when the directory is
-   *  the agent (`--flat`). Absolute. `agentDir === workspace` is the only discriminant — there is no
-   *  mode field, because placement is a fact about the tree, not a setting. The naming follows git:
-   *  the repository sits at the root of its working tree, and the word for WORK belongs to the tree. */
+  /** The WORKSPACE — what the agent works ON: its cwd, and the start of the ② context walk. ALWAYS the
+   *  directory fastagent was pointed at, which makes it the agent dir's PARENT when the agent was found
+   *  one level down, and the agent dir ITSELF when you aimed straight at it. Absolute.
+   *  `agentDir === workspace` is the only discriminant — there is no mode field, because there are no
+   *  two placements to distinguish: there is one lookup and the directory you gave it. The naming
+   *  follows git: the repository sits at the root of its working tree, and WORK belongs to the tree. */
   workspace: string;
 }
 
-/** What makes a `fastagent/` directory an AGENT rather than a same-named directory: any one authored
- *  surface. Shallow and cheap on purpose — it separates "an agent" from "an unrelated checkout / an
- *  empty leftover". Enough for the NAMED placement, where the name already carries the intent; the
- *  flat one needs a stronger marker (see {@link findPlacement}). */
-const AGENT_SURFACE = ["persona.md", "skills", "tools", "channels", "schedules"] as const;
+/** The definition paths an agent LOADS content from — the surface a second agent must not be scaffolded
+ *  inside ({@link agentDefinitionOwner}), because the outer agent would read it as its own skills/tools.
+ *  NOT evidence of an agent: `tools/` and `skills/` are ordinary names half the world's repositories
+ *  use, and the config is the only marker. */
+const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "schedules"] as const;
 
 function isDir(p: string): boolean {
   return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
 }
 
-/** A `fastagent/`-NAMED agent dir: exists and holds one authored surface (or a config). */
-function isNamedAgentDir(p: string): boolean {
-  return isDir(p) && [...AGENT_CONFIG_NAMES, ...AGENT_SURFACE].some((name) => existsSync(join(p, name)));
-}
-
-/** A FLAT agent dir: the directory declares itself with a `fastagent.config.*`. That marker is stricter
- *  than the named placement's on purpose — a flat agent has no name to carry the intent, and
- *  {@link AGENT_SURFACE} alone would read half the world's repositories (`tools/`, `skills/`) as agents.
- *  The trade is explicit: there is no zero-config flat agent, and `init --flat` always writes one. */
-function isFlatAgentDir(p: string): boolean {
+/** THE marker: a directory that declares itself an agent with a `fastagent.config.*`. One file decides
+ *  it, at every position — which is why an agent directory needs no reserved name and why there is no
+ *  zero-config agent. */
+function hasConfig(p: string): boolean {
   return isDir(p) && AGENT_CONFIG_NAMES.some((name) => existsSync(join(p, name)));
 }
 
+/** The agent directories DIRECTLY inside `dir` — the one-level scan that finds an agent without knowing
+ *  its name. ONE level: deeper is that directory's own workspace, not this one's agent. Sorted, so a
+ *  refusal names them in a stable order. A missing `dir` yields none (callers resolve paths that may not
+ *  exist); a permission fault surfaces. */
+function agentChildren(dir: string): string[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    throw e;
+  }
+  return entries
+    .filter((e) => !e.isFile() && hasConfig(join(dir, e.name)))
+    .map((e) => join(dir, e.name))
+    .sort();
+}
+
 /**
- * Resolve `dir` into its placement, or undefined when it is not an agent. THREE candidates, checked in
- * a fixed ORDER — which is what makes two placements cost one rule instead of an ambiguity story:
- *
- *   1. `dir` IS a `fastagent/` dir holding a definition → nested, entered from the inside
- *   2. `<dir>/fastagent/` holds a definition            → nested (the `init` default)
- *   3. `dir` holds a `fastagent.config.*`               → FLAT: the directory IS the agent
- *
- * A directory that satisfies both 2 and 3 resolves NESTED — the explicitly-named agent wins over the
- * self-declared one. Ordering rather than refusing is deliberate: an earlier design treated that
- * overlap as an ambiguity to reject, which required the config to double as a structural marker, an
- * entry-point-invariance rule, and a "does this read as an agent?" probe. What the user needs is to SEE
- * which one answered — and `dev`/`start`/`info` print `agent:` and `workspace:` on every run.
+ * The agents `dir` resolves over: ITSELF when it holds a config, else the ones directly inside it —
+ * never both, because aiming at an agent can only mean that agent. Exported for `init`, which must
+ * refuse to create an agent that this lookup would not return (see scaffold/init.ts).
+ */
+export function agentsAt(dir: string): string[] {
+  const base = resolve(dir);
+  return hasConfig(base) ? [base] : agentChildren(base);
+}
+
+/**
+ * Resolve `dir` into its placement, or undefined when it is not exactly one agent. The whole rule:
+ * `dir` is the WORKSPACE, and the agent is the single `fastagent.config.*` holder at it or one level
+ * inside ({@link agentsAt}). More than one is a refusal, not a precedence question — nothing in the tree
+ * names which was meant (see {@link placementDeadEnd}).
  */
 function findPlacement(dir: string): ResolvedPlacement | undefined {
   const base = resolve(dir);
-  if (basename(base) === AGENT_DIR && isNamedAgentDir(base)) return { agentDir: base, workspace: dirname(base) };
-  const nested = join(base, AGENT_DIR);
-  if (isNamedAgentDir(nested)) return { agentDir: nested, workspace: base };
-  if (isFlatAgentDir(base)) return { agentDir: base, workspace: base };
-  return undefined;
+  const [agentDir, ...rest] = agentsAt(base);
+  return agentDir !== undefined && rest.length === 0 ? { agentDir, workspace: base } : undefined;
 }
 
-/** Is `p` a NESTED agent dir (its basename is `fastagent`)? The one fact separating "fastagent's own
- *  directory" from "the user's project directory that happens to BE an agent" — a distinction only
- *  MESSAGES need: a flat agent's root is the author's tree, so fastagent must not lecture about the
- *  files in it. Never used for resolution, which already knows which candidate answered. */
-export function isNestedAgentDir(p: string): boolean {
-  return basename(resolve(p)) === AGENT_DIR;
+/**
+ * The one-line hint for "you pointed at the agent, but the project around it is what you meant" — or
+ * undefined. The workspace being whatever you aimed at is deliberate (a deployed box may hold nothing
+ * but the agent), and the cost is that `cd my-agent && fastagent dev` legitimately narrows the agent's
+ * WORKSPACE to its own directory: its cwd, its coding tools' root, and deploy's build context. (②
+ * context is not affected — that walk climbs ancestors either way.) Resolution must not guess which you
+ * wanted, so this is a HINT — and a hint may use the heuristic ("the parent carries an AGENTS.md or a
+ * .git") that a rule may not.
+ */
+export function workspaceHint({ agentDir, workspace }: ResolvedPlacement): string | undefined {
+  if (agentDir !== workspace) return undefined;
+  const parent = dirname(agentDir);
+  // A config-holding parent is an agent itself, so `..` would resolve to IT — not the project view asked
+  // about here.
+  if (parent === agentDir || hasConfig(parent)) return undefined;
+  if (!["AGENTS.md", ".git"].some((name) => existsSync(join(parent, name)))) return undefined;
+  return `${parent} looks like a project — point fastagent at it (\`..\`) to have the agent work ON it`;
 }
 
 /** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair.
@@ -120,12 +157,12 @@ export function findAgentDir(dir: string): string | undefined {
  *  Placement resolution deliberately never walks up — the answer must not depend on how deep you stand
  *  — but "you are inside an agent, just not at its root" is the likeliest reason resolution fails, and
  *  both the refusal below and `login`'s global-fallback decision need to tell that case apart. Uses the
- *  same rule as resolution (an ancestor that resolves to ITSELF), so it covers a flat agent's
- *  subdirectory as well as a nested one's — and never claims a position it cannot justify. */
+ *  same marker as resolution (an ancestor holding a config), so it never claims a position it cannot
+ *  justify. */
 function enclosingAgentDir(dir: string): string | undefined {
   let candidate = dirname(resolve(dir));
   for (let prev = ""; candidate !== prev; prev = candidate, candidate = dirname(candidate)) {
-    if (findPlacement(candidate)?.agentDir === candidate) return candidate;
+    if (hasConfig(candidate)) return candidate;
   }
   return undefined;
 }
@@ -133,32 +170,27 @@ function enclosingAgentDir(dir: string): string | undefined {
 /**
  * The agent whose DEFINITION contains `dir` — scaffolding there would make the new agent part of the
  * outer one's loaded surface rather than an agent of its own. Narrower than {@link enclosingAgentDir} on
- * purpose: a NESTED agent dir is fastagent's own directory, so everything inside it belongs to it, but a
- * FLAT agent owns only its authored surfaces ({@link AGENT_SURFACE}) — the rest of that directory is the
- * author's tree, where a second agent (a monorepo package, say) is a perfectly legitimate thing to
- * create. `enclosingAgentDir` answers a different question ("where do I `cd` to?"), and for that a flat
- * agent's `src/` genuinely IS inside it.
+ * purpose: an agent owns only what it LOADS ({@link LOADED_SURFACE}); the rest of its directory is the
+ * author's tree, where a second agent (a monorepo package, say) is a legitimate thing to create.
+ * `enclosingAgentDir` answers a different question ("where do I `cd` to?"), and for that an agent's
+ * `src/` genuinely IS inside it.
  */
 export function agentDefinitionOwner(dir: string): string | undefined {
   const base = resolve(dir);
   const agent = enclosingAgentDir(base);
   if (!agent) return undefined;
-  if (isNestedAgentDir(agent)) return agent;
   const [head] = relative(agent, base).split(sep);
-  return head && (AGENT_SURFACE as readonly string[]).includes(head) ? agent : undefined;
+  return head && (LOADED_SURFACE as readonly string[]).includes(head) ? agent : undefined;
 }
 
 /**
  * Why `dir` is not an agent, when it has its OWN way out — or undefined when it is simply not near one.
- * Two positions qualify: standing INSIDE an agent (a nested agent's `tools/`, a flat agent's `src/`),
- * and a directory NAMED `fastagent` that holds no definition. Both matter because the generic advice
- * ("run `fastagent init`") is advice the scaffolder then refuses — it would build
- * `fastagent/fastagent/`, which nothing resolves.
+ * Two positions qualify: standing INSIDE an agent (its `tools/`, its `src/`), and standing on a
+ * directory holding SEVERAL agents. Both matter because the generic advice ("run `fastagent init`") is
+ * advice that would not help — the agent already exists, one step away.
  *
  * Exported because `login` is the one command allowed to run outside an agent, and it must tell "truly
- * outside" (→ the global credential) from "a dead end" (→ refuse, like every other command). Without
- * this it re-derived the second case with its own `basename(dir) === AGENT_DIR` check, duplicating the
- * rule stated below.
+ * outside" (→ the global credential) from "a dead end" (→ refuse, like every other command).
  */
 export function placementDeadEnd(dir: string): string | undefined {
   const base = resolve(dir);
@@ -166,25 +198,26 @@ export function placementDeadEnd(dir: string): string | undefined {
   if (enclosing) {
     return `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`;
   }
-  if (basename(base) === AGENT_DIR) {
+  const agents = agentsAt(base).map((a) => basename(a));
+  if (agents.length > 1) {
     return (
-      `${base} is named "${AGENT_DIR}" but holds no definition — that name is reserved for agent ` +
-      `directories, so an agent cannot be scaffolded here. \`cd ..\` and run \`fastagent init\`, or rename it`
+      `${base} holds ${agents.length} agents (${agents.join(", ")}) — a directory resolves to ONE, and ` +
+      `nothing here names which. Point fastagent at the one you want (it then works on ITSELF: ` +
+      `\`fastagent <command> ./<name>\`), or keep a single agent here`
     );
   }
   return undefined;
 }
 
 /**
- * Resolve a directory into its placement — the ONE owner of the rule. Two placements, ONE ordered test
- * ({@link findPlacement}): the agent is a `fastagent/` directory holding a definition (its parent is the
- * workspace), or a directory that declares itself with a `fastagent.config.*` (it IS the workspace).
- * Placement is STRUCTURAL — never configured, never detected from the surroundings, and never dependent
- * on where you invoked from: `<dir>` and `<dir>/fastagent` resolve identically.
+ * Resolve a directory into its placement — the ONE owner of the rule ({@link findPlacement}): `dir` is
+ * the workspace, and the agent is the single `fastagent.config.*` holder at it or one level inside.
+ * Placement is never configured and never detected from surroundings; it is that lookup and the
+ * directory you pointed at.
  *
- * Anything else throws (fail visibly). Resolution itself never walks UP — the answer must not depend on
- * how deep you stand — but the MESSAGE reads the path, so each dead end gets the exit that fits it
- * ({@link placementDeadEnd}).
+ * Anything else throws (fail visibly). Resolution never walks UP — an agent must not be claimed from
+ * arbitrarily deep inside it — but the MESSAGE reads the path, so each dead end gets the exit that fits
+ * it ({@link placementDeadEnd}).
  */
 export function resolvePlacement(dir: string): ResolvedPlacement {
   const placement = findPlacement(dir);
@@ -192,8 +225,8 @@ export function resolvePlacement(dir: string): ResolvedPlacement {
     const base = resolve(dir);
     throw new Error(
       placementDeadEnd(base) ??
-        `${base} is not a fastagent agent — no ./${AGENT_DIR}/ directory holding a definition, and no ` +
-          `fastagent.config.* here; run \`fastagent init\` to scaffold one`,
+        `${base} is not a fastagent agent — no fastagent.config.* here, and no directory holding one ` +
+          `directly inside; run \`fastagent init\` to scaffold one`,
     );
   }
   return placement;

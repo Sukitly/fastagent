@@ -77,7 +77,7 @@ describe("cli kernel: spec conformance", () => {
     const carried: [string[], string][] = [
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
-      [["init"], "the directory itself is the agent"],
+      [["init"], "the NAME is never a rule"],
       [["init"], "the agent goes into ./fastagent/"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["fire"], "does NOT advance the schedule's fire state"],
@@ -324,7 +324,8 @@ const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 async function agentWorkspace(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   await mkdir(join(dir, "fastagent"));
-  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n"); // an agent, not an empty dir
+  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n"); // THE marker
   return dir;
 }
 

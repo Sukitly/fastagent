@@ -15,7 +15,8 @@ const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 async function agentWorkspace(prefix: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   await mkdir(join(dir, "fastagent", ".secrets"), { recursive: true });
-  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n"); // an agent, not an empty dir
+  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n"); // THE marker
   await writeFile(join(dir, "fastagent", ".secrets", "auth.json"), "{}\n"); // a real credential to leak
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, "fastagent", dirname(name)), { recursive: true });
@@ -443,8 +444,8 @@ describe("cli papercuts", () => {
     delete env.FASTAGENT_AUTH_PATH;
     const { code, stderr } = await run(["login", "no-such-provider"], cwd, env);
     expect(code).not.toBe(0);
-    // Both placements named: the rule that decided this is `findAgentDir`, which accepts either.
-    expect(stderr).toMatch(/no agent here \(no \.\/fastagent\/ holding a definition, and no fastagent\.config\.\*\)/);
+    // The marker names itself, at both positions the lookup checks.
+    expect(stderr).toMatch(/no agent here \(no fastagent\.config\.\*, here or one level inside\)/);
     await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
 
     // …and it is silent when --auth-path outranks the fallback: an announcement naming a file the run
@@ -452,14 +453,15 @@ describe("cli papercuts", () => {
     const directed = await run(["login", "no-such-provider", "--auth-path", join(cwd, "auth.json")], cwd, env);
     expect(directed.stderr).not.toMatch(/logging in GLOBALLY/);
 
-    // A directory NAMED fastagent that holds no definition is NOT "outside an agent" — resolvePlacement
-    // refuses that position with its own way out, and login must tell the same story as every other
-    // command instead of quietly switching scope.
-    const reserved = join(cwd, "fastagent");
-    await mkdir(reserved);
-    const named = await run(["login", "no-such-provider"], reserved, env);
-    expect(named.stderr).toMatch(/reserved for agent directories/);
-    expect(named.stderr).not.toMatch(/logging in GLOBALLY/);
+    // Standing INSIDE an agent is NOT "outside an agent" — resolvePlacement refuses that position with
+    // its own way out, and login must tell the same story as every other command instead of quietly
+    // switching scope.
+    const inside = join(cwd, "agent", "tools");
+    await mkdir(inside, { recursive: true });
+    await writeFile(join(cwd, "agent", "fastagent.config.mjs"), "export default {};\n");
+    const nested = await run(["login", "no-such-provider"], inside, env);
+    expect(nested.stderr).toMatch(/is inside the agent .*but is not its root/);
+    expect(nested.stderr).not.toMatch(/logging in GLOBALLY/);
   });
 
   it("login --auth-path at the user-global credential is the documented sharing path, not a leak", async () => {

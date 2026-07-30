@@ -37,6 +37,13 @@ export function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(11)}${value}`);
 }
 
+/** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}):
+ *  you pointed at the agent, and the project around it is probably what you meant. A hint, so it renders
+ *  as one and is silent otherwise — `dev` and `start` both print the pair, so both ask for it. */
+export function reportWorkspaceHint(hint: string | undefined): void {
+  if (hint) reportLine("hint", hint);
+}
+
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
 export function isInteractive(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
@@ -260,8 +267,8 @@ function terminalLoginIO(): LoginIO {
 /**
  * Best-effort persist the picked model so the next run does not prompt. Rewrites the commented
  * `model:` placeholder the scaffold writes / an existing `model:` line, or re-inserts the line into a
- * scaffold-shaped config (the hand-deleted-to-reset case); anything else (zero-config, a hand-shaped
- * config) is left untouched with a printed hint. Never throws — persistence is a convenience.
+ * scaffold-shaped config (the hand-deleted-to-reset case); anything else (a hand-shaped config) is
+ * left untouched with a printed hint. Never throws — persistence is a convenience.
  */
 async function persistModelChoice(agentDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>

@@ -14,7 +14,7 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { resolveAuthPath } from "../engines/pi/config.ts";
-import { AGENT_DIR, type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
+import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
@@ -314,9 +314,9 @@ export async function preflightDeploy(input: {
     // Both the directory AND a file inside it: an allowlist ignore file (`*` + `!fastagent` +
     // `!fastagent/**`) re-includes the dir, so requiring both keeps that dialect gap from gating a
     // deployment that is actually correct.
-    if (nested && excluded(AGENT_DIR) && excluded(`${agentPrefix}persona.md`)) {
+    if (nested && excluded(basename(agentDir)) && excluded(`${agentPrefix}persona.md`)) {
       const text =
-        `your ${rel} (kept) excludes \`${AGENT_DIR}\` — the build context would ship WITHOUT the ` +
+        `your ${rel} (kept) excludes \`${basename(agentDir)}\` — the build context would ship WITHOUT the ` +
         `agent entirely (the deployed box has no persona/config and crash-loops). Remove that rule ` +
         `before deploying.`;
       if (run) return { ok: false, gate: text };

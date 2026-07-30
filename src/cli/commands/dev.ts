@@ -12,9 +12,10 @@ import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
+import { workspaceHint } from "../../paths.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, reportLine, resolveFirstRunModel } from "../shared.ts";
+import { parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface DevOptions {
   port?: string;
@@ -62,7 +63,8 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   }).catch(failStartup);
   reportLine("agent", a.agentDir);
   reportLine("workspace", a.workspace);
-  reportLine("config", a.configPath ?? "(zero-config)");
+  reportWorkspaceHint(workspaceHint(a));
+  reportLine("config", a.configPath ?? "(none)");
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
   await reportAuth(a.modelSpec, a.authPath);
   reportAgentsSkillsTools(a);

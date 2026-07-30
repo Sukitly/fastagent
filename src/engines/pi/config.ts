@@ -3,10 +3,11 @@
  * (resolveModel, resolveModelSpec). One concern: everything about fastagent.config.ts.
  *
  * Red line: config describes deployment/runtime choices, never authored identity or expertise (those
- * live in persona.md + skills, with AGENTS.md as project context). The config is never structural:
- * deleting it leaves a zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
- * What makes a directory an agent is its NAME plus one shallow existence check — that rule is
- * placement, and it lives in the neutral src/paths.ts, not here.
+ * live in persona.md + skills, with AGENTS.md as project context). It has no say in PLACEMENT either —
+ * that rule lives in the neutral src/paths.ts — but its FILE is what marks a directory as an agent, so a
+ * served agent always has one (its contents may be `export default {}`; a model can still come from
+ * --model / FASTAGENT_MODEL). The loader below stays tolerant of a missing file because it is a loader:
+ * callers that have not resolved a placement (deploy inspection, tests) may point it anywhere.
  */
 import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -66,7 +67,7 @@ export function defineConfig(config: FastagentConfig): FastagentConfig {
 
 export interface LoadedConfig {
   config: FastagentConfig;
-  /** Config file path; undefined when running zero-config. */
+  /** Config file path; undefined when the loader was pointed at a directory holding none. */
   path?: string;
 }
 
@@ -87,7 +88,7 @@ function validateStringList(value: unknown, key: string, shape: RegExp, desc: st
   }
 }
 
-/** Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config; a wrong-shape file throws. */
+/** Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = defaults; a wrong-shape file throws. */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const found = AGENT_CONFIG_NAMES.map((name) => join(dir, name)).filter((path) => existsSync(path));
   if (found.length === 0) return { config: {} };
@@ -118,7 +119,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   }
   const c = config as FastagentConfig;
   // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a .js/.mjs config
-  // (`modle:`) must not silently degrade to zero-config.
+  // (`modle:`) must not silently degrade to defaults.
   for (const key of Object.keys(c)) {
     if (
       key !== "model" &&
@@ -224,7 +225,7 @@ export function listModels(models: Models): string[] {
 /**
  * Rewrite the `model` in a config file's SOURCE TEXT to `spec`, for the first-run picker's write-back.
  * Handles the scaffold's commented placeholder (`// model: "…"`) and an existing `model:` line; returns
- * null when neither is present (zero-config or a hand-shaped config) so the caller falls back to a
+ * null when neither is present (no config file, or a hand-shaped one) so the caller falls back to a
  * printed hint instead of guessing where to insert. Text-level (not AST) on purpose — it only ever
  * touches a line it recognizes, never reformats the author's file.
  */
