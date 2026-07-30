@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
+import { AGENT_CONFIG_NAMES, type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
@@ -44,7 +44,9 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker
     // (a restart is their only re-read). Everything else (skills/, persona.md, AGENTS.md) is
     // live-read — pruned, no restart.
-    if (/^fastagent\.config\.[cm]?[jt]s$/.test(rel)) return false;
+    // The config NAMES come from paths.ts, not a regex spelled here: adding a name there must not
+    // silently stop `dev` restarting on edits to it.
+    if ((AGENT_CONFIG_NAMES as readonly string[]).includes(rel)) return false;
     if (rel === "package.json") return false;
     const segments = rel.split(sep);
     if (segments[0] === "tools" || segments[0] === "channels" || segments[0] === "schedules") return false;
