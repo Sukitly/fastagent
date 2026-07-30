@@ -37,10 +37,13 @@ export async function runAddChannel(
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
   // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
-  const { agentDir: target } = placementOrExit(resolve(dirArg));
+  // Flag conflicts first: a bad combination is a USAGE error (exit 2), and reporting it must not depend
+  // on the directory being an agent (a runtime/environment failure, exit 1) — the same order start/tool
+  // follow.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
+  const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
   // Paths are printed to someone standing in their CWD, usually the workspace, while every file
   // belongs to the AGENT dir — prefix them, or they point at nothing. `displayPath` owns the

@@ -40,8 +40,8 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     console.error(`  kept your existing: ${kept.join(", ")}`);
     if (kept.includes(".gitignore")) {
       console.error(
-        `[fastagent] note: your .gitignore is untouched — make sure it ignores .state and .cache ` +
-          `(.secrets/ carries its own .gitignore, so credentials are covered either way)`,
+        `[fastagent] note: your .gitignore is untouched — make sure it ignores node_modules, .state ` +
+          `and .cache (.secrets/ carries its own .gitignore, so credentials are covered either way)`,
       );
     }
   }
@@ -49,7 +49,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   // The manifest lives in the AGENT dir, so the install runs there — never against a surrounding
   // workspace's package.json (its deps are its own concern). Flat: they are the same directory.
   const agentDir = resolve(dir, rel);
-  const willInstall = complete && opts.install && !kept.includes(join(rel, "package.json").replace(/^\.\//, ""));
+  const willInstall = complete && opts.install && !kept.includes(join(rel, "package.json"));
   let installFailed = false;
   if (willInstall) {
     console.error(`[fastagent] installing dependencies (npm install${flat ? "" : ` in ${rel}`})…`);
@@ -61,9 +61,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   console.error(`  next steps:`);
   const cdTarget = displayPath(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
-  if (complete && !willInstall) {
-    console.error(`    ${flat ? "npm install" : `(cd ${rel} && npm install)`}`);
-  } else if (complete && installFailed) {
+  if (complete && (!willInstall || installFailed)) {
     console.error(`    ${flat ? "npm install" : `(cd ${rel} && npm install)`}`);
   }
   console.error(`    fastagent dev   # serve locally and iterate`);
