@@ -217,14 +217,14 @@ describe("init: scaffoldAgent", () => {
     await expect(scaffoldAgent(inside)).rejects.toThrow(/reserved agent-directory name.*Rename it/s);
     // The refusal must not offer a way out that the next guard refuses: a subdirectory of it is
     // inside an agent, so nothing under this path can be scaffolded either.
-    await expect(scaffoldAgent(join(inside, "my-agent"))).rejects.toThrow(/is inside the agent/);
+    await expect(scaffoldAgent(join(inside, "my-agent"))).rejects.toThrow(/is inside the definition of the agent/);
     expect(await exists(join(inside, "fastagent"))).toBe(false); // side-effect-free refusal
 
     // …and deeper inside the agent's own surface, where the outer agent would load the new one as
     // definition content. Every other command refuses this position; init must not be the way in.
     const surface = join(inside, "skills");
     await mkdir(surface);
-    await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the agent .*fastagent —/);
+    await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the definition of the agent at .*fastagent/);
   });
 
   it("`init` nests by DEFAULT — no detection, no prompt; the choice is a flag or nothing", async () => {
@@ -268,6 +268,22 @@ describe("init: scaffoldAgent", () => {
     expect([a.agentDir, a.workspace]).toEqual([dir, dir]);
     expect(a.definition.persona).toContain("Persona");
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("House rules");
+  });
+
+  it("a package inside a FLAT agent's repository is a legitimate init target", async () => {
+    // The monorepo shape `--flat` exists for: the root is an agent, and a package inside it wants its
+    // own. A flat agent's definition is its authored surfaces only, so `packages/foo/` is the author's
+    // tree — refusing there would make "two agents for one project" unreachable under a flat root.
+    const root = await freshDir();
+    await scaffoldAgent(root, { flat: true, minimal: true });
+    const pkg = join(root, "packages", "reviewer");
+    await mkdir(pkg, { recursive: true });
+    expect((await scaffoldAgent(pkg, { minimal: true })).created).toContain(agentPath("persona.md"));
+
+    // …but the flat agent's OWN surfaces are still off limits: it would load the new agent as content.
+    await expect(scaffoldAgent(join(root, "skills", "mine"), { minimal: true })).rejects.toThrow(
+      /is inside the definition of the agent at/,
+    );
   });
 
   it("--flat is refused where it would silently serve the WRONG workspace", async () => {

@@ -85,7 +85,14 @@ function dockerfile(input: ContainerInput): string {
   // is either a subdirectory of it or /app itself. `into` prefixes a path, `at` runs a command there.
   const prefix = input.agentPrefix;
   const into = (p: string): string => `${prefix}${p}`;
+  // A build step that must run IN the agent dir (`RUN` already gets a shell from docker).
   const at = (cmd: string): string => (prefix ? `cd ${prefix.replace(/\/$/, "")} && ${cmd}` : cmd);
+  // The entrypoint. Flat needs no shell at all, so it keeps exec form; nested needs one for the `cd`, and
+  // `exec` inside it hands PID 1 to the process — otherwise the shell holds it and swallows SIGTERM.
+  const cmd = (exe: string, ...argv: string[]): string =>
+    prefix
+      ? `["sh", "-c", "cd ${prefix.replace(/\/$/, "")} && exec ${[exe, ...argv].join(" ")}"]`
+      : `[${[exe, ...argv].map((a) => JSON.stringify(a)).join(", ")}]`;
   const layoutNote = prefix
     ? `The whole directory is the agent's workspace; the agent itself lives in ${prefix}`
     : `The directory IS the agent — it is also its own workspace.`;
@@ -133,7 +140,7 @@ ${apt}WORKDIR /app
     return `${head}COPY ${into("package.json")} ${into("bun.lock*")} ./${prefix}
 RUN ${at(install)}
 COPY . .
-CMD ["sh", "-c", "${at("bun run fastagent start /app")}"]
+CMD ${cmd("bun", "run", "fastagent", "start", "/app")}
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent);
@@ -147,7 +154,7 @@ CMD ["sh", "-c", "${at("bun run fastagent start /app")}"]
   return `${head}COPY ${into("package.json")} ${into("package-lock.json*")} ./${prefix}
 RUN ${at(install)}
 COPY . .
-CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]
+CMD ${cmd(`./${into("node_modules/.bin/fastagent")}`, "start", "/app")}
 `;
 }
 

@@ -26,7 +26,7 @@
  */
 import { access, lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { AGENT_CONFIG_NAMES, AGENT_DIR, enclosingAgentDir } from "../paths.ts";
+import { AGENT_CONFIG_NAMES, AGENT_DIR, agentDefinitionOwner } from "../paths.ts";
 import { SECRETS_DIRNAME } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
@@ -138,14 +138,15 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
         `directory, not the new agent). Rename it, or init in a different directory.`,
     );
   }
-  // Inside an agent's own surface (`fastagent/skills`, `fastagent/tools`): scaffolding here would hide
-  // a whole agent inside another agent's definition, where the outer one loads it as content. Every
-  // other command refuses this position (resolvePlacement); init must not be the way in.
-  const enclosing = enclosingAgentDir(dir);
-  if (enclosing) {
+  // Inside another agent's DEFINITION (anywhere under a nested agent dir; under a flat agent's
+  // `skills/`, `tools/`, `channels/` or `schedules/`): the outer agent would load the new one as its own
+  // content. Note what this deliberately ALLOWS — a package inside a flat agent's repository, which is
+  // the author's tree and not part of what that agent loads.
+  const owner = agentDefinitionOwner(dir);
+  if (owner) {
     throw new Error(
-      `"${dir}" is inside the agent ${enclosing} — an agent scaffolded here would be part of that ` +
-        `agent's definition, not an agent of its own. Init in ${dirname(enclosing)} or another directory.`,
+      `"${dir}" is inside the definition of the agent at ${owner} — an agent scaffolded here would be ` +
+        `part of THAT agent's surface, not one of its own. Init outside it.`,
     );
   }
 

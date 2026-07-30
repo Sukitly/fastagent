@@ -8,7 +8,7 @@
 import { existsSync, statSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
  * The fixed name of an agent directory: `<workspace>/fastagent/`. Visible on purpose — the
@@ -112,17 +112,39 @@ export function findAgentDir(dir: string): string | undefined {
 }
 
 /** The agent `dir` sits INSIDE (the nearest proper ancestor that IS an agent dir), or undefined.
+ *  Module-private: the two questions callers actually ask are "where do I `cd` to?"
+ *  ({@link placementDeadEnd}) and "would a new agent here become part of an existing one's definition?"
+ *  ({@link agentDefinitionOwner}) — and those answers differ for a flat agent, so exporting the raw
+ *  containment fact would invite conflating them.
  *  Placement resolution deliberately never walks up — the answer must not depend on how deep you stand
  *  — but "you are inside an agent, just not at its root" is the likeliest reason resolution fails, and
  *  both the refusal below and `login`'s global-fallback decision need to tell that case apart. Uses the
  *  same rule as resolution (an ancestor that resolves to ITSELF), so it covers a flat agent's
  *  subdirectory as well as a nested one's — and never claims a position it cannot justify. */
-export function enclosingAgentDir(dir: string): string | undefined {
+function enclosingAgentDir(dir: string): string | undefined {
   let candidate = dirname(resolve(dir));
   for (let prev = ""; candidate !== prev; prev = candidate, candidate = dirname(candidate)) {
     if (findPlacement(candidate)?.agentDir === candidate) return candidate;
   }
   return undefined;
+}
+
+/**
+ * The agent whose DEFINITION contains `dir` — scaffolding there would make the new agent part of the
+ * outer one's loaded surface rather than an agent of its own. Narrower than {@link enclosingAgentDir} on
+ * purpose: a NESTED agent dir is fastagent's own directory, so everything inside it belongs to it, but a
+ * FLAT agent owns only its authored surfaces ({@link AGENT_SURFACE}) — the rest of that directory is the
+ * author's tree, where a second agent (a monorepo package, say) is a perfectly legitimate thing to
+ * create. `enclosingAgentDir` answers a different question ("where do I `cd` to?"), and for that a flat
+ * agent's `src/` genuinely IS inside it.
+ */
+export function agentDefinitionOwner(dir: string): string | undefined {
+  const base = resolve(dir);
+  const agent = enclosingAgentDir(base);
+  if (!agent) return undefined;
+  if (isNestedAgentDir(agent)) return agent;
+  const [head] = relative(agent, base).split(sep);
+  return head && (AGENT_SURFACE as readonly string[]).includes(head) ? agent : undefined;
 }
 
 /**

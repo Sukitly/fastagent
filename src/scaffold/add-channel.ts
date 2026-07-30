@@ -294,8 +294,13 @@ export async function appendChannelDotEnv(
   // still has no opinion about ignore files it did not create.
   const created = await mkdir(dirname(file), { recursive: true });
   if (created !== undefined) {
+    // Only EEXIST is tolerable (a concurrent writer). A permission/disk failure on the file that keeps
+    // credentials out of git must surface — swallowing it would leave the secret below unprotected and
+    // silent, the one combination this whole path exists to avoid.
     await writeFile(join(dirname(file), ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
-      () => {},
+      (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EEXIST") throw e;
+      },
     );
   }
   let current = "";
