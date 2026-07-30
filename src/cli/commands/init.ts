@@ -7,6 +7,7 @@
  */
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { scaffoldAgent } from "../../scaffold/init.ts";
 import { displayPath } from "../../paths.ts";
@@ -52,10 +53,21 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
           `run \`${add} @fastagent-sh/fastagent\` there or the scaffolded tools/ cannot resolve`,
       );
     }
-    if (kept.includes(".gitignore")) {
+    const keptSecretsIgnore = kept.includes(join(rel, SECRETS_DIRNAME, ".gitignore"));
+    if (kept.includes(join(rel, ".gitignore"))) {
+      // The "credentials are covered either way" reassurance holds only when `.secrets/.gitignore` is
+      // OURS. On an adopted directory it may be the author's too, and then we know nothing about it —
+      // `add <channel>` defends that file with a write; `init` must not claim more than it did.
       console.error(
         `[fastagent] note: your .gitignore is untouched — make sure it ignores node_modules, .state ` +
-          `and .cache (.secrets/ carries its own .gitignore, so credentials are covered either way)`,
+          `and .cache` +
+          (keptSecretsIgnore ? `` : ` (.secrets/ carries its own .gitignore, so credentials are covered either way)`),
+      );
+    }
+    if (keptSecretsIgnore) {
+      console.error(
+        `[fastagent] note: your ${join(rel, SECRETS_DIRNAME, ".gitignore")} is untouched — verify it ignores ` +
+          `everything but .env.example, because credentials land in that directory`,
       );
     }
   }

@@ -47,9 +47,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // does not write would be worse than saying nothing). The resolved path goes in the message.
   if (!agentDir && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
-      `[fastagent] no agent definition in ./${AGENT_DIR}/ here — logging in GLOBALLY (${authPath}). ` +
-        `An agent reads its own ` +
-        `.secrets/auth.json: \`cd\` into one first, or point this run at it with --auth-path.`,
+      `[fastagent] no agent here (no ./${AGENT_DIR}/ holding a definition, and no fastagent.config.*) — ` +
+        `logging in GLOBALLY (${authPath}). An agent reads its own .secrets/auth.json: \`cd\` into one ` +
+        `first, or point this run at it with --auth-path.`,
     );
   }
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
