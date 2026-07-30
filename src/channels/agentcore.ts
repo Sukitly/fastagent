@@ -25,6 +25,7 @@
  * the platform reclaim the microVM (that idle-to-zero IS the point of this deployment).
  */
 import { Buffer } from "node:buffer";
+import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { StateSync, StateUrls } from "./agentcore-state.ts";
 import { beginWork, onIdle } from "./busy.ts";
@@ -130,6 +131,14 @@ const jsonHeaders = { "content-type": "application/json" } as const;
 const json = (body: unknown, status: number): Response =>
   new Response(`${JSON.stringify(body)}\n`, { status, headers: jsonHeaders });
 
+/** Compare an untrusted envelope secret without leaking a matching-prefix timing signal. */
+function secretMatches(actual: unknown, expected: string | undefined): boolean {
+  if (typeof actual !== "string" || expected === undefined) return false;
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
 /**
  * Build the AgentCore serving surface: `{ "POST /invocations", "GET /ping" }`. The caller merges it
  * over its routes (collision-checked at the mount site, serve.ts) — the inner routes stay mounted
@@ -164,7 +173,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     // and may NOT carry internal fields — riding a `state` or `wake` URL on a public invoke would
     // redirect the state snapshot (auth.json) or the alarm callback (the wake secret) to the caller.
     // Internal fields are DROPPED rather than rejected: a public caller has no business knowing them.
-    const trusted = ingressSecret !== undefined && envelope.auth === ingressSecret;
+    const trusted = secretMatches(envelope.auth, ingressSecret);
     if (!trusted) {
       if (envelope.kind !== "invoke") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);

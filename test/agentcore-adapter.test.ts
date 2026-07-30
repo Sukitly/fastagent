@@ -366,12 +366,15 @@ describe("agentcore adapter: the authentication boundary", () => {
     expect(fire).not.toHaveBeenCalled();
   });
 
-  it("a WRONG secret is not a secret", async () => {
-    const res = await post(
-      adapter({ fire: async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome }),
-      JSON.stringify({ auth: "guessed", kind: "schedule-fire", name: "d", slot: "2026-07-28T09:00:00Z" }),
-    );
-    expect(res.status).toBe(403);
+  it("a WRONG secret is not a secret, regardless of its byte length or type", async () => {
+    const routes = adapter({ fire: async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome });
+    for (const auth of ["guessed", "x".repeat(Buffer.byteLength(SECRET)), 123]) {
+      const res = await post(
+        routes,
+        JSON.stringify({ auth, kind: "schedule-fire", name: "d", slot: "2026-07-28T09:00:00Z" }),
+      );
+      expect(res.status).toBe(403);
+    }
   });
 
   it("public invoke still works, but its internal fields are DROPPED (no snapshot or alarm redirect)", async () => {

@@ -94,17 +94,21 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
+  // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
+  // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
+  // slots arrive from the external clock through it — so no resident cron timers. In particular,
+  // do NOT mount the ordinary unauthenticated POST /invoke fallback: a selfSchedule-only topology
+  // needs a public Function URL for wake callbacks, and its forwarder can relay arbitrary paths.
+  const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
-  const routed = await routesFor(agentDir, traced, stateRoot, sessionControl).catch(failStartup);
+  const routed = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: !agentcore }).catch(
+    failStartup,
+  );
   const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced,
   });
-  // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
-  // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
-  // slots arrive from the external clock through it — so no resident cron timers.
-  const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
   // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
   // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
   // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment

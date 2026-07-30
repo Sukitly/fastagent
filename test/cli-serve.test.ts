@@ -8,6 +8,17 @@ import { text } from "../src/channels/respond.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 
 describe("serving surface", () => {
+  it("can suppress the fallback /invoke for AgentCore's publicly forwarded surface", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-surface-"));
+    const ordinary = await routesFor(dir, {} as Agent, join(dir, ".state"));
+    expect(Object.keys(ordinary.routes)).toContain("POST /invoke");
+    expect(ordinary.builtinInvoke).toBe(true);
+
+    const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { builtinInvoke: false });
+    expect(Object.keys(agentcore.routes)).toEqual(["GET /health"]);
+    expect(agentcore.builtinInvoke).toBe(false);
+  });
+
   it("keeps health but does not add the fallback /invoke for a long-connection channel", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-long-connection-surface-"));
     await mkdir(join(dir, "channels"));

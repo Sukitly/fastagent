@@ -299,7 +299,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBeUndefined();
     expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
-    expect(await readFires(root)).toEqual({ job: "2026-07-07T10:00:03.000Z" });
+    expect(await readFires(root)).toEqual({ job: "2026-07-07T10:00:00.000Z" });
     expect(readRuns(root, "job")).toHaveLength(1);
   });
 
@@ -314,7 +314,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("a LATER slot still fires after an earlier one", async () => {
+  it("a LATER slot still fires even when the earlier delivery arrived after it", async () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
     await fireScheduleOnce({
@@ -322,17 +322,19 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
       stateRoot: root,
       schedule: hourly(),
       slot,
-      now: () => new Date("2026-07-07T10:00:03Z"),
+      // Delivery lag exceeds the interval to the next distinct slot.
+      now: () => new Date("2026-07-07T12:30:00Z"),
     });
     const next = await fireScheduleOnce({
       agent,
       stateRoot: root,
       schedule: hourly(),
       slot: new Date("2026-07-07T11:00:00Z"),
-      now: () => new Date("2026-07-07T11:00:02Z"),
+      now: () => new Date("2026-07-07T12:31:00Z"),
     });
     expect(next.fired).toBe(true);
     expect(calls).toHaveLength(2);
+    expect(await readFires(root)).toEqual({ job: "2026-07-07T11:00:00.000Z" });
   });
 
   it("without a slot the claim is unconditional (the resident scheduler's behavior)", async () => {

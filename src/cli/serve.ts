@@ -42,6 +42,7 @@ export async function routesFor(
   agent: Agent,
   stateRoot: string,
   control?: SessionControl,
+  options: { builtinInvoke?: boolean } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(workspaceDir, {
     agent,
@@ -60,7 +61,8 @@ export async function routesFor(
         `fix it, or rename an intentionally disabled file to *.disabled`,
     );
   }
-  const builtinInvoke = Object.keys(routes).length === 0 && longConnections.length === 0;
+  const builtinInvoke =
+    options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
   const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
   const healthCovered = Object.keys(channels).some((key) => {
     const entry = parseRouteKey(key);

@@ -136,7 +136,9 @@ export async function fireScheduleOnce(opts: {
     log.info(`[schedule] ${s.name}: skipping — ${reason}`);
     return { fired: false, skippedReason: reason, ms: 0 };
   }
-  fires[s.name] = now().toISOString();
+  // An external delivery claims the cron instant it represents, not its (possibly much later)
+  // delivery time. Otherwise a delayed fire can make the next distinct slot look like a duplicate.
+  fires[s.name] = (slot ?? now()).toISOString();
   saveFires(stateRoot, fires);
   const firedAt = now().toISOString();
   const r = await runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
