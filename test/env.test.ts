@@ -108,6 +108,7 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
 
     const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
     await mkdir(agent);
+    await writeFile(join(agent, "persona.md"), "You are terse.\n"); // what makes it an agent at all
     await writeFile(join(agent, ".env"), "K=v\n"); // NOT the file fastagent reads
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
@@ -115,7 +116,7 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
       expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read.*\.secrets\/\.env/);
       expect(process.env.K).toBeUndefined(); // announced, never loaded behind the user's back
 
-      // `login` outside any agent anchors on $HOME, where a plain ~/.env is the user's own business.
+      // `login` outside any agent anchors on the global machinery home — a `.env` there is the user's.
       warn.mockClear();
       loadDotEnv(homedir());
       expect(warn).not.toHaveBeenCalled();
