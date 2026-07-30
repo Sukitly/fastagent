@@ -184,16 +184,20 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       throw e;
     })
   ).filter((f) => ![".DS_Store", ".gitkeep", ".keep"].includes(f));
+  // ONE coordinate system for both refusals — `displayPath` is the shared policy (relative inside the
+  // cwd, absolute when it climbs out); the earlier pair mixed an absolute path with a basename-relative
+  // one, in adjacent branches of the same command.
+  const target = displayPath(process.cwd(), join(dir, root)) ?? join(dir, root);
   const config = occupants.filter((f) => (AGENT_CONFIG_NAMES as readonly string[]).includes(f));
   if (config.length > 0) {
-    throw new Error(`"${join(dir, root)}" already has ${config.join(", ")} — already a fastagent agent`);
+    throw new Error(`"${target}" already has ${config.join(", ")} — already a fastagent agent`);
   }
   // Only the NESTED target must be empty. A flat target is a directory being adopted — content is
   // expected, and every existing file is kept below.
   if (!flat && occupants.length > 0) {
     throw new Error(
-      `"${join(basename(dir), AGENT_DIR)}" already holds ${occupants.join(", ")} — move it away first, ` +
-        `or run \`fastagent init\` in a different directory`,
+      `"${target}" already holds ${occupants.join(", ")} — move it away first, or run ` +
+        `\`fastagent init\` in a different directory`,
     );
   }
 

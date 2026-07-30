@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { buildWorkspaceSessionRuntime } from "../src/engines/pi/session-builder.ts";
+import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 
 // `chat` must run the SAME agent dev/start serve, presented in pi's TUI — NOT pi's vanilla
-// discovery. buildWorkspaceSessionRuntime is split out precisely so that injection is inspectable without a
+// discovery. buildAgentSessionRuntime is split out precisely so that injection is inspectable without a
 // TTY. In-memory sessions keep the test from writing to the machine's pi session store. A raw
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
 /** A fresh AGENT dir (`<tmp>/fastagent/`). Passing it to the builder resolves to itself, with the
@@ -19,7 +19,7 @@ async function freshAgentDir(prefix: string): Promise<string> {
   return dir;
 }
 
-describe("session builder: buildWorkspaceSessionRuntime injects fastagent's assembled agent into pi's session", () => {
+describe("session builder: buildAgentSessionRuntime injects fastagent's assembled agent into pi's session", () => {
   it("binds the chat session manager to ordinary configured defineTool tools", async () => {
     const dir = await freshAgentDir("fa-chat-session-tool-");
     const observedKey = "__fastagent_chat_tool_session_test__";
@@ -45,7 +45,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
            })],
          };\n`,
       );
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         rt.session.sessionManager.appendMessage({ role: "user", content: "history marker", timestamp: Date.now() });
         const tool = rt.session.agent.state.tools.find((candidate) => candidate.name === "inspect_session");
@@ -85,7 +85,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
            }],
          };\n`,
       );
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const session = rt.session;
         // Initial active set mirrors serving: deferred tool registered but NOT active; loader active.
@@ -181,7 +181,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
       const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
         warnings.push(args.map(String).join(" "));
       });
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         errorSpy.mockRestore();
         expect(warnings.some((line) => line.includes('skill "greet" collision'))).toBe(true);
@@ -237,7 +237,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
         `export default { description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: {} }) };`,
       );
 
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const sp = rt.session.agent.state.systemPrompt ?? "";
         expect(sp).toContain("PERSONA_MARKER"); // ① persona from the workspace root
@@ -263,7 +263,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
       await writeFile(join(agentDir, "APPEND_SYSTEM.md"), "GLOBAL_APPEND_LEAK_MARKER must not reach chat.\n");
       process.env.PI_CODING_AGENT_DIR = agentDir;
 
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const sp = rt.session.agent.state.systemPrompt ?? "";
         expect(sp).toContain("DEFN_ONLY_MARKER"); // fastagent's prompt is there
@@ -290,7 +290,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
         `${JSON.stringify({ openai: { type: "api_key", key: "sk-test" } })}\n`,
       );
 
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         // The session's model hub reads the workspace store: the stored credential is visible.
         const creds = await rt.session.modelRuntime.listCredentials();
@@ -313,7 +313,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
         join(dir, "fastagent.config.mjs"),
         `export default { model: "openai-codex/gpt-5.5", thinkingLevel: "high" };\n`,
       );
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         expect(rt.session.thinkingLevel).toBe("high");
       } finally {
@@ -342,7 +342,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
         `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: other })}\n`,
       );
 
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
       try {
         let invalidated = false;
         rt.setBeforeSessionInvalidate(() => {
@@ -383,7 +383,7 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
 
       process.chdir(dir);
       const realDir = realpathSync(dir); // pi binds the realpath via process.cwd()
-      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
       try {
         // Import the cwd-less session: no foreign cwd, so it runs in the chat workspace.
         await expect(rt.importFromJsonl(legacy)).resolves.toMatchObject({ cancelled: false });

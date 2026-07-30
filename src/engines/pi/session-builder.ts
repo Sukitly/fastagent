@@ -79,7 +79,7 @@ export interface BuildSessionRuntimeOptions {
  * skills, and auth resolved exactly as the serving opener does). Split from the TUI launcher so the
  * assembly — the fidelity-critical part — is inspectable and reusable without launching a TUI.
  */
-export async function buildWorkspaceSessionRuntime(
+export async function buildAgentSessionRuntime(
   dir: string,
   options: BuildSessionRuntimeOptions = {},
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */

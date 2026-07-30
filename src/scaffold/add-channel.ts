@@ -8,7 +8,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
 import { assertInsideAgentDir } from "../paths.ts";
-import { channelBundleFiles, channelTemplate } from "./templates.ts";
+import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
@@ -287,7 +287,17 @@ export async function appendChannelDotEnv(
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
-  await mkdir(dirname(file), { recursive: true }); // may not exist yet (a relocated dir, a hand-made agent)
+  // The secrets dir may not exist yet (a hand-made agent, a relocated FASTAGENT_SECRETS_DIR). If WE
+  // create it, we write its `.gitignore` too — the directory and its self-protection are one unit, and
+  // handing back a half-formed secrets dir with an app secret in it would be our bug, not the author's.
+  // `mkdir` reports the first path it created, so an EXISTING directory is never revisited: fastagent
+  // still has no opinion about ignore files it did not create.
+  const created = await mkdir(dirname(file), { recursive: true });
+  if (created !== undefined) {
+    await writeFile(join(dirname(file), ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
+      () => {},
+    );
+  }
   let current = "";
   try {
     current = await readFile(file, "utf8");
