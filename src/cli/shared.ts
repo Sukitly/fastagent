@@ -27,9 +27,11 @@ import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
- * ONE padded label writer for the startup report (`dev`/`start`), matching `info`'s: hand-spaced
+ * The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). Hand-spaced
  * labels drift out of alignment the moment a longer one appears — which is exactly what happened when
- * `workspace:` joined `config:`/`model:`/`state:`.
+ * `workspace:` joined `config:`/`model:`/`state:`. `info` keeps its own writer on purpose: its report is
+ * stdout DATA (pipeable, its own label set, its own width), not a log line — the shared thing is the
+ * policy (pad, never hand-space), not a constant.
  */
 export function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(11)}${value}`);

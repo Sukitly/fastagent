@@ -7,6 +7,7 @@
  */
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
+import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { displayPath, scaffoldAgent } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
 
@@ -30,14 +31,26 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     flat: opts.flat,
   }).catch(failStartup);
   const flat = rel === ".";
+  // The agent dir is where the manifest lives, so any install runs there — never against a surrounding
+  // workspace's package.json (its deps are its own concern). Flat: they are the same directory.
+  const agentDir = resolve(dir, rel);
   console.error(
     `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"} — ${flat ? "the directory IS the agent" : `agent in ./${rel}/`}`,
   );
   console.error(`  created: ${created.join(", ")}`);
   if (kept.length > 0) {
-    // Adopting a directory: its own files win, always. Say which ones, and — for the .gitignore
-    // specifically — what fastagent would have put there, since that one carries the secret hygiene.
+    // Adopting a directory: its own files win, always. Say which ones — and for the two that carry a
+    // consequence, say what that consequence is, because keeping them silently leaves the agent broken
+    // (package.json) or its machinery committable (.gitignore).
     console.error(`  kept your existing: ${kept.join(", ")}`);
+    if (kept.includes(join(rel, "package.json")) && complete) {
+      const add =
+        detectRuntime(agentDir, await readPackageJson(agentDir)).runtime === "bun" ? "bun add" : "npm install";
+      console.error(
+        `[fastagent] note: your package.json is untouched, so it does not list @fastagent-sh/fastagent — ` +
+          `run \`${add} @fastagent-sh/fastagent\` there or the scaffolded tools/ cannot resolve`,
+      );
+    }
     if (kept.includes(".gitignore")) {
       console.error(
         `[fastagent] note: your .gitignore is untouched — make sure it ignores node_modules, .state ` +
@@ -46,9 +59,6 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     }
   }
 
-  // The manifest lives in the AGENT dir, so the install runs there — never against a surrounding
-  // workspace's package.json (its deps are its own concern). Flat: they are the same directory.
-  const agentDir = resolve(dir, rel);
   const willInstall = complete && opts.install && !kept.includes(join(rel, "package.json"));
   let installFailed = false;
   if (willInstall) {
