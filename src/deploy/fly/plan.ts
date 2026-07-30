@@ -17,7 +17,6 @@
  * documented floor. State on the /data volume survives stop/suspend on the same machine.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
-import { AGENT_DIR } from "../../paths.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -114,10 +113,10 @@ ${min}
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const { appName, port, modelAuth, channels } = input;
-  // Every artifact is namespaced under the agent dir (fastagent/fly.toml, fastagent/Dockerfile) so
-  // the workspace's own deploy files are never touched; the runbook passes explicit -c/--dockerfile
-  // flags (unambiguous across flyctl versions — no reliance on config-relative path resolution).
-  const flyTomlPath = `${AGENT_DIR}/fly.toml`;
+  // Artifacts sit under the agent prefix, so a NESTED agent never touches the workspace's own deploy
+  // files; the runbook passes explicit -c/--dockerfile flags either way (unambiguous across flyctl
+  // versions — no reliance on config-relative path resolution).
+  const flyTomlPath = `${input.agentPrefix}fly.toml`;
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
@@ -142,7 +141,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
-  const deployCmd = `fly deploy . --config ${flyTomlPath} --dockerfile ${AGENT_DIR}/Dockerfile --app ${appName}`;
+  const deployCmd = `fly deploy . --config ${flyTomlPath} --dockerfile ${input.agentPrefix}Dockerfile --app ${appName}`;
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: flyctl installed (https://fly.io/docs/flyctl/install) and \`fly auth login\`.`,
@@ -175,9 +174,11 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   }
   runbook.push(
     ``,
-    `# The build context is the WORKSPACE ROOT (the whole directory is baked as the agent's cwd); the`,
-    `# config/Dockerfile live under ${AGENT_DIR}/ so they never collide with the workspace's own deploy`,
-    `# files. Run this from the workspace root:`,
+    `# The build context is the WORKSPACE ROOT (the whole directory is baked as the agent's cwd).`,
+    ...(input.agentPrefix
+      ? [`# The config/Dockerfile live under ${input.agentPrefix} so they never collide with the workspace's own.`]
+      : []),
+    `# Run this from ${input.agentPrefix ? "the workspace root" : "this directory"}:`,
     deployCmd,
   );
   if (input.shipsGit) {

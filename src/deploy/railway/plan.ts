@@ -22,7 +22,6 @@
  * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
-import { AGENT_DIR } from "../../paths.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -58,20 +57,20 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. `/data` matches the Fly recipe. */
 const MOUNT = "/data";
 
-/** The `RAILWAY_DOCKERFILE_PATH` value — repo-root-anchored with a leading slash, the form Railway's
- *  builds/dockerfiles docs use for a Dockerfile in another directory. The config file's
- *  `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own convention); two
- *  mechanisms, two documented spellings, one exported fact each. */
-export const DOCKERFILE_PATH_VAR = `/${AGENT_DIR}/Dockerfile`;
+/** The `RAILWAY_DOCKERFILE_PATH` value for an agent under `prefix` — repo-root-anchored with a leading
+ *  slash, the form Railway's builds/dockerfiles docs use for a Dockerfile in another directory. The
+ *  config file's `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own
+ *  convention); two mechanisms, two documented spellings, one fact each. */
+export const dockerfilePathVar = (prefix: string): string => `/${prefix}Dockerfile`;
 
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
-function railwayJson(): string {
+function railwayJson(prefix: string): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
       // dockerfilePath is relative to the workspace root (`railway up`'s upload context).
-      build: { builder: "DOCKERFILE", dockerfilePath: `${AGENT_DIR}/Dockerfile` },
+      build: { builder: "DOCKERFILE", dockerfilePath: `${prefix}Dockerfile` },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -88,8 +87,11 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   // RAILWAY_DOCKERFILE_PATH service variable instead (Railway's documented non-root-Dockerfile route),
   // and the config-as-code pointer degrades to an OPTIONAL enhancement: the /health gate (Railway's
   // default restart policy already matches the file's ON_FAILURE).
-  const configPath = `${AGENT_DIR}/railway.json`;
-  const artifacts: Artifact[] = [{ path: configPath, content: railwayJson() }, ...containerArtifacts(input)];
+  const configPath = `${input.agentPrefix}railway.json`;
+  const artifacts: Artifact[] = [
+    { path: configPath, content: railwayJson(input.agentPrefix) },
+    ...containerArtifacts(input),
+  ];
 
   const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets, input.longConnectionChannels);
   const requiredSecrets = secrets.filter((secret) => secret.required);
@@ -122,7 +124,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
     `# RAILWAY_DOCKERFILE_PATH points the build at the agent's Dockerfile — a service variable,`,
     `# Railway's documented route to a non-root Dockerfile (no dashboard step needed for the build).`,
-    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets RAILWAY_DOCKERFILE_PATH=${DOCKERFILE_PATH_VAR}`,
+    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets RAILWAY_DOCKERFILE_PATH=${dockerfilePathVar(input.agentPrefix)}`,
   ];
 
   if (requiredSecrets.length > 0) {

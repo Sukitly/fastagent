@@ -299,6 +299,7 @@ describe("cli papercuts", () => {
 
     // An up-to-date generated Dockerfile (built with the SAME inputs deploy uses) → kept quietly, no stale flag.
     const current = containerArtifacts({
+      agentPrefix: "fastagent/",
       hasPackageJson: false,
       runtime: "node",
       hasLockfile: false,
@@ -393,7 +394,7 @@ describe("cli papercuts", () => {
     // resolvePlacement throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
     // placementOrExit the refusal surfaced as an uncaught stack trace (found in acceptance).
     const dir = await mkdtemp(join(tmpdir(), "fa-not-an-agent-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n"); // a config is NOT the marker
+    await writeFile(join(dir, "AGENTS.md"), "# just a project\n"); // context, not a definition
     const { code, stderr } = await run(["info", dir]);
     expect(code).toBe(1); // runtime failure, not a crash
     expect(stderr).toMatch(/^Error: .*not a fastagent agent.*fastagent init/); // the one-line failStartup presentation

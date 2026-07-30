@@ -13,6 +13,7 @@ const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
 const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join("\n");
 
 const base = {
+  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,

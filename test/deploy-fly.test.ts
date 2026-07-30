@@ -10,6 +10,7 @@ const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile, default autostop). */
 const base = {
+  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
   appName: "bot",
   port: 8787,
   hasPackageJson: true,

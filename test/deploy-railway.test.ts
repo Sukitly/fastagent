@@ -7,6 +7,7 @@ const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n"
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
 const base = {
+  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
   serviceName: "bot",
   hasPackageJson: true,
   runtime: "node",

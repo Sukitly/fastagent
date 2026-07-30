@@ -222,8 +222,8 @@ describe("init: scaffoldAgent", () => {
     await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the agent .*fastagent —/);
   });
 
-  it("`init` always nests — no detection, no prompt, no placement flags", async () => {
-    // An existing toolchain changes NOTHING: there is no jurisdiction heuristic anymore.
+  it("`init` nests by DEFAULT — no detection, no prompt; the choice is a flag or nothing", async () => {
+    // An existing toolchain changes NOTHING: there is no jurisdiction heuristic, and no prompt.
     const host = await freshDir();
     await writeFile(join(host, "tsconfig.json"), "{}");
     const out = await cliInit(["init", "--no-install"], host);
@@ -232,18 +232,50 @@ describe("init: scaffoldAgent", () => {
     expect(await exists(join(host, "fastagent", "persona.md"))).toBe(true);
     expect(await exists(join(host, "fastagent.config.mjs"))).toBe(false); // zero writes around the agent
 
-    // --flat / --embedded are gone (there is ONE placement) — the parser refuses them, nothing is written.
-    for (const flag of ["--flat", "--embedded"]) {
-      const gone = await freshDir();
-      expect(await cliInit(["init", flag], gone)).toMatch(/unknown option/);
-      expect(await exists(join(gone, "fastagent"))).toBe(false);
-    }
+    // --embedded stayed deleted: "embedded" means using fastagent as a library, nothing else.
+    const gone = await freshDir();
+    expect(await cliInit(["init", "--embedded"], gone)).toMatch(/unknown option/);
+    expect(await exists(join(gone, "fastagent"))).toBe(false);
 
     // An agent already here → refuse.
     const done = await freshDir();
     await mkdir(join(done, "fastagent"), { recursive: true });
     await writeFile(join(done, "fastagent", "fastagent.config.mjs"), "export default {};\n");
     expect(await cliInit(["init"], done)).toMatch(/already a fastagent agent/);
+  });
+
+  it("--flat: the directory IS the agent, existing files are KEPT, and it resolves end to end", async () => {
+    // Case this exists for: a standalone agent repo, or a monorepo package. Agent and workspace are the
+    // same directory, so the agent's tools operate on its own definition — the point of the mode.
+    const dir = await freshDir();
+    await writeFile(join(dir, ".gitignore"), "dist\n"); // the author's file: adopted, never rewritten
+    await writeFile(join(dir, "AGENTS.md"), "# House rules\n");
+    const { created, kept, agentDir } = await scaffoldAgent(dir, { flat: true });
+    expect(agentDir).toBe(".");
+    expect(created).toContain("persona.md"); // at the root, no fastagent/ level
+    expect(created).toContain(join(".secrets", ".gitignore")); // credentials still self-protected
+    expect(kept).toEqual([".gitignore"]); // theirs wins
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe("dist\n"); // …verbatim
+    expect(await exists(join(dir, "fastagent"))).toBe(false); // no nested level anywhere
+
+    // Resolution: agent === workspace, and the definition + ② context load from the same directory.
+    const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
+    expect([a.agentDir, a.workspace]).toEqual([dir, dir]);
+    expect(a.definition.persona).toContain("Persona");
+    expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("House rules");
+  });
+
+  it("--flat is refused where it would silently serve the WRONG workspace", async () => {
+    // A directory named `fastagent` resolves as a nested agent dir, so a flat agent there would serve
+    // with the PARENT as its workspace — cwd, ② context and deploy's build context all one level out.
+    const reserved = join(await freshDir(), "fastagent");
+    await mkdir(reserved);
+    await expect(scaffoldAgent(reserved, { flat: true })).rejects.toThrow(/reserved agent-directory name/);
+
+    // Already a flat agent → refuse rather than double-initialize.
+    const done = await freshDir();
+    await writeFile(join(done, "fastagent.config.mjs"), "export default {};\n");
+    await expect(scaffoldAgent(done, { flat: true })).rejects.toThrow(/already a fastagent agent/);
   });
 
   it("createPiAgentFromDir wires the placement end-to-end: persona/tools from the agent dir, ② context from the workspace", async () => {

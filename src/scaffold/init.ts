@@ -6,11 +6,15 @@
  * context (②), kept as-is. skills/ and tools/ are the agent's self-editable capabilities (re-read each
  * turn).
  *
- * Placement (no variants, no detection, no mode name): the WHOLE agent — definition, config,
- * `.secrets/`, machinery — lands in `<dir>/fastagent/`; the surrounding tree gets ZERO writes and
- * becomes the workspace the agent works on. Placement is structural (the directory NAME is the
- * marker — resolvePlacement), never configured. init either creates, or refuses with the reason (an
- * existing config, or a non-empty `fastagent/`).
+ * Placement — no detection and no prompt, just a default and one flag. By DEFAULT the whole agent —
+ * definition, config, `.secrets/`, machinery — lands in `<dir>/fastagent/`; the surrounding tree gets
+ * ZERO writes and becomes the workspace the agent works on. `--flat` lands the identical shape in `dir`
+ * itself, for the case where the directory IS the agent (a standalone agent repo, a monorepo package):
+ * agent and workspace are then the same directory, so the agent's tools operate on its own definition.
+ *
+ * Both are STRUCTURAL, never configured (resolvePlacement): the nested one is marked by the directory
+ * NAME, the flat one by its `fastagent.config.*` — which is why `--flat` always writes a config, and why
+ * a flat agent cannot be zero-config. init either creates, or refuses with the reason.
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites existing files,
  * preflights non-directory scaffold parents, and rolls back a partial write (files AND the
@@ -35,14 +39,22 @@ interface ScaffoldFile {
 export interface ScaffoldOptions {
   /** Scaffold the markdown-only unit (no package.json, no tool, no install) instead of a complete agent. */
   minimal?: boolean;
+  /** Land the agent in `dir` itself instead of `<dir>/fastagent/` — the directory IS the agent. */
+  flat?: boolean;
 }
 
 export interface ScaffoldResult {
   dir: string;
   /** Whether a complete (code-tool) agent was scaffolded (false for --minimal). */
   complete: boolean;
-  /** Files written by this run (relative to `dir`, so all under `fastagent/`). */
+  /** The agent dir relative to `dir`: `"fastagent"`, or `"."` with --flat. */
+  agentDir: string;
+  /** Files written by this run (relative to `dir`). */
   created: string[];
+  /** Files that already existed and were KEPT untouched. Only reachable with --flat (the nested target
+   *  is proven empty first): adopting a directory means its `.gitignore`/`package.json` are the
+   *  author's. The caller surfaces them — silently skipping a file the user expected would be worse. */
+  kept: string[];
 }
 
 /** How to WRITE a path for someone standing in `cwd`: relative when it is inside `cwd`, absolute when
@@ -66,16 +78,21 @@ export async function exists(p: string): Promise<boolean> {
 }
 
 /**
- * Scaffold a runnable agent into `<dir>/fastagent/` (both created if missing). Default is a complete
- * agent (persona.md + the writing-great-skills skill + a code tool + package.json); `--minimal` drops
- * the code tool and package.json. Refuses when `<dir>/fastagent/` already holds a config (already an
- * agent) or any other content (an unfinished agent or something unrelated — landing persona.md beside
- * it would be a silent mix). Everything OUTSIDE `fastagent/` is untouched, including an existing
- * AGENTS.md: that is the project's context, adopted as-is.
+ * Scaffold a runnable agent into `<dir>/fastagent/` — or into `dir` itself with `--flat` (both created
+ * if missing). Default is a complete agent (persona.md + the writing-great-skills skill + a code tool +
+ * package.json); `--minimal` drops the code tool and package.json.
+ *
+ * The two placements differ in exactly one way that matters here: the NESTED target must be empty (any
+ * content there is an unfinished agent or something unrelated, and landing persona.md beside it would be
+ * a silent mix), while a FLAT target is expected to have content — adopting a directory is the point.
+ * So flat KEEPS every file that already exists (reported, never overwritten, never verified) and refuses
+ * only on a config, which means the directory is already an agent. An existing AGENTS.md is untouched
+ * either way: that is the project's context, adopted as-is.
  */
 export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const minimal = options.minimal ?? false;
-  const root = AGENT_DIR;
+  const flat = options.flat ?? false;
+  const root = flat ? "." : AGENT_DIR;
   const skill = (name: string) => ({
     rel: join(root, "skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),
@@ -103,16 +120,19 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       { rel: join(root, "tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
       // The agent's own manifest. The name says WHOSE agent it is (this directory's), not which
       // subdirectory it always lives in — an agent is named after its workspace dir.
+      // The agent's own manifest. Nested is named after the directory it serves (`<dir>-agent`); flat IS
+      // that directory, so it takes the name straight.
       {
         rel: join(root, "package.json"),
-        content: packageJson(`${toPackageName(dir)}-agent`, await fastagentVersion()),
+        content: packageJson(flat ? toPackageName(dir) : `${toPackageName(dir)}-agent`, await fastagentVersion()),
       },
     );
   }
 
-  // `fastagent` is the agent-directory NAME, and findAgentDir checks the basename FIRST: scaffolding
-  // into a directory already called that would produce `fastagent/fastagent/`, which every command
-  // then resolves PAST (they find the outer one) — a silent no-op scaffold. Refuse with the way out.
+  // `fastagent` is the agent-directory NAME, and resolution checks the basename FIRST. Nested here would
+  // produce `fastagent/fastagent/`, which every command resolves PAST (they find the outer one); FLAT here
+  // would serve with the PARENT as the workspace — the agent's cwd, its ② context and deploy's build
+  // context, all one level out. Either way a silent trap, so the name is refused outright.
   if (basename(dir) === AGENT_DIR) {
     throw new Error(
       `"${dir}": "${AGENT_DIR}" is the reserved agent-directory name, so this path already READS as an ` +
@@ -170,7 +190,9 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   if (config.length > 0) {
     throw new Error(`"${join(dir, root)}" already has ${config.join(", ")} — already a fastagent agent`);
   }
-  if (occupants.length > 0) {
+  // Only the NESTED target must be empty. A flat target is a directory being adopted — content is
+  // expected, and every existing file is kept below.
+  if (!flat && occupants.length > 0) {
     throw new Error(
       `"${join(basename(dir), AGENT_DIR)}" already holds ${occupants.join(", ")} — move it away first, ` +
         `or run \`fastagent init\` in a different directory`,
@@ -182,17 +204,25 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   const agentDirExisted = await exists(join(dir, root));
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
+  const kept: string[] = [];
   // ONE rollback scope: any failure removes what THIS run created — files AND the directories it made
   // for them. Leaving the empty dirs behind would be worse than untidy: the occupancy refusal above
-  // would then report the next `init` as occupied, blaming the user for our own debris. Every file
-  // lands inside the `fastagent/` dir that refusal proved empty, so `wx` (never clobber) can only fire
-  // on a concurrent writer — an error, not a file to keep.
+  // would then report the next `init` as occupied, blaming the user for our own debris.
+  //
+  // `wx` never clobbers. Nested: the target was proven empty, so EEXIST means a concurrent writer — an
+  // error. Flat: the target is a directory being adopted, so an existing `.gitignore`/`package.json` is
+  // the author's — keep it and report it.
   try {
     for (const file of files) {
       const abs = join(dir, file.rel);
       await mkdir(dirname(abs), { recursive: true });
-      await writeFile(abs, file.content, { flag: "wx" });
-      created.push(file.rel);
+      try {
+        await writeFile(abs, file.content, { flag: "wx" });
+        created.push(file.rel);
+      } catch (e) {
+        if (!flat || (e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        kept.push(file.rel);
+      }
     }
   } catch (error) {
     // Best-effort rollback of a partial scaffold: anything that won't delete is left behind (the
@@ -209,5 +239,5 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     if (!agentDirExisted) await rmdir(join(dir, root)).catch(() => {});
     throw error;
   }
-  return { dir, complete: !minimal, created };
+  return { dir, complete: !minimal, agentDir: root, created, kept };
 }

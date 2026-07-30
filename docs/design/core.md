@@ -34,7 +34,7 @@ Engine-neutral consumers use `/core`.
 
 ## 2. Workspace shape and prompt assembly
 
-There is ONE agent shape, in ONE placement. The shape:
+There is ONE agent shape, in TWO placements. The shape:
 
 ```txt
 <agent dir>/
@@ -50,11 +50,13 @@ There is ONE agent shape, in ONE placement. The shape:
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
-The agent always lives in a directory named `fastagent/`, and the directory around it is the
-WORKSPACE — what the agent works ON: its cwd, whose `AGENTS.md` ancestors are ② context. The tree
-outside `fastagent/` gets ZERO writes (deploy's root `.dockerignore` is the one exception — see §9).
-The agent directory is visible on purpose: it holds the author's code (persona, skills, tools), not
-tool configuration — fastagent's own machinery inside it keeps the dot prefix (`.secrets/`, `.state/`):
+The other noun is the WORKSPACE — what the agent works ON: its cwd, whose `AGENTS.md` ancestors are ②
+context. Where it sits relative to the agent is the whole of placement:
+
+**Nested** (what `init` does) puts the agent in a directory named `fastagent/`; the tree around it is
+the workspace and gets ZERO writes (deploy's root `.dockerignore` is the one exception — see §9). The
+agent directory is visible on purpose: it holds the author's code (persona, skills, tools), not tool
+configuration — fastagent's own machinery inside it keeps the dot prefix.
 
 ```txt
 repo/                       # the workspace — what the agent works ON, untouched
@@ -67,38 +69,43 @@ repo/                       # the workspace — what the agent works ON, untouch
     └── package.json
 ```
 
-Placement is STRUCTURAL — the directory NAME plus one shallow existence check. Nothing is configured
-and nothing is detected from the surroundings, so `resolvePlacement(dir)` (in the neutral `src/paths.ts` — the ONE owner of the rule)
-has a two-line state space:
+**Flat** (`init --flat`) puts the identical shape in the directory itself — a standalone agent repo, a
+monorepo package. Agent and workspace are then the SAME directory, which has one consequence worth
+stating: the agent's `read`/`write`/`bash` tools operate on its own definition. For a self-editing repo
+agent that is the point; it is also why flat is a flag and not a default.
 
-| `dir`, checked in this order | Result |
+Both are STRUCTURAL — nothing is configured, nothing is detected from the surroundings — but they are
+marked differently, and the asymmetry is deliberate:
+
+| `dir`, checked in this ORDER | Result |
 |---|---|
 | `basename(dir) === "fastagent"` and it holds a definition | `{ agentDir: dir, workspace: dirname(dir) }` — invoking from inside the agent never changes the answer |
-| `<dir>/fastagent/` holds a definition | `{ agentDir: <dir>/fastagent, workspace: dir }` |
-| neither | throws: not a fastagent agent, run `fastagent init` |
+| `<dir>/fastagent/` holds a definition | `{ agentDir: <dir>/fastagent, workspace: dir }` (nested) |
+| `<dir>` holds a `fastagent.config.*` | `{ agentDir: dir, workspace: dir }` (flat) |
+| none | throws: not a fastagent agent, with the exit that fits the position |
 
-"Holds a definition" is one shallow existence check — a `fastagent.config.*` or any of `persona.md`,
-`skills/`, `tools/`, `channels/`, `schedules/`. It is NOT the old config-less probe: that one chose
-between two placements and could refuse while a valid alternative reading existed. This one answers a
-single question ("is this an agent?") with the same evidence rule on BOTH candidates, so entry-point
-invariance holds, and its only alternative answer is the same not-an-agent refusal. Without it the
-name alone would make an unrelated checkout called `fastagent/` — or an empty leftover — resolve as a
-persona-less zero-config agent whose coding tools operate on its PARENT.
+- **Nested's marker is the NAME**, plus one shallow existence check ("holds a definition" = a
+  `fastagent.config.*` or any of `persona.md`, `skills/`, `tools/`, `channels/`, `schedules/`). Without
+  that check the name alone would make an unrelated checkout called `fastagent/` — or an empty leftover
+  — resolve as a persona-less agent whose tools operate on its PARENT.
+- **Flat's marker is the CONFIG**, and only the config. A flat agent has no name to carry the intent,
+  and the authored-surface list alone would read half the world's repositories (`tools/`, `skills/`) as
+  agents. The trade is explicit: **there is no zero-config flat agent**, and `init --flat` always writes
+  one.
+- **A directory satisfying both resolves NESTED** — the explicitly-named agent wins. ORDERING, not an
+  ambiguity refusal: an earlier iteration rejected that overlap, which required the config to double as
+  a structural marker, an entry-point-invariance rule, and a "does this read as an agent?" probe that
+  needed two rounds of patching. What the user needs is to SEE which one answered, and `dev`/`start`/
+  `info` print `agent:` and `workspace:` on every run.
+- Resolution never walks UP (the answer must not depend on how deep you stand), but the REFUSAL reads
+  the path so each dead end gets its own exit: inside an agent (nested or flat) → `cd` there; a
+  directory named `fastagent` holding no definition → rename it, since `init` refuses that name too.
 
-(The basename check comes first, so `fastagent/fastagent/` resolves to the OUTER one — you are
-already standing in an agent.)
-
-Because the name carries the placement, the config is NOT structural: deleting
-`fastagent.config.mjs` leaves a zero-config agent that still runs with `--model`/`FASTAGENT_MODEL`.
-`init` mirrors the same discipline — it either creates, or refuses with the reason: a config inside
-`./fastagent/` (already an agent) or any other content there (don't mix into someone else's directory).
-
-This one rule is what earlier iterations spent their complexity budget on. When BOTH a flat and a
-nested placement were supported, resolution became a search: config-as-marker, a both-roots
-ambiguity refusal, an entry-point-invariance rule, a config-less "does this read as an agent?" probe,
-a reserved-name refusal in `init`, and a `nested ?` branch in all seven deploy modules. None of that
-was solving the actual tension (an agent needs a home that is not the project it works on); all of it
-was solving "which of the two shapes is this?". Deleting `--flat` deleted the question.
+`init` mirrors the same discipline — it either creates, or refuses with the reason. The two placements
+differ there in exactly one way: a NESTED target must be empty (content there is an unfinished agent or
+something unrelated, and landing persona.md beside it would be a silent mix), while a FLAT target is
+expected to have content — adopting a directory is the point, so every existing file is KEPT (reported,
+never overwritten, never verified).
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret
 store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
@@ -125,14 +132,14 @@ those names (its own `tools/`, say) still reads as an agent, and `init` inside i
 out is to rename it. Deeper evidence (parsing the config, requiring persona.md specifically) would buy
 that residual case at the price of a rule nobody can predict from the outside.
 
-**Known boundary (accepted, documented):** `workspace` is always `agentDir`'s immediate parent —
-never further. Since `fastagent/` is a fixed name, a workspace holds at most one agent, and "two
-agents that both work ON this repo" is not expressible: `init reviewer` + `init releaser` gives two
-fully independent agents, but each one's cwd is its own directory (the `AGENTS.md` ancestor walk
-still reaches the repo; tools reach it through `../`). Removing that one level would require making
-`workspace` configurable — the mirror image of the deleted `config.agentDir`, which would turn config
-validation, dev's watch scope and deploy's build context back into variables. If the need becomes
-real, it deserves an explicit new concept, not a heuristic inside `resolvePlacement`.
+**Known boundary (accepted, documented):** `workspace` is `agentDir` itself (flat) or its immediate
+parent (nested) — never further. So a nested workspace holds at most one agent, and "two agents that
+both work ON this repo" is not expressible: `init reviewer` + `init releaser` gives two fully
+independent agents, but each one's cwd is its own directory (the `AGENTS.md` ancestor walk still reaches
+the repo; tools reach it through `../`). Removing that one level would require making `workspace`
+configurable — the mirror image of the deleted `config.agentDir`, which would turn config validation,
+dev's watch scope and deploy's build context back into variables. If the need becomes real, it deserves
+an explicit new concept, not a heuristic inside `resolvePlacement`.
 
 The pi reference prompt has four segments:
 
@@ -520,9 +527,11 @@ service; `--tunnel` can add a separate ephemeral cloudflared service, while dura
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
 Quick Tunnel URL and registers webhooks. Deploy has ONE semantic — bake the
 workspace as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Every artifact
-is namespaced under `fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single write
-outside it is the workspace-root `.dockerignore` the host CLIs' context packers require (kept if the
-workspace owns one; preflight then ASKS that file — through the `ignore` matcher, with dockerignore's
+(Dockerfile, fly.toml, compose, railway.json) sits under ONE derived value, the agent prefix:
+`fastagent/` when the agent is nested, `""` when the directory IS the agent. For a nested agent the
+single write outside it is the workspace-root `.dockerignore` the host CLIs' context packers require
+(kept if the workspace owns one — for a flat agent that file is the agent's own artifact and is
+refreshed like the rest; preflight then ASKS that file — through the `ignore` matcher, with dockerignore's
 root-anchoring applied — whether it would drop the agent dir or ship `fastagent/.secrets/auth.json`:
 either gates `--run`, else warn). `.git`
 ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not

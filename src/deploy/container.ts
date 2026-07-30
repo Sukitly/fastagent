@@ -9,7 +9,7 @@
  * Deps install under `/app/fastagent`, and the Dockerfile lives there too — namespaced so it never
  * collides with one the workspace already owns.
  */
-import { AGENT_DIR, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 
 export interface Artifact {
   path: string;
@@ -54,6 +54,11 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
+  /** Where deploy's artifacts and the agent's own files sit, relative to the BUILD CONTEXT (which is
+   *  always the workspace): `"fastagent/"` when the agent is nested, `""` when the directory IS the
+   *  agent (`--flat`). ONE derived value — the earlier two-placement shape branched on a `nested`
+   *  boolean at fifteen separate sites, and each site was a chance for the two to disagree. */
+  agentPrefix: string;
   /** Workspace-relative machinery paths the NAME-based excludes below would miss — a
    *  `FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` pointed at an in-tree directory not called
    *  `.secrets`/`.state`. Preflight resolves them; excluding by PATH is what keeps `COPY . .` from
@@ -76,9 +81,14 @@ function aptLayer(packages?: string[]): string {
 }
 
 function dockerfile(input: ContainerInput): string {
-  // The whole workspace is baked at /app; deps install (and the local bin lives) under the agent dir
-  // inside it, so every path below is prefixed with AGENT_DIR.
-  const layoutNote = `The whole directory is the agent's workspace; the agent itself lives in ${AGENT_DIR}/.`;
+  // The whole workspace is baked at /app; deps install (and the local bin lives) under the agent, which
+  // is either a subdirectory of it or /app itself. `into` prefixes a path, `at` runs a command there.
+  const prefix = input.agentPrefix;
+  const into = (p: string): string => `${prefix}${p}`;
+  const at = (cmd: string): string => (prefix ? `cd ${prefix.replace(/\/$/, "")} && ${cmd}` : cmd);
+  const layoutNote = prefix
+    ? `The whole directory is the agent's workspace; the agent itself lives in ${prefix}`
+    : `The directory IS the agent — it is also its own workspace.`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
   // different base is the operator's own Dockerfile (kept if present). deploy.apt is package-name-validated.
@@ -120,10 +130,10 @@ ${apt}WORKDIR /app
     // `bunx fastagent` would fall back to installing the npm package named `fastagent`, which is an
     // unrelated third-party package (ours is the scoped @fastagent-sh/fastagent).
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
-    return `${head}COPY ${AGENT_DIR}/package.json ${AGENT_DIR}/bun.lock* ./${AGENT_DIR}/
-RUN cd ${AGENT_DIR} && ${install}
+    return `${head}COPY ${into("package.json")} ${into("bun.lock*")} ./${prefix}
+RUN ${at(install)}
 COPY . .
-CMD ["sh", "-c", "cd ${AGENT_DIR} && bun run fastagent start /app"]
+CMD ["sh", "-c", "${at("bun run fastagent start /app")}"]
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent);
@@ -134,10 +144,10 @@ CMD ["sh", "-c", "cd ${AGENT_DIR} && bun run fastagent start /app"]
   // `fastagent` when the dep is absent — an unrelated third-party package (ours is scoped). The local
   // path fails fast and visibly instead.
   const install = input.hasLockfile ? "npm ci" : "npm install";
-  return `${head}COPY ${AGENT_DIR}/package.json ${AGENT_DIR}/package-lock.json* ./${AGENT_DIR}/
-RUN cd ${AGENT_DIR} && ${install}
+  return `${head}COPY ${into("package.json")} ${into("package-lock.json*")} ./${prefix}
+RUN ${at(install)}
 COPY . .
-CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
+CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]
 `;
 }
 
@@ -155,7 +165,9 @@ CMD ["./${AGENT_DIR}/node_modules/.bin/fastagent", "start", "/app"]
 const dockerignore = (input: ContainerInput): string =>
   DOCKERIGNORE_BASE +
   (input.machineryPaths ?? [])
-    .filter((p) => !p.startsWith(`${AGENT_DIR}/${SECRETS_DIRNAME}/`) && p !== `${AGENT_DIR}/${STATE_DIRNAME}`)
+    .filter(
+      (p) => !p.startsWith(`${input.agentPrefix}${SECRETS_DIRNAME}/`) && p !== `${input.agentPrefix}${STATE_DIRNAME}`,
+    )
     .map(
       (p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH / FASTAGENT_STATE_DIR)\n/${p}\n`,
     )
@@ -176,20 +188,21 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 `;
 
 /**
- * The Dockerfile + ignore artifacts — spread into any host's artifact list. The Dockerfile is
- * namespaced under the agent dir (`fastagent/Dockerfile`) so it never collides with one the workspace
- * already owns. The ignore ships in TWO forms because context packing is host-CLI-owned and
+ * The Dockerfile + ignore artifacts — spread into any host's artifact list. Everything is prefixed with
+ * {@link ContainerInput.agentPrefix}, so a NESTED agent's Dockerfile lands under `fastagent/` (never
+ * colliding with one the workspace already owns) while a FLAT agent's lands at the root, where it IS
+ * the agent's own file. The ignore ships in TWO forms because context packing is host-CLI-owned and
  * inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own context packers
  * reliably read (kept if the workspace already has one — preflight then checks the machinery/secret
- * excludes it must carry) — and (2) a per-Dockerfile `fastagent/Dockerfile.dockerignore` for plain
- * docker/buildx builds. That root file is the ONE write deploy ever makes outside the agent dir, and
+ * excludes it must carry) — and (2) a per-Dockerfile `Dockerfile.dockerignore` for plain docker/buildx
+ * builds. For a nested agent that root file is the ONE write deploy makes outside the agent dir, and
  * only at deploy time — without it the host CLI's packer would bake `.secrets/` into the image.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
   const ignore = dockerignore(input);
   return [
-    { path: `${AGENT_DIR}/Dockerfile`, content: dockerfile(input) },
+    { path: `${input.agentPrefix}Dockerfile`, content: dockerfile(input) },
     { path: ".dockerignore", content: ignore },
-    { path: `${AGENT_DIR}/Dockerfile.dockerignore`, content: ignore },
+    { path: `${input.agentPrefix}Dockerfile.dockerignore`, content: ignore },
   ];
 }

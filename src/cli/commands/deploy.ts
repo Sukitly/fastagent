@@ -31,13 +31,13 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import { dockerfilePathVar, planRailwayDeploy } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
-import { AGENT_DIR, type ResolvedPlacement, resolveStateRoot } from "../../paths.ts";
+import { type ResolvedPlacement, resolveStateRoot } from "../../paths.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -68,6 +68,10 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // from the workspace, which is the build context.
   const placement = placementOrExit(resolve(dirArg));
   const { agentDir, workspace } = placement;
+  // The one placement fact this module needs: a NESTED agent's root `.dockerignore` is the WORKSPACE's
+  // file (never force-clobbered); a FLAT agent's is its own artifact, refreshed like the rest.
+  const nested = agentDir !== workspace;
+  const neverForce = nested ? [".dockerignore"] : [];
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
@@ -144,7 +148,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
     await writeArtifacts(workspace, plan.artifacts, {
       force: !!opts.force,
-      neverForce: [".dockerignore"],
+      neverForce,
     });
     if (opts.run) {
       return runDeployDocker({
@@ -196,7 +200,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     });
     await writeArtifacts(workspace, plan.artifacts, {
       force: !!opts.force,
-      neverForce: [".dockerignore"],
+      neverForce,
     });
     if (opts.run) {
       // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner sets
@@ -218,7 +222,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
-        dockerfilePath: DOCKERFILE_PATH_VAR,
+        dockerfilePath: dockerfilePathVar(pre.container.agentPrefix),
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -297,12 +301,13 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   });
   await writeArtifacts(workspace, plan.artifacts, {
     force: !!opts.force,
-    neverForce: [".dockerignore"],
+    neverForce,
   });
   if (opts.run) {
     return runDeployFly({
       agentDir,
       workspace,
+      agentPrefix: container.agentPrefix,
       appName,
       modelAuth,
       authPath,
@@ -450,6 +455,8 @@ async function runDeployDocker(
  */
 async function runDeployFly(
   params: ResolvedPlacement & {
+    /** Where the agent's files sit relative to the build context — `"fastagent/"` or `""` (flat). */
+    agentPrefix: string;
     appName: string;
     modelAuth: string | undefined;
     authPath: string;
@@ -462,6 +469,7 @@ async function runDeployFly(
   const {
     agentDir,
     workspace,
+    agentPrefix,
     appName,
     modelAuth,
     authPath,
@@ -503,8 +511,8 @@ async function runDeployFly(
       missingSecrets,
       channels,
       longConnectionChannels,
-      flyConfig: `${AGENT_DIR}/fly.toml`,
-      dockerfile: `${AGENT_DIR}/Dockerfile`,
+      flyConfig: `${agentPrefix}fly.toml`,
+      dockerfile: `${agentPrefix}Dockerfile`,
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),

@@ -77,8 +77,8 @@ describe("cli kernel: spec conformance", () => {
     const carried: [string[], string][] = [
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
-      [["init"], "Nothing outside ./fastagent/ is touched"],
-      [["init"], "The agent goes into ./fastagent/"],
+      [["init"], "the directory itself is the agent"],
+      [["init"], "the agent goes into ./fastagent/"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["fire"], "does NOT advance the schedule's fire state"],
       [["schedule", "history"], "did last night's run silently fail"],

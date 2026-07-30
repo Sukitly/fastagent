@@ -78,7 +78,7 @@ The default directory is the current directory. `init`:
 - keeps an existing `AGENTS.md` as project context;
 - refuses when `./fastagent/` already holds a `fastagent.config.*` (already an agent) or any other content.
 
-There is no placement flag: the agent is always `./fastagent/`, and the directory around it is the workspace. Placement is structural — a `fastagent/` directory holding a definition is the marker, never configured.
+`--flat` puts the agent in the directory itself instead (a standalone agent repo, a monorepo package): agent and workspace become the same directory, existing files are kept, and the marker is the `fastagent.config.*` rather than the directory name — so a flat agent cannot be zero-config. Both placements are structural, never configured; a directory satisfying both resolves nested.
 
 Then run:
 

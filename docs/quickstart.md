@@ -59,6 +59,8 @@ fastagent info
 
 **Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. The placement is structural, marked by the directory name itself, never configured or detected.
 
+**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead — declared by its `fastagent.config.*` rather than by a directory name. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition.
+
 A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
 stored login, or a provider API key in your env/`.env`) come first, annotated with the source; picking

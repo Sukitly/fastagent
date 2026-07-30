@@ -41,29 +41,34 @@ const init: CommandSpec = {
   name: "init",
   summary: "scaffold a runnable agent and install its dependencies",
   description:
-    "Scaffold a runnable agent and run npm install. The agent goes into ./fastagent/ in dir " +
+    "Scaffold a runnable agent and run npm install. By default the agent goes into ./fastagent/ in dir " +
     "(default .) — the rest of the directory gets zero writes; it is the WORKSPACE the agent works " +
     "ON. Default content is a self-iterating agent: persona.md (its identity), a writing-great-skills " +
-    "example skill, a fetch-url code tool, config, package.json, .gitignore. Nothing outside " +
-    "./fastagent/ is touched; an existing AGENTS.md is kept as project context.",
+    "example skill, a fetch-url code tool, config, package.json, .gitignore. An existing AGENTS.md is " +
+    "kept as project context.",
   args: [DIR_ARG],
   flags: [
     { flags: "--minimal", description: "persona.md + the example skill + config only (no code tool / package.json)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
+    { flags: "--flat", description: "the directory IS the agent (no fastagent/ level); keeps existing files" },
   ],
   examples: [
     { cmd: "fastagent init", note: "the agent lands in ./fastagent/" },
     { cmd: "fastagent init my-project", note: "my-project/fastagent/ (dir created if needed)" },
+    { cmd: "fastagent init . --flat", note: "this repo IS the agent (or a monorepo package)" },
   ],
   notes:
-    "ONE placement, no variants and no detection: the agent — definition, config, .secrets/, .state/ — " +
-    "always lives in a directory named fastagent/, and the directory around it is the workspace (its " +
-    "cwd, and where its AGENTS.md context is read from). Placement is structural: the directory NAME " +
-    "is the marker, nothing is ever configured. Two agents for one project = two init dirs.",
+    "TWO placements, both structural — never configured, never detected. Default: the agent (definition, " +
+    "config, .secrets/, .state/) lives in a directory named fastagent/ and the directory around it is " +
+    "the workspace (its cwd, where its AGENTS.md context is read from). --flat: the directory itself is " +
+    "the agent, declared by its fastagent.config.* — so a flat agent cannot be zero-config, and its " +
+    "workspace IS its own directory (its tools operate on its own definition). A directory with both " +
+    "resolves NESTED. Two agents for one project = two init dirs.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       minimal: f.minimal === true,
       install: f.install !== false,
+      flat: f.flat === true,
     }),
 };
 

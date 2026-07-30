@@ -59,11 +59,23 @@ describe("config: resolvePlacement (structural placement resolution)", () => {
     expect(resolvePlacement(join(dir, "fastagent"))).toEqual(ws);
   });
 
-  it("a config outside the agent dir is NOT a marker — the agent DIRECTORY is", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-strayconfig-"));
+  it("FLAT: a config at the dir root declares the directory itself as the agent", async () => {
+    // The flat marker is stricter than the named one on purpose: a flat agent has no name to carry the
+    // intent, and the authored-surface list alone (`tools/`, `skills/`) would read half the world's
+    // repositories as agents. So the config — and only the config — declares a flat agent.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-flat-"));
+    await mkdir(join(dir, "tools"), { recursive: true });
+    expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/); // surface alone is not enough
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
-    expect(() => resolvePlacement(dir)).toThrow(/not a fastagent agent/);
-    // …and it changes nothing once a real agent dir exists beside it.
+    expect(resolvePlacement(dir)).toEqual({ agentDir: dir, workspace: dir }); // agent IS the workspace
+  });
+
+  it("a nested agent WINS over a flat one in the same directory — ordered, not refused", async () => {
+    // An earlier design treated this overlap as an ambiguity to reject, which cost a structural-marker
+    // rule, an entry-invariance rule and a probe. Ordering makes it one line; `dev`/`start`/`info` print
+    // both paths every run, so which one answered is visible rather than guessed.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-both-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
     await mkdir(join(dir, "fastagent"));
     await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
