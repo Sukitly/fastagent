@@ -74,7 +74,8 @@ export function parseStackOutputs(stdout: string): Record<string, string> {
 
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. The auth seed
  *  is CHUNKED across FastagentAuthSeed(2…) — AgentCore env values cap at 2048 chars and a real OAuth
- *  auth.json's base64 exceeds it; `start` reassembles (collectAuthSeed). Other values pass through. */
+ *  auth.json's base64 exceeds it; `start` reassembles (collectAuthSeed). Every chunk is emitted on
+ *  every deploy, including empty trailing chunks, so CloudFormation cannot retain stale values. */
 export function paramsFileContent(
   imageUri: string,
   secrets: Record<string, string>,
@@ -83,29 +84,53 @@ export function paramsFileContent(
   const params = [`ImageUri=${imageUri}`];
   if (forwarder) params.push(`StateBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`);
   for (const [k, v] of Object.entries(secrets)) {
-    if (k !== "FASTAGENT_AUTH_SEED") {
-      params.push(`${cfnParamName(k)}=${v}`);
-      continue;
-    }
-    for (let i = 0; i * AUTH_SEED_CHUNK_SIZE < v.length; i++) {
-      const param = i === 0 ? "FastagentAuthSeed" : `FastagentAuthSeed${i + 1}`;
-      params.push(`${param}=${v.slice(i * AUTH_SEED_CHUNK_SIZE, (i + 1) * AUTH_SEED_CHUNK_SIZE)}`);
-    }
+    if (k !== "FASTAGENT_AUTH_SEED") params.push(`${cfnParamName(k)}=${v}`);
+  }
+  const seed = secrets.FASTAGENT_AUTH_SEED ?? "";
+  for (let i = 0; i < AUTH_SEED_MAX_CHUNKS; i++) {
+    const param = i === 0 ? "FastagentAuthSeed" : `FastagentAuthSeed${i + 1}`;
+    params.push(`${param}=${seed.slice(i * AUTH_SEED_CHUNK_SIZE, (i + 1) * AUTH_SEED_CHUNK_SIZE)}`);
   }
   return `${JSON.stringify(params)}\n`;
+}
+
+export interface CheckpointReply {
+  written: boolean;
+  reason?: string;
+}
+
+/** Parse the runtime's checkpoint acknowledgement without treating malformed output as success. */
+export function parseCheckpointReply(stdout: string): CheckpointReply | undefined {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as unknown;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      !("written" in parsed) ||
+      typeof parsed.written !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      written: parsed.written,
+      reason: "reason" in parsed && typeof parsed.reason === "string" ? parsed.reason : undefined,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
  * Run the deploy through `aws` + `docker`. `log` reports progress; the injected registrars perform
  * post-deploy webhook steps from the builder machine against the forwarder's Function URL. Every
- * gate is fail-visible; `writeParamsFile` is the caller's 0600-temp-file seam (see the header).
+ * gate is fail-visible; `writeSecretFile` is the caller's 0600-temp-file seam (see the header).
  */
 export async function deployAgentcoreRun(
   plan: AgentcoreRunPlan,
   aws: CliRunner,
   docker: CliRunner,
   log: (msg: string) => void,
-  writeParamsFile: (content: string) => Promise<string>,
+  writeSecretFile: (content: string) => Promise<string>,
   writeForwarderZip: (bytes: Uint8Array) => Promise<string>,
   registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
   registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
@@ -320,7 +345,7 @@ export async function deployAgentcoreRun(
     }
   }
   log(`deploying stack ${stack}…`);
-  const paramsPath = await writeParamsFile(paramsFileContent(image, plan.secrets, forwarderParams));
+  const paramsPath = await writeSecretFile(paramsFileContent(image, plan.secrets, forwarderParams));
   const deployed = await aws([
     "cloudformation",
     "deploy",
@@ -369,6 +394,9 @@ export async function deployAgentcoreRun(
     // be false: the intent never reaches S3 and the message is simply gone. Best-effort: a session
     // that is not up has nothing to lose, and a failure here must not block the (already applied)
     // deploy — it only downgrades the promise, so say so.
+    const checkpointPayloadPath = await writeSecretFile(
+      `${JSON.stringify({ kind: "checkpoint", auth: plan.secrets.FASTAGENT_INGRESS_SECRET })}\n`,
+    );
     const checkpoint = await aws(
       [
         "bedrock-agentcore",
@@ -378,7 +406,7 @@ export async function deployAgentcoreRun(
         "--runtime-session-id",
         ingressSessionId(plan.name),
         "--payload",
-        JSON.stringify({ kind: "checkpoint", auth: plan.secrets.FASTAGENT_INGRESS_SECRET }),
+        `file://${checkpointPayloadPath}`,
         "--cli-binary-format",
         "raw-in-base64-out",
         "/dev/stdout",
@@ -393,13 +421,17 @@ export async function deployAgentcoreRun(
         "note: could not reach the ingress session to checkpoint — if a turn was in flight it is lost " +
           "rather than replayed (see the output above)",
       );
-    } else if (/"written"\s*:\s*true/.test(checkpoint.stdout)) {
-      log("checkpointed the ingress session (an interrupted turn can be replayed)");
     } else {
-      const reason = /"reason"\s*:\s*"([^"]*)"/.exec(checkpoint.stdout)?.[1];
-      // The ordinary case: the session was already idle-reclaimed, so its snapshot was written when
-      // it settled and there is nothing in flight to lose.
-      log(`note: nothing to checkpoint${reason ? ` — ${reason}` : " (no session was running)"}`);
+      const reply = parseCheckpointReply(checkpoint.stdout);
+      if (reply?.written) {
+        log("checkpointed the ingress session (an interrupted turn can be replayed)");
+      } else if (reply) {
+        // The ordinary case: the session was already idle-reclaimed, so its snapshot was written when
+        // it settled and there is nothing in flight to lose.
+        log(`note: nothing to checkpoint${reply.reason ? ` — ${reply.reason}` : " (no session was running)"}`);
+      } else {
+        log("warn: ingress session returned an invalid checkpoint response — could not verify the state snapshot");
+      }
     }
     log("stopping the ingress session so the new image serves immediately…");
     const stopCommand = [

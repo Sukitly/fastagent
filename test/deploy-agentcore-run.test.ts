@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
-import { ingressSessionId } from "../src/deploy/agentcore/plan.ts";
+import { AUTH_SEED_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
   paramsFileContent,
+  parseCheckpointReply,
   parseStackOutputs,
 } from "../src/deploy/agentcore/run.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
@@ -184,6 +185,45 @@ describe("the pre-stop checkpoint", () => {
     );
     expect(logs.join("\n")).toContain("it is lost");
   });
+
+  it("keeps the ingress secret out of argv by carrying the checkpoint through a 0600-file seam", async () => {
+    const ingressSecret = "must-not-appear-on-argv";
+    const written: string[] = [];
+    const writeSecret = vi.fn(async (content: string) => {
+      written.push(content);
+      return `/tmp/secret-${written.length}.json`;
+    });
+    const { cli, calls } = checkpointReply('{"written":true}');
+    await deployAgentcoreRun(
+      plan({ needsForwarder: true, secrets: { FASTAGENT_INGRESS_SECRET: ingressSecret } }),
+      cli,
+      fakeCli().cli,
+      () => {},
+      writeSecret,
+      writeZip,
+      async () => "registered",
+    );
+    const invoke = calls.find((call) => call.args[1] === "invoke-agent-runtime")!.args;
+    expect(invoke.join(" ")).not.toContain(ingressSecret);
+    expect(invoke[invoke.indexOf("--payload") + 1]).toBe("file:///tmp/secret-2.json");
+    expect(written[1]).toBe(`${JSON.stringify({ kind: "checkpoint", auth: ingressSecret })}\n`);
+  });
+
+  it("warns instead of claiming success when the checkpoint response is malformed", async () => {
+    const logs: string[] = [];
+    const { cli } = checkpointReply('{"written":"true"}');
+    await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      cli,
+      fakeCli().cli,
+      (message) => logs.push(message),
+      writeParams,
+      writeZip,
+      async () => "registered",
+    );
+    expect(logs.join("\n")).toContain("invalid checkpoint response");
+    expect(logs.join("\n")).not.toContain("checkpointed the ingress session");
+  });
 });
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
@@ -232,7 +272,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "bedrock-agentcore invoke-agent-runtime " +
         "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
         `--runtime-session-id ${ingressSessionId("my-agent")} ` +
-        '--payload {"kind":"checkpoint"} --cli-binary-format raw-in-base64-out /dev/stdout',
+        "--payload file:///tmp/params.json --cli-binary-format raw-in-base64-out /dev/stdout",
       // The redeploy-immediacy step: a live ingress session would keep serving the OLD image.
       "bedrock-agentcore stop-runtime-session " +
         "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
@@ -258,6 +298,10 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         `ForwarderS3Key=${forwarderKey}`,
         "TelegramBotToken=t",
         "TelegramSecretToken=s",
+        "FastagentAuthSeed=",
+        "FastagentAuthSeed2=",
+        "FastagentAuthSeed3=",
+        "FastagentAuthSeed4=",
       ])}\n`,
     );
   });
@@ -435,9 +479,16 @@ describe("deploy/agentcore/run: helpers", () => {
     });
   });
 
-  it("paramsFileContent maps env names to template parameter names", () => {
+  it("paramsFileContent maps env names and explicitly clears every unused auth-seed chunk", () => {
     expect(paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64" })).toBe(
-      `${JSON.stringify(["ImageUri=img:1", "OpenaiApiKey=sk", "FastagentAuthSeed=b64"])}\n`,
+      `${JSON.stringify([
+        "ImageUri=img:1",
+        "OpenaiApiKey=sk",
+        "FastagentAuthSeed=b64",
+        "FastagentAuthSeed2=",
+        "FastagentAuthSeed3=",
+        "FastagentAuthSeed4=",
+      ])}\n`,
     );
   });
 
@@ -449,7 +500,30 @@ describe("deploy/agentcore/run: helpers", () => {
       `FastagentAuthSeed=${"a".repeat(2000)}`,
       `FastagentAuthSeed2=${"b".repeat(2000)}`,
       `FastagentAuthSeed3=${"c".repeat(756)}`,
+      "FastagentAuthSeed4=",
     ]);
     for (const p of params) expect(p.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
+  });
+
+  it("clears a previous auth seed when a deploy switches to an API key", () => {
+    const params = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" })) as string[];
+    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
+      "FastagentAuthSeed=",
+      "FastagentAuthSeed2=",
+      "FastagentAuthSeed3=",
+      "FastagentAuthSeed4=",
+    ]);
+    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toHaveLength(AUTH_SEED_MAX_CHUNKS);
+  });
+
+  it("parseCheckpointReply validates structured acknowledgements", () => {
+    expect(parseCheckpointReply('  {"written":true}\n')).toEqual({ written: true, reason: undefined });
+    expect(parseCheckpointReply('{"written":false,"reason":"no session"}')).toEqual({
+      written: false,
+      reason: "no session",
+    });
+    for (const invalid of ["not json", "{}", '{"written":"true"}', "null"]) {
+      expect(parseCheckpointReply(invalid)).toBeUndefined();
+    }
   });
 });
