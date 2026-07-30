@@ -12,11 +12,9 @@ import {
   resolveAuthPath,
   resolveAuthPathOverride,
   resolveModelSpec,
-  resolveSecretsDir,
   resolveSessionsDirOverride,
-  resolveStateRoot,
-  resolvePlacement,
 } from "../src/engines/pi/config.ts";
+import { resolveSecretsDir, resolveStateRoot, resolvePlacement } from "../src/paths.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");

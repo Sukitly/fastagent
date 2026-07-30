@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { type ResolvedPlacement, resolveStateRoot } from "./engines/pi/config.ts";
+import { type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";

@@ -1,7 +1,7 @@
 /** `fastagent chat [dir]`: open the SAME assembled agent in pi's interactive TUI. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolvePlacement } from "../../engines/pi/config.ts";
+import { resolvePlacement } from "../../paths.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";

@@ -6,12 +6,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { authSeedBytes } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
-import {
-  resolveAuthPath,
-  resolveSecretsDir,
-  resolveSessionsDirOverride,
-  resolvePlacement,
-} from "../../engines/pi/config.ts";
+import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
+import { resolveSecretsDir, resolvePlacement } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";

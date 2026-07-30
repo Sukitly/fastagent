@@ -13,7 +13,7 @@ import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { dotEnvPath, loadDotEnv } from "./env.ts";
-import { resolveStateRoot } from "./engines/pi/config.ts";
+import { resolveStateRoot } from "./paths.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {

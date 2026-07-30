@@ -1,7 +1,8 @@
 /** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolvePlacement } from "../../engines/pi/config.ts";
+import { loadConfig } from "../../engines/pi/config.ts";
+import { resolvePlacement } from "../../paths.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { turnContext } from "../../engines/pi/tool-context.ts";

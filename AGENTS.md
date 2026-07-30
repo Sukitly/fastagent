@@ -38,7 +38,11 @@ src/
 ├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
 ├── runtime.ts               # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts                # neutral ESM module discovery/loading for tools/ channels/ schedules/ config
-├── paths.ts, version.ts    # neutral helpers (AGENT_DIR + machinery paths, containment guard, version)
+├── paths.ts                # PLACEMENT: resolvePlacement (the agent is a `fastagent/` dir holding a
+│                           # definition; its parent is the workspace) + the machinery paths that follow
+│                           # (.secrets/.state + env overrides) + the containment guard. Engine-neutral,
+│                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
+├── version.ts              # package version (deploy pins it into the image)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
@@ -114,7 +118,7 @@ src/
     ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
     ├── harness.ts           # pi harness wiring (factory)
     ├── definition.ts        # AGENTS.md + skills loading and bundling
-    ├── config.ts            # fastagent.config.ts loading + model/precedence
+    ├── config.ts            # fastagent.config.ts loading + model/precedence (placement lives in paths.ts)
     ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
     ├── models.ts            # Models collection wiring
     ├── report.ts            # startup report (auth/model/skills/tools surface)

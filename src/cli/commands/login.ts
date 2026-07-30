@@ -15,13 +15,8 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import {
-  AGENT_DIR,
-  enclosingAgentDir,
-  findAgentDir,
-  resolveAuthPath,
-  resolvePlacement,
-} from "../../engines/pi/config.ts";
+import { resolveAuthPath } from "../../engines/pi/config.ts";
+import { AGENT_DIR, enclosingAgentDir, findAgentDir, resolvePlacement } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, failStartupOn } from "../fail.ts";

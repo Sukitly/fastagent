@@ -5,7 +5,7 @@
  */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
+import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { readRuns } from "../../schedule/audit.ts";
 import { nextRun } from "../../schedule/cron.ts";

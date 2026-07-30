@@ -9,7 +9,7 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { dotEnvPath, loadDotEnv } from "../../env.ts";
-import { resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
+import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";

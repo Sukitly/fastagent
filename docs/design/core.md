@@ -68,7 +68,7 @@ repo/                       # the workspace — what the agent works ON, untouch
 ```
 
 Placement is STRUCTURAL — the directory NAME plus one shallow existence check. Nothing is configured
-and nothing is detected from the surroundings, so `resolvePlacement(dir)` (the ONE owner of the rule)
+and nothing is detected from the surroundings, so `resolvePlacement(dir)` (in the neutral `src/paths.ts` — the ONE owner of the rule)
 has a two-line state space:
 
 | `dir`, checked in this order | Result |

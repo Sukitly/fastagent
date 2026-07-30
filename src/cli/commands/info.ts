@@ -8,9 +8,8 @@ import {
   resolveAuthPath,
   resolveModelSpec,
   resolveSessionsDirOverride,
-  resolveStateRoot,
-  resolvePlacement,
 } from "../../engines/pi/config.ts";
+import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";

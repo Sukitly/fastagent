@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
-import { resolveStateRoot, resolvePlacement } from "../../engines/pi/config.ts";
+import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { NO_ACTIVE_RUN_CODE } from "../../session.ts";

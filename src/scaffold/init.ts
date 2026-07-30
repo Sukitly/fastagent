@@ -22,7 +22,7 @@
  */
 import { access, lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { AGENT_CONFIG_NAMES, AGENT_DIR, enclosingAgentDir } from "../engines/pi/config.ts";
+import { AGENT_CONFIG_NAMES, AGENT_DIR, enclosingAgentDir } from "../paths.ts";
 import { SECRETS_DIRNAME } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";

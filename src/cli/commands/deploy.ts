@@ -36,13 +36,8 @@ import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import {
-  AGENT_DIR,
-  loadConfig,
-  resolveModelSpec,
-  resolveStateRoot,
-  resolvePlacement,
-} from "../../engines/pi/config.ts";
+import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
+import { AGENT_DIR, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";

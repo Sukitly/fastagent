@@ -6,7 +6,7 @@
  */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { AGENT_DIR } from "../../engines/pi/config.ts";
+import { AGENT_DIR } from "../../paths.ts";
 import { displayPath, scaffoldAgent } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
 

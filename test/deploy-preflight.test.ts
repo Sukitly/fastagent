@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import { AGENT_DIR, type FastagentConfig } from "../src/engines/pi/config.ts";
+import type { FastagentConfig } from "../src/engines/pi/config.ts";
+import { AGENT_DIR } from "../src/paths.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */

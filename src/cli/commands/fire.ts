@@ -6,7 +6,7 @@
  */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { AGENT_DIR, resolvePlacement } from "../../engines/pi/config.ts";
+import { AGENT_DIR, resolvePlacement } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";

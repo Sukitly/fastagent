@@ -18,9 +18,8 @@ import {
   loadConfig,
   resolveAuthPath,
   resolveModelSpec,
-  resolveStateRoot,
-  resolvePlacement,
 } from "./config.ts";
+import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
 import { createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./invoke.ts";
