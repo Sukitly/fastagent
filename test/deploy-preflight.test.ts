@@ -121,17 +121,32 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const clean = await call2();
       expect(clean.ok).toBe(true);
       if (clean.ok)
-        expect(clean.container.machineryPaths).toEqual(["creds/auth.json", "creds/.env", "fastagent/.state"]);
+        // The DIR, not the two filenames we happen to know — an atomic-write temp or a second key file
+        // beside auth.json must not ship either.
+        expect(clean.container.machineryPaths).toEqual(["creds", "fastagent/.state"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
       await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
       const gated = await call2({ run: true });
       expect(gated.ok).toBe(false);
-      if (!gated.ok) expect(gated.gate).toMatch(/creds\/auth\.json/);
+      if (!gated.ok) expect(gated.gate).toMatch(/does not exclude `creds`/);
     } finally {
       if (saved === undefined) delete process.env.FASTAGENT_SECRETS_DIR;
       else process.env.FASTAGENT_SECRETS_DIR = saved;
     }
+  });
+
+  it("the per-Dockerfile ignore is interrogated too — it is what BuildKit prefers", async () => {
+    // `deploy docker` builds through `fastagent/Dockerfile`, and BuildKit prefers the ignore file BESIDE
+    // it. Checking only the workspace-root one left the credential gate not covering the file that
+    // actually decides that build.
+    const agentDir = await workspace();
+    const host = dirname(agentDir);
+    await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
+    await writeFile(join(agentDir, "Dockerfile.dockerignore"), "node_modules\n"); // theirs, and it leaks
+    const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/fastagent\/Dockerfile\.dockerignore \(kept\) does not exclude/);
   });
 
   it("--run gates on a kept .dockerignore that would bake secrets or drop the agent", async () => {
@@ -149,7 +164,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await writeFile(join(host, ".dockerignore"), ".secrets\n.env\n");
     const rootOnly = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(rootOnly.ok).toBe(false);
-    if (!rootOnly.ok) expect(rootOnly.gate).toMatch(/fastagent\/\.secrets\/auth\.json/);
+    if (!rootOnly.ok) expect(rootOnly.gate).toMatch(/does not exclude `fastagent\/\.secrets`/);
 
     // A rule matching the agent dir: the context ships WITHOUT the agent — the whole deploy is
     // meaningless (crash-loop with no persona/config), so gate regardless of where the rule came from.

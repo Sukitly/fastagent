@@ -82,8 +82,8 @@ Generated files are defaults, not a second source of truth:
 
 - An existing `Dockerfile`, `.dockerignore`, or `fastagent.compose.yml` is kept byte-for-byte and used by `--run`.
 - Editing a generated Dockerfile or Compose file may produce a drift warning, but never an automatic rewrite. Remove its first generated-marker line to suppress that classification after taking ownership.
-- `--force` is the explicit destructive opt-in to regenerate artifacts, including hand-owned ones.
-- To regenerate only one artifact while preserving the others, delete that file and rerun without `--force`.
+- `--force` regenerates artifacts fastagent GENERATED (they carry a marker line); a file without that marker is never touched, with or without it. Delete such a file to hand the path back to deploy.
+- To regenerate only one artifact while preserving the others, delete that file and rerun (with or without `--force`).
 - `--tunnel` only shapes a newly generated/forced Compose file. If an existing authoritative file has no `tunnel` service, `--tunnel --run` gates before Docker side effects and tells you to edit, delete/regenerate, or use `--force`.
 - A custom Dockerfile owns system packages/base-image details; `config.deploy.apt` only shapes the generated Dockerfile.
 
@@ -113,7 +113,7 @@ fastagent deploy fly --run   # idempotent, resumable; carries your local env sec
 
 Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
 
-**Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised.
+**Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 
 ## Railway
 

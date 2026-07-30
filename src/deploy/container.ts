@@ -174,8 +174,12 @@ CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]
 const dockerignore = (input: ContainerInput): string =>
   DOCKERIGNORE_BASE +
   (input.machineryPaths ?? [])
-    .filter(
-      (p) => !p.startsWith(`${input.agentPrefix}${SECRETS_DIRNAME}/`) && p !== `${input.agentPrefix}${STATE_DIRNAME}`,
+    // Skip what the name-based rules above already cover: the default `<agent>/.secrets` / `<agent>/.state`
+    // and anything inside them. What remains is a relocated dir whose NAME those rules cannot match.
+    .filter((p) =>
+      [`${input.agentPrefix}${SECRETS_DIRNAME}`, `${input.agentPrefix}${STATE_DIRNAME}`].every(
+        (covered) => p !== covered && !p.startsWith(`${covered}/`),
+      ),
     )
     .map(
       (p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH / FASTAGENT_STATE_DIR)\n/${p}\n`,
