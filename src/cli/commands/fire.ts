@@ -25,13 +25,13 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const fireDir = resolve(dirArg);
-  const ws = placementOrExit(fireDir);
-  loadDotEnv(ws.agentDir);
+  const placement = placementOrExit(fireDir);
+  loadDotEnv(placement.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(ws.agentDir, opts);
+  await resolveFirstRunModel(placement.agentDir, opts);
   // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent
   // dir), so `fire` sees the same set the scheduler serves.
-  const { schedules, failures } = await loadSchedules(ws.agentDir).catch(failStartup);
+  const { schedules, failures } = await loadSchedules(placement.agentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
@@ -39,7 +39,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
     // should read as "wrong place", not "broken file".
     failStartup(
       new Error(
-        `unknown schedule "${name}" (looked in ${displayPath(process.cwd(), join(ws.agentDir, "schedules")) ?? "schedules"}). ` +
+        `unknown schedule "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "schedules")) ?? "schedules"}). ` +
           `available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
       ),
     );

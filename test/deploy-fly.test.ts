@@ -271,6 +271,17 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(unpinned).toMatch(/cd fastagent && bun install\n/); // no --frozen-lockfile without a lockfile
   });
 
+  it("the fly.toml marker is what makes --force mean 'reset' (and a hand-written one exempt)", async () => {
+    // The ownership predicate is load-bearing twice over: writeArtifacts uses it to decide what --force
+    // may replace, and deploy.ts uses it to decide whether to round-trip `app =` and run the
+    // scale-to-zero gate. Before it existed, `fly.toml` read as the author's forever.
+    const { isGeneratedFlyToml } = await import("../src/deploy/fly/plan.ts");
+    const generated = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(isGeneratedFlyToml(generated)).toBe(true);
+    expect(isGeneratedFlyToml('app = "mine"\n')).toBe(false);
+    expect(isGeneratedFlyToml(`# my own header\n${generated}`)).toBe(false); // marker must open the file
+  });
+
   it("flags a model that won't travel — config.model is the deployed box's only source", () => {
     // A model in config.ts travels (in the image) → no issue.
     expect(modelTravelIssue("openai/gpt-4o", "openai/gpt-4o")).toBeUndefined();

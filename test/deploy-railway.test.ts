@@ -17,6 +17,15 @@ const base = {
 } as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
+  it("the railway.json marker is a KEY (JSON cannot carry a comment) — that is what --force keys on", async () => {
+    const { isGeneratedRailwayJson } = await import("../src/deploy/railway/plan.ts");
+    const generated = json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(isGeneratedRailwayJson(generated)).toBe(true);
+    expect(JSON.parse(generated)["x-generated-by"]).toBe("fastagent deploy railway"); // Railway ignores it
+    expect(isGeneratedRailwayJson('{"build":{"builder":"DOCKERFILE"}}')).toBe(false); // the author's
+    expect(isGeneratedRailwayJson("not json")).toBe(false); // unparseable reads as theirs, never as ours
+  });
+
   it("generates a thin railway.json — build from Dockerfile, healthcheck /health (no boot-race routing)", () => {
     const j = JSON.parse(json(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] })));
     expect(j.build.builder).toBe("DOCKERFILE");

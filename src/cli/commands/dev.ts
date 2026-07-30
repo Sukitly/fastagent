@@ -29,7 +29,7 @@ export interface DevOptions {
 
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   const dir = resolve(dirArg);
-  const ws = placementOrExit(dir);
+  const placement = placementOrExit(dir);
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
   // Pick a model interactively once, in the parent (both watch and --no-watch have a TTY); a spawned
@@ -37,16 +37,16 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   // the proxy FIRST (as invoke/start do): the picker reads FASTAGENT_MODEL and provider keys from
   // .env, and getAuth's OAuth refresh must go through HTTPS_PROXY. The worker re-loads both in serveOnce.
   if (!isWorker) {
-    loadDotEnv(ws.agentDir);
+    loadDotEnv(placement.agentDir);
     installProxyFetch();
-    await resolveFirstRunModel(ws.agentDir, opts);
+    await resolveFirstRunModel(placement.agentDir, opts);
   }
   if (isWorker || opts.watch === false) {
     await serveOnce(dir, opts);
     return;
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape check before spawning
-  await runDevSupervisor(ws, { tunnel: opts.tunnel ?? false });
+  await runDevSupervisor(placement, { tunnel: opts.tunnel ?? false });
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */

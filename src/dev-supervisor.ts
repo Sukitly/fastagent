@@ -60,7 +60,10 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
-export async function runDevSupervisor(ws: ResolvedPlacement, options: { tunnel?: boolean } = {}): Promise<void> {
+export async function runDevSupervisor(
+  placement: ResolvedPlacement,
+  options: { tunnel?: boolean } = {},
+): Promise<void> {
   // The placement arrives RESOLVED from the command (which already routed its refusal through
   // failStartup): re-resolving here would duplicate the rule and surface the same user-fixable
   // refusal as a raw stack. The watch root is the AGENT DIR — every restart-relevant code input lives
@@ -93,10 +96,10 @@ export async function runDevSupervisor(ws: ResolvedPlacement, options: { tunnel?
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(ws.agentDir, t.url, {
+            void announceWebhooks(placement.agentDir, t.url, {
               openUrl: openExternalUrl,
               routeChannels: m.routeChannels,
-              stateRoot: resolveStateRoot(ws.agentDir),
+              stateRoot: resolveStateRoot(placement.agentDir),
             });
           }
         });
@@ -132,9 +135,9 @@ export async function runDevSupervisor(ws: ResolvedPlacement, options: { tunnel?
 
   // chokidar gives reliable cross-platform recursion + structural ignore that native fs.watch
   // cannot; devWatchIgnored (above) narrows the scope to the process-bound code inputs.
-  const watcher = watchTree(ws.agentDir, {
+  const watcher = watchTree(placement.agentDir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(ws.agentDir, dotEnvPath(ws.agentDir)),
+    ignored: devWatchIgnored(placement.agentDir, dotEnvPath(placement.agentDir)),
   });
   watcher.on("all", () => {
     clearTimeout(timer);
@@ -149,9 +152,9 @@ export async function runDevSupervisor(ws: ResolvedPlacement, options: { tunnel?
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely; the watcher follows it
   // anywhere inside (the resolved path is allow-listed above), but outside the watch root the worker
   // would load a file no watcher sees. Say so once instead of leaving the hint above lying.
-  if (!isUnderDir(dotEnvPath(ws.agentDir), ws.agentDir)) {
+  if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {
     log.warn(
-      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(ws.agentDir)}) — it is NOT watched; restart dev after editing it`,
+      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(placement.agentDir)}) — it is NOT watched; restart dev after editing it`,
     );
   }
 

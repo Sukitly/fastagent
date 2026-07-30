@@ -34,16 +34,16 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
   // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
-  const ws = placementOrExit(dir);
+  const placement = placementOrExit(dir);
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
-  loadDotEnv(ws.agentDir);
+  loadDotEnv(placement.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(ws.agentDir, opts);
+  await resolveFirstRunModel(placement.agentDir, opts);
 
   // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
   // materialize it into the writable secrets dir BEFORE the opener resolves auth (once, absent-only).
   // Same resolveAuthPath the opener uses — ONE owner of the flag > env > default chain.
-  await maybeSeedAuth(resolveAuthPath(ws.agentDir, opts.authPath));
+  await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);

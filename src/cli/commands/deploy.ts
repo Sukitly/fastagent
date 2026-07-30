@@ -138,8 +138,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // regardless of the current flag. `--force` is the explicit reset to the requested generated shape.
     const composeFile = join(workspace, plan.composePath);
     let keptWithoutRequestedTunnel = false;
-    if (!opts.force && (await exists(composeFile))) {
-      const existingHasTunnel = composeHasTunnelService(await readFile(composeFile, "utf8"));
+    // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must
+    // describe the topology that will actually be there.
+    const composeText = await readFile(composeFile, "utf8").catch(() => undefined);
+    if (composeText !== undefined && (!opts.force || !isGeneratedCompose(composeText))) {
+      const existingHasTunnel = composeHasTunnelService(composeText);
       plan = dockerPlan(existingHasTunnel);
       keptWithoutRequestedTunnel = requestedTunnel && !existingHasTunnel;
     }
@@ -246,16 +249,22 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // fly.toml lives in the agent dir (fastagent/fly.toml) — the workspace's own
   // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
   const flyTomlPath = join(agentDir, "fly.toml");
-  const flyTomlExists = await exists(flyTomlPath);
-  const keptApp = flyTomlExists && !opts.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
+  const flyToml = await readFile(flyTomlPath, "utf8").catch(() => undefined);
+  // Every decision below turns on ONE question — will `writeArtifacts` keep this file? — and the answer is
+  // OWNERSHIP, not the flag: `--force` resets a fly.toml we generated and leaves a hand-written one alone.
+  // Keying these on `--force` alone meant a forced deploy of a hand-owned fly.toml took the app name from
+  // the directory basename (shipping that file at a DIFFERENT app than it declares) and skipped the
+  // scale-to-zero gate below (a schedules deploy that silently sleeps). Read once, decide once.
+  const flyTomlKept = flyToml !== undefined && (!opts.force || !isGeneratedFlyToml(flyToml));
+  const keptApp = flyTomlKept ? parseFlyAppName(flyToml as string) : undefined;
   const appName = keptApp ?? toFlyAppName(basename(workspace));
   if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
-  if (flyTomlExists && opts.force) {
+  if (flyToml !== undefined && !flyTomlKept) {
     console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
   }
   // Autostop flags shape the GENERATED fly.toml only. In KEEP mode (fly.toml exists, no --force) it is
   // not rewritten, so the flags would silently do nothing — surface that instead of a confusing no-op.
-  if (flyTomlExists && !opts.force && (opts.stop || opts.scaleToZero === false)) {
+  if (flyTomlKept && (opts.stop || opts.scaleToZero === false)) {
     console.error(
       `[fastagent] warn: --stop/--no-scale-to-zero only shape a freshly generated fly.toml — yours exists and ` +
         `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
@@ -267,8 +276,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // Under `--run` this is a GATE (same discipline as the model-travel gate): a full deploy whose schedules
   // silently never fire is worse than a crash-loop — nothing fails visibly when a cron instant passes on a
   // sleeping machine, and unlike github's min=0 there is no legitimate trade to accept here.
-  if (flyTomlExists && !opts.force && (hasTimeTriggers || longConnectionChannels.length > 0)) {
-    const min = parseFlyMinMachines(await readFile(flyTomlPath, "utf8"));
+  if (flyTomlKept && (hasTimeTriggers || longConnectionChannels.length > 0)) {
+    const min = parseFlyMinMachines(flyToml as string);
     if ((min ?? 0) === 0) {
       // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a
       // hand-written fly.toml without the line scales to zero exactly like an explicit 0.
