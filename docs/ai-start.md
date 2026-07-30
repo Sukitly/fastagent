@@ -78,7 +78,7 @@ The default directory is the current directory. `init`:
 - keeps an existing `AGENTS.md` as project context;
 - refuses when `./fastagent/` already holds a `fastagent.config.*` (already an agent) or any other content.
 
-`--agentDir <name>` names the agent directory anything (the name is never a rule — a `fastagent.config.*` is the only marker, so there is no zero-config agent). `--agentDir .` (spelled `--flat`) puts the agent in the directory itself instead (a standalone agent repo, a monorepo package), where existing files are kept and the agent's tools operate on its own definition. What a served agent's WORKSPACE is — its cwd, deploy's build context — is whatever directory you point fastagent at: the project, or the agent dir itself (all a deployed box may hold).
+`--agent-dir <name>` names the agent directory anything (the name is never a rule — a `fastagent.config.*` is the only marker, so there is no zero-config agent). `--agent-dir .` (spelled `--flat`) puts the agent in the directory itself instead (a standalone agent repo, a monorepo package), where existing files are kept and the agent's tools operate on its own definition. What a served agent's WORKSPACE is — its cwd, deploy's build context — is whatever directory you point fastagent at: the project, or the agent dir itself (all a deployed box may hold).
 
 Then run:
 

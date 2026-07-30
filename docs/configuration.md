@@ -46,7 +46,7 @@ Supported keys:
 | `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |
 | `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
 
-Unknown keys fail at startup. This catches typos such as `modle` instead of silently running zero-config.
+Unknown keys fail at startup. This catches typos such as `modle` instead of silently degrading to defaults.
 
 The generated `.dockerignore` excludes `.git` to keep the image small. If your agent runs git over its **own** history (e.g. `git log`/`git blame` on the repo it ships in), delete the `.git` line from the generated `.dockerignore` so that history is included in the image.
 

@@ -44,6 +44,27 @@ interface ScaffoldFile {
   content: string;
 }
 
+/** The agent directory name for a raw `--agent-dir` value: the default when unset, and `./bot` read as
+ *  `bot` — `basename` already says that is what it means, so rejecting the spelling would be pedantry. */
+export function agentDirName(raw: string | undefined): string {
+  if (raw === undefined) return DEFAULT_AGENT_DIRNAME;
+  const trimmed = raw.replace(/^\.[/\\]/, "");
+  return trimmed === "" ? raw : trimmed;
+}
+
+/** Why `name` cannot be an agent directory name, or undefined when it can. It must stay ONE segment
+ *  inside the target: anything else (a separator, `..`, an absolute path) would land the agent where the
+ *  one-level lookup cannot see it — an agent nothing would ever serve. Shared with the CLI, which reports
+ *  it as the USAGE error it is (exit 2) rather than a runtime failure; the throw inside
+ *  {@link scaffoldAgent} guards its own contract for programmatic callers. */
+export function agentDirNameError(name: string): string | undefined {
+  if (name === "." || (name !== "" && name !== ".." && name === basename(name))) return undefined;
+  return (
+    `--agent-dir "${name}" must be a single directory name (or "." for the target itself) — a path would ` +
+    `put the agent outside it, where fastagent would not find it`
+  );
+}
+
 export interface ScaffoldOptions {
   /** Scaffold the markdown-only unit (no package.json, no tool, no install) instead of a complete agent. */
   minimal?: boolean;
@@ -81,16 +102,10 @@ export interface ScaffoldResult {
  */
 export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const minimal = options.minimal ?? false;
-  const root = options.agentDir ?? DEFAULT_AGENT_DIRNAME;
+  const root = agentDirName(options.agentDir);
   const flat = root === ".";
-  // The name must stay one segment inside `dir`: anything else (a separator, `..`, an absolute path)
-  // would land the agent where the one-level lookup cannot see it, i.e. an agent nothing serves.
-  if (!flat && (root !== basename(root) || root === "" || root === "..")) {
-    throw new Error(
-      `--agentDir "${root}" must be a single directory name (or "." for the directory itself) — a path ` +
-        `would put the agent outside "${dir}", where fastagent would not find it`,
-    );
-  }
+  const invalid = agentDirNameError(root);
+  if (invalid) throw new Error(invalid);
   const skill = (name: string) => ({
     rel: join(root, "skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),

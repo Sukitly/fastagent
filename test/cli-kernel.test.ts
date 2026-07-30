@@ -382,11 +382,15 @@ describe("cli end to end: the thin entry", () => {
     expect(env.stderr).toMatch(/invalid PORT env/);
   });
 
-  it("the retired --agent-dir flag is an unknown option (exit 2), and nothing is written", async () => {
+  it("--flat and --agent-dir name ONE knob, so passing both is a usage error (exit 2), not a precedence", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-kernel-agentdir-"));
-    const r = await run(["init", dir, "--agent-dir", "."]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toMatch(/unknown option '--agent-dir'/);
+    const both = await run(["init", dir, "--no-install", "--flat", "--agent-dir", "bot"]);
+    expect(both.code).toBe(2);
+    expect(both.stderr).toMatch(/cannot be used with/);
+    // …and a value that is not one directory name is the same class: a rejected VALUE, not a runtime fault.
+    const path = await run(["init", dir, "--no-install", "--agent-dir", join("nested", "bot")]);
+    expect(path.code).toBe(2);
+    expect(path.stderr).toMatch(/must be a single directory name/);
   });
 
   it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {

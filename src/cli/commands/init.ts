@@ -9,9 +9,9 @@ import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
-import { scaffoldAgent } from "../../scaffold/init.ts";
+import { agentDirName, agentDirNameError, scaffoldAgent } from "../../scaffold/init.ts";
 import { displayPath } from "../../paths.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 
 export interface InitOptions {
   minimal: boolean;
@@ -23,6 +23,11 @@ export interface InitOptions {
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
+  // A rejected flag VALUE is the usage class, same as one the parser rejects — so it is checked here,
+  // where exit 2 lives, not inside the scaffolder (whose throws are runtime failures, exit 1).
+  const requested = agentDirName(opts.agentDir);
+  const invalid = agentDirNameError(requested);
+  if (invalid) failUsage(invalid);
   const {
     complete,
     agentDir: rel,
@@ -30,7 +35,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     kept,
   } = await scaffoldAgent(dir, {
     minimal: opts.minimal,
-    agentDir: opts.agentDir,
+    agentDir: requested,
   }).catch(failStartup);
   const flat = rel === ".";
   // The agent dir is where the manifest lives, so any install runs there — never against a surrounding

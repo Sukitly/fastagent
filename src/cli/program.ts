@@ -42,7 +42,7 @@ const init: CommandSpec = {
   summary: "scaffold a runnable agent and install its dependencies",
   description:
     "Scaffold a runnable agent and run npm install. By default the agent goes into ./fastagent/ in dir " +
-    "(default .; --agentDir names it otherwise) — the rest of the directory gets zero writes, and it is " +
+    "(default .; --agent-dir names it otherwise) — the rest of the directory gets zero writes, and it is " +
     "the WORKSPACE the agent works ON when you point fastagent there. Default content is a " +
     "self-iterating agent: persona.md (its identity), a writing-great-skills " +
     "example skill, a fetch-url code tool, config, package.json, .gitignore. An existing AGENTS.md is " +
@@ -51,17 +51,23 @@ const init: CommandSpec = {
   flags: [
     { flags: "--minimal", description: "persona.md + the example skill + config only (no code tool / package.json)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
-    { flags: "--agentDir <name>", description: "name the agent directory (default fastagent; . = dir itself)" },
-    { flags: "--flat", description: "alias for --agentDir . — the directory IS the agent; keeps existing files" },
+    { flags: "--agent-dir <name>", description: "name the agent directory (default fastagent; . = dir itself)" },
+    {
+      flags: "--flat",
+      description: "alias for --agent-dir . — the directory IS the agent; keeps existing files",
+      // Two spellings of ONE knob: `--flat --agent-dir bot` names the same thing twice with different
+      // values, which is a usage error, not a precedence question to settle silently.
+      conflicts: ["agentDir"],
+    },
   ],
   examples: [
     { cmd: "fastagent init", note: "the agent lands in ./fastagent/" },
     { cmd: "fastagent init my-project", note: "my-project/fastagent/ (created)" },
-    { cmd: "fastagent init . --agentDir bot", note: "./bot/ — any name works" },
+    { cmd: "fastagent init . --agent-dir bot", note: "./bot/ — any name works" },
     { cmd: "fastagent init . --flat", note: "this repo IS the agent" },
   ],
   notes:
-    "An agent is a directory holding a fastagent.config.* — the NAME is never a rule, so --agentDir can " +
+    "An agent is a directory holding a fastagent.config.* — the NAME is never a rule, so --agent-dir can " +
     "call it anything. What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
     "whatever directory you later point fastagent at: point at the project and the agent inside it " +
     "serves with the project as its workspace; point at the agent directory (all a deployed box may " +
@@ -70,8 +76,8 @@ const init: CommandSpec = {
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       minimal: f.minimal === true,
       install: f.install !== false,
-      // `--flat` is the spelling for the common case of the same knob; both land in one value, so the
-      // scaffolder never sees two ways to say ".".
+      // `--flat` is the spelling for the common case of the same knob (they conflict, so only one is
+      // ever set); both land in ONE value, so the scaffolder never sees two ways to say ".".
       agentDir: f.flat === true ? "." : typeof f.agentDir === "string" ? f.agentDir : undefined,
     }),
 };
