@@ -120,6 +120,15 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
       warn.mockClear();
       loadDotEnv(homedir());
       expect(warn).not.toHaveBeenCalled();
+
+      // …and a FLAT agent's root is the author's repository, where a `.env` is very likely their
+      // application's. Telling them to move its values would break their app.
+      const flat = await mkdtemp(join(tmpdir(), "fa-stray-flat-"));
+      await writeFile(join(flat, "fastagent.config.mjs"), "export default {};\n"); // declares a flat agent
+      await writeFile(join(flat, ".env"), "DATABASE_URL=x\n"); // theirs, not a misplaced agent file
+      warn.mockClear();
+      loadDotEnv(flat);
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "./log.ts";
-import { SECRETS_DIRNAME, findAgentDir, resolveSecretsDir } from "./paths.ts";
+import { SECRETS_DIRNAME, findAgentDir, isNestedAgentDir, resolveSecretsDir } from "./paths.ts";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -73,13 +73,13 @@ export function loadDotEnv(agentDir: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  // A `.env` at the AGENT ROOT is the file habit puts there (the scaffold's .gitignore anticipates it),
-  // and nothing reads it. Left silent, the symptom is a channel missing its token — with no way back
-  // to the cause. Say where the values actually belong. Only inside a real AGENT, asked of the
-  // placement module rather than by re-deriving its name rule: `login` outside one anchors on the
-  // global machinery home, where a `.env` beside it is the user's business, not a misplaced agent file.
+  // A `.env` in fastagent's OWN directory is the file habit puts there, and nothing reads it. Left
+  // silent, the symptom is a channel missing its token with no way back to the cause. NESTED only: a
+  // flat agent's root is the author's repository, where a `.env` is very likely their application's —
+  // telling them to move its values would break their app. (`login` outside any agent anchors on the
+  // global machinery home, which is not an agent dir either.)
   const stray = join(agentDir, ".env");
-  if (stray !== path && findAgentDir(agentDir) === agentDir && existsSync(stray)) {
+  if (stray !== path && isNestedAgentDir(agentDir) && findAgentDir(agentDir) === agentDir && existsSync(stray)) {
     log.warn(`[fastagent] ${stray} is NOT read — the agent's env lives at ${path}; move the values there`);
   }
 }

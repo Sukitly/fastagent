@@ -96,6 +96,14 @@ function findPlacement(dir: string): ResolvedPlacement | undefined {
   return undefined;
 }
 
+/** Is `p` a NESTED agent dir (its basename is `fastagent`)? The one fact separating "fastagent's own
+ *  directory" from "the user's project directory that happens to BE an agent" — a distinction only
+ *  MESSAGES need: a flat agent's root is the author's tree, so fastagent must not lecture about the
+ *  files in it. Never used for resolution, which already knows which candidate answered. */
+export function isNestedAgentDir(p: string): boolean {
+  return basename(resolve(p)) === AGENT_DIR;
+}
+
 /** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair.
  *  For callers that only need "is this an agent, and which one" (`login`'s global fallback, the
  *  stray-`.env` warning). */

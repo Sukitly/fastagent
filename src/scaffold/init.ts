@@ -118,8 +118,6 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   if (!minimal) {
     files.push(
       { rel: join(root, "tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
-      // The agent's own manifest. The name says WHOSE agent it is (this directory's), not which
-      // subdirectory it always lives in — an agent is named after its workspace dir.
       // The agent's own manifest. Nested is named after the directory it serves (`<dir>-agent`); flat IS
       // that directory, so it takes the name straight.
       {
