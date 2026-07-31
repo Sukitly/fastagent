@@ -70,6 +70,19 @@ function isWakeup(e: unknown): e is Wakeup {
   );
 }
 
+/**
+ * The wake-ALARM sink: notified after EVERY wakeups-store mutation with the new pending set. The
+ * AgentCore deployment registers one (schedule/wake-alarm.ts) that mirrors pending wake-ups into
+ * one-shot EventBridge schedules — the external clock that makes `wake` reliable on a host with no
+ * resident process. Neutral seam: this module knows only "someone wants to observe changes"; a
+ * resident host registers nothing and behaves exactly as before. The sink is fire-and-forget and
+ * must own its errors; a throw is caught here so a broken alarm never corrupts a store write.
+ */
+let wakeupsSink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined;
+export function setWakeupsSink(sink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined): void {
+  wakeupsSink = sink;
+}
+
 function load(stateRoot: string): Wakeup[] {
   const v = readScheduleFile(scheduleFile(stateRoot, "wakeups"));
   if (v === undefined) return []; // absent (first run) or a corrupt file readScheduleFile already warned on
@@ -88,6 +101,11 @@ function load(stateRoot: string): Wakeup[] {
 }
 function save(stateRoot: string, wakeups: Wakeup[]): void {
   writeScheduleFile(scheduleFile(stateRoot, "wakeups"), wakeups);
+  try {
+    wakeupsSink?.(stateRoot, wakeups);
+  } catch (e) {
+    log.error(`[schedule] wake-alarm sink failed (store write is unaffected): ${String(e)}`);
+  }
 }
 
 /** The current pending wake-ups (`fastagent schedule list` uses this). */

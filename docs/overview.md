@@ -105,7 +105,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 | Embed in an app | [Embedding](embedding.md) |
 | Add webhooks/bots | [Channels](channels.md) |
 | Run the agent on a cron / let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [CLI reference](cli.md) |
-| Ship to Fly, Railway, or any Docker host | [Deploy](deploy.md) |
+| Ship to Fly, Railway, AWS Bedrock AgentCore, or any Docker host | [Deploy](deploy.md) |
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use Telegram bots | [Telegram channel](telegram.md) |
 | Use Slack apps | [Slack channel](slack.md) |

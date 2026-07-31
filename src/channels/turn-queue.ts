@@ -11,6 +11,7 @@
  * backend — an external queue with distributed locking (SPEC §11) — not this in-memory queue.
  */
 import { log } from "../log.ts";
+import { beginWork } from "./busy.ts";
 
 export interface TurnQueue<T> {
   /** Schedule onto the session's serial chain (runs after that session's previous turn). */
@@ -41,6 +42,11 @@ export function createTurnQueue<T extends { session: string }>(opts: {
   return {
     accept(rec) {
       if (chains.has(rec.session)) onQueuedBehind?.(rec);
+      // Process-wide busy signal (busy.ts): an accepted turn counts as in-flight work from acceptance
+      // until its run settles — serving surfaces that must not idle mid-turn (the AgentCore adapter's
+      // /ping) read it. Counted here, not in run(), so a QUEUED turn (accepted, waiting on the chain)
+      // already reads as busy.
+      const workDone = beginWork();
       const prev = chains.get(rec.session) ?? Promise.resolve();
       const task = async (): Promise<void> => {
         try {
@@ -54,6 +60,7 @@ export function createTurnQueue<T extends { session: string }>(opts: {
       const next = prev.then(task, task); // run after this session's previous turn, in arrival order
       chains.set(rec.session, next);
       void next.finally(() => {
+        workDone();
         if (chains.get(rec.session) === next) chains.delete(rec.session); // drop the entry when drained
       });
     },

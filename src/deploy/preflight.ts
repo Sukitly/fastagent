@@ -102,6 +102,9 @@ export async function preflightDeploy(input: {
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
+  /** The target delivers cron slots from an external clock and holds no resident process (AgentCore):
+   *  resident-host keep-alive notes do not apply; the host branch owns its capability gates. */
+  externalClock?: boolean;
   /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<agentDir>/.secrets/auth.json`)
    *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
   authPathFlag: string | undefined;
@@ -112,10 +115,11 @@ export async function preflightDeploy(input: {
     modelSpec,
     run,
     force,
+    externalClock,
     authPathFlag,
   } = input;
   // The ONE derived placement fact every host plan needs: where the agent's files sit relative to the
-  // build context (the workspace). Nested → "fastagent/"; flat → "" (the agent IS the context root).
+  // build context (the workspace). Nested → "fastagent/"; flat → "" (the agent IS the workspace root).
   const nested = agentDir !== workspace;
   const agentPrefix = nested ? `${basename(agentDir)}/` : "";
   const messages: DeployMessage[] = [];
@@ -171,7 +175,7 @@ export async function preflightDeploy(input: {
   // ("the generated plan…"): in KEEP mode an existing fly.toml is not rewritten — the CLI warns separately
   // when a kept fly.toml still scales to zero.
   const hasTimeTriggers = (await discoverScheduleFiles(agentDir)).length > 0 || !!config.selfSchedule;
-  if (longConnectionChannels.length > 0) {
+  if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({
       level: "note",
       text:
@@ -179,7 +183,7 @@ export async function preflightDeploy(input: {
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     });
   }
-  if (hasTimeTriggers) {
+  if (hasTimeTriggers && !externalClock) {
     messages.push({
       level: "note",
       text:

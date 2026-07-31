@@ -413,21 +413,24 @@ const add: CommandSpec = {
 
 const deploy: CommandSpec = {
   name: "deploy",
-  summary: "generate deploy artifacts + a runbook for docker, fly, or railway (--run drives it)",
+  summary: "generate deploy artifacts + a runbook for docker, fly, railway, or agentcore (--run drives it)",
   description:
     "Generate Dockerfile/.dockerignore plus the target config and print an ordered runbook. " +
     "docker: fastagent.compose.yml, loopback port, persistent state volume. fly: fly.toml " +
     "(autostop=suspend, state→volume). railway: railway.json (healthcheck /health); its " +
-    "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states. Durable ingress " +
-    "remains operator-owned.",
-  args: [{ name: "<host>", description: "deploy target", choices: ["docker", "fly", "railway"] }, DIR_ARG],
+    "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states. agentcore: one " +
+    "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
+    "EventBridge rules for schedules; linux/arm64 image built locally). Durable ingress " +
+    "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",
+  args: [{ name: "<host>", description: "deploy target", choices: ["docker", "fly", "railway", "agentcore"] }, DIR_ARG],
   flags: [
     {
       flags: "--run",
       description:
         "drive the target CLI to completion. Docker runs `docker compose up -d --build`; with a tunnel " +
         "service, reads its URL and registers webhooks. Fly/Railway provision app/service + volume + " +
-        "secrets + deploy + webhook setup. Carries your local credential (env key or OAuth auth.json). " +
+        "secrets + deploy + webhook setup. AgentCore builds/pushes the arm64 image and deploys the " +
+        "stack (aws + docker CLIs). Carries your local credential (env key or OAuth auth.json). " +
         "Stops at a gate (missing CLI/daemon/login/secret) with one actionable line. Without it: prints " +
         "the runbook",
     },
@@ -460,23 +463,28 @@ const deploy: CommandSpec = {
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
     { cmd: "fastagent deploy docker --tunnel --run", note: "Compose + a public URL" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
+    { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
   ],
   notes:
     "Definition-read-only: the only writes are generated artifacts (never clobbered without " +
     "--force). A routine redeploy of an already-provisioned agent is just the host's own command " +
     "(e.g. `railway up`).",
   run: async (args, f) =>
-    (await import("./commands/deploy.ts")).runDeploy(args[0] as "docker" | "fly" | "railway", args[1] as string, {
-      run: f.run === true,
-      tunnel: f.tunnel === true,
-      force: f.force === true,
-      stop: f.stop === true,
-      scaleToZero: f.scaleToZero !== false,
-      intoLinked: f.intoLinked === true,
-      model: f.model as string | undefined,
-      authPath: f.authPath as string | undefined,
-      input: f.input !== false,
-    }),
+    (await import("./commands/deploy.ts")).runDeploy(
+      args[0] as "docker" | "fly" | "railway" | "agentcore",
+      args[1] as string,
+      {
+        run: f.run === true,
+        tunnel: f.tunnel === true,
+        force: f.force === true,
+        stop: f.stop === true,
+        scaleToZero: f.scaleToZero !== false,
+        intoLinked: f.intoLinked === true,
+        model: f.model as string | undefined,
+        authPath: f.authPath as string | undefined,
+        input: f.input !== false,
+      },
+    ),
 };
 
 const schedule: CommandSpec = {

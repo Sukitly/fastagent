@@ -9,6 +9,7 @@ import { collect } from "../../collect.ts";
 import type { ChannelModule } from "../../host/node.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
+import { beginWork } from "../busy.ts";
 import { text } from "../respond.ts";
 
 /** Raw body cap before verification — GitHub caps webhook payloads at 25 MB; reject larger early. */
@@ -94,13 +95,19 @@ export function githubChannel({ secret, on }: GithubChannelOptions): ChannelModu
         const turn = `${event.deliveryId}#${i}`;
         log.info(`[github] turn start: turn=${turn} session=${session} event=${label}`);
         const startedAt = Date.now();
-        void collect(agent.invoke({ session }, { text })).then(
-          () => log.info(`[github] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
-          (error) =>
-            log.error(
-              `[github] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
-            ),
-        );
+        // Post-ACK turns are process-wide in-flight work (busy.ts): a serving surface that must not
+        // idle mid-turn (the AgentCore /ping's HealthyBusy) has no other way to see them — and github
+        // turns have NO replay, so an idle reclaim here loses the review outright.
+        const workDone = beginWork();
+        void collect(agent.invoke({ session }, { text }))
+          .then(
+            () => log.info(`[github] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
+            (error) =>
+              log.error(
+                `[github] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
+              ),
+          )
+          .finally(workDone);
       }
       return new Response(null, { status: 202 });
     },

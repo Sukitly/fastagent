@@ -4,7 +4,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { authSeedBytes } from "../../deploy/fly/run.ts";
+import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
@@ -12,11 +12,13 @@ import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
+import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
+import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
+import { maybeTunnel, mountAgentcore, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface StartOptions {
@@ -109,16 +111,57 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
+  // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
+  // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
+  // slots arrive from the external clock through it — so no resident cron timers. In particular,
+  // do NOT mount the ordinary unauthenticated POST /invoke fallback: a selfSchedule-only topology
+  // needs a public Function URL for wake callbacks, and its forwarder can relay arbitrary paths.
+  const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
-  const routed = await routesFor(agentDir, traced, stateRoot, sessionControl).catch(failStartup);
+  const routed = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: !agentcore }).catch(
+    failStartup,
+  );
   const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced,
   });
-  await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
+  // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
+  // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
+  // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment
+  // degrades to awake-only wakes — warned, never silent.
+  let onStateReady: (() => void) | undefined;
+  if (agentcore && config.selfSchedule) {
+    const wakeSecret = process.env.FASTAGENT_WAKE_SECRET;
+    if (wakeSecret) {
+      const sink = createWakeAlarmSink({ secret: wakeSecret });
+      setWakeupsSink(sink);
+      // NOT here: at boot the state mount is whatever the platform just provisioned — after a runtime
+      // version update that is EMPTY, so a reconcile now would see no pending wake-ups and conclude
+      // there is nothing to re-arm. It runs once the snapshot has been restored (mountAgentcore).
+      onStateReady = () => reconcileWakeAlarms(stateRoot, sink);
+      log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
+    } else {
+      log.warn(
+        `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
+          `(redeploy with the current template to fix)`,
+      );
+    }
+  }
+  const schedules = await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
+    externalClock: agentcore,
+  });
+  let routes = withControl.routes;
+  if (agentcore) {
+    try {
+      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules, onStateReady });
+    } catch (e) {
+      failStartup(e);
+    }
+    log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
+  }
   serve(
-    { ...routed, routes: withControl.routes },
+    { ...routed, routes },
     portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
     (p) => {
       withControl.announce(p);
@@ -138,7 +181,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
  * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
  */
 async function maybeSeedAuth(authPath: string): Promise<void> {
-  const bytes = authSeedBytes(process.env.FASTAGENT_AUTH_SEED, await exists(authPath));
+  // collectAuthSeed: the seed may arrive CHUNKED (FASTAGENT_AUTH_SEED + _2…) on hosts with a small
+  // env-value max length (AgentCore); single-var hosts are unchanged.
+  const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
   await mkdir(dirname(authPath), { recursive: true });
   await writeFile(authPath, bytes);

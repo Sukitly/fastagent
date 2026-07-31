@@ -553,9 +553,9 @@ The shipped file-backed implementations are single-process. Multiple instances r
 lease, credential, and channel-state backends; sharing one local state directory between processes is
 unsupported.
 
-`fastagent deploy docker|fly|railway` generates a Dockerfile, target config, persistent-volume wiring,
-required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one app
-service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
+`fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config, persistent-volume
+wiring, required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one
+app service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
 Quick Tunnel URL and registers webhooks. Deploy has ONE semantic — bake the
 workspace as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Every artifact
@@ -571,6 +571,60 @@ ships by default: freshness (pull) and write-back (commit/push) are the AGENT's 
 deploy machinery — the git binary is baked in exactly when the workspace ships a `.git`; a non-git
 workspace adds it via `config.deploy.apt`.
 
+**AgentCore** (AWS Bedrock AgentCore Runtime) differs from the resident-box hosts in kind: the platform
+has no public URL (ingress is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute
+is per-session microVMs, reclaimed when idle). The generated CloudFormation stack therefore carries a
+forwarder Lambda (public Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`)
+fronting the webhooks, and EventBridge Scheduler rules delivering each cron slot. Inside the container,
+`FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
+unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the SAME channel routes
+(signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
+reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with the
+slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as SSE.
+`GET /ping` reports `HealthyBusy` while background turns run (the shared turn-queue/task-tracker report
+into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn. All ingress traffic shares ONE
+fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
+until the runtime is deleted.
+
+**State durability is an S3 snapshot, not the mount.** The platform's SessionStorage (`/mnt/state`) is
+reset on every runtime VERSION UPDATE — i.e. on every deploy — and after 14 idle days, so it is a local
+disk, not the source of truth (a real deployment proved this: the truncation point in a live chat matched
+the deploy timestamp exactly). `channels/agentcore-state.ts` restores the state root from one gzipped
+JSON object on the first ingress envelope and pushes a coalesced snapshot on the 0-in-flight edge
+(`busy.ts` `onIdle`). The container holds NO AWS credentials (verified on a live box), so the forwarder
+mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping the container AWS-SDK-free
+and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
+the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
+is first boot. `auth.json` restores absent-only — the deploy seeds a fresher copy than the snapshot's.
+Only the INGRESS session is snapshotted: a direct-invoke session runs in its own storage, which the
+platform wipes on a version update, so cross-deploy memory is a property of the ingress path and the
+docs say so. `--run` sends a `checkpoint` envelope before `stop-runtime-session` — the stop cuts an
+in-flight turn whose durable intent (written pre-ACK by every replaying channel) would otherwise sit
+only on the mount the version update erases, which is what makes replay real rather than aspirational.
+It protects a LIVE session; one already idle-reclaimed has nothing to lose, because its snapshot was
+written when work settled, before the reclaim. The reply reports whether a snapshot was actually
+written and `--run` prints that verbatim — a blanket "checkpointed" would be the only signal an
+operator has about an interrupted turn, saying the same thing whether or not anything happened.
+The bucket is created OUTSIDE the stack (like the ECR repo) so `delete-stack` cannot take the agent's
+memory with it; a durable MOUNT instead (EFS/S3 Files) requires VPC mode and therefore a NAT gateway for
+model/channel egress, which would replace pay-per-use with a fixed ~$33/mo floor. The same bucket hosts
+the forwarder's deployment package, whose key is content-hashed (the presigning pushed it past
+CloudFormation's 4096-byte inline cap; a hashed key is also what makes CloudFormation notice new code).
+
+A live session keeps its
+old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
+successful deploy, making the new image serve immediately (an in-flight turn is cut; channels with
+replay re-run it). Self-scheduled wake-ups are EventBridge-backed: every wakeups-store mutation
+notifies a sink (`schedule/wake-alarm.ts`) that POSTs the pending set to the forwarder's reserved
+path (shared secret), and the forwarder mirrors each into a self-deleting one-shot EventBridge
+schedule that pokes it at the instant — waking the container, whose ordinary wake pump fires the due
+entry (a recurring wake re-arms itself through the same store-save → sink loop). The forwarder
+injects its own URL into every envelope, so nothing is circularly baked into the template. Structural
+limits, gated/warned/noted at deploy time: long-connection channels cannot run (the connection IS the
+ingress; nothing wakes a reclaimed session), and a wake set inside a direct-invoke session (its own
+per-session storage, not the ingress session's) has no alarm — it fires only while that session is
+awake.
+
 ## 10. Current boundaries
 
 The following are explicit limits, not implied capabilities:
@@ -579,6 +633,10 @@ The following are explicit limits, not implied capabilities:
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
 - GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
+- the AgentCore target has no resident process: long-connection channels are unsupported there, and
+  a wake-up set in a direct-invoke session (outside the ingress surface) fires only while that
+  session's compute is awake;
+
 - observability is logs/traces, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.

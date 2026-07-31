@@ -13,6 +13,7 @@
  *    "a digest late once" beats "twice"). Strict at-least-once (a per-turn WAL) is a later tier.
  */
 import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
+import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { appendRun } from "./audit.ts";
 import { nextRun } from "./cron.ts";
@@ -42,6 +43,13 @@ export interface SchedulerOptions {
   schedules: LoadedSchedule[];
   /** Injectable clock for tests; defaults to the wall clock. */
   now?: () => Date;
+  /** External-clock mode (the AgentCore deployment): cron slots are DELIVERED by an external
+   *  scheduler through the serving surface ({@link fireScheduleOnce} with a `slot`), so `start()`
+   *  arms NO cron timers and does NO boot catch-up — delivery, including for instants that passed
+   *  while this process was down, is the external clock's job; the adapter's slot-idempotent claim
+   *  is the duplicate guard. The wake-up poll still runs (degraded: it only fires while the
+   *  process happens to be awake — the deploy path warns about this). */
+  externalClock?: boolean;
 }
 
 // A single setTimeout maxes out at ~24.8 days and drifts over long sleeps; cap each wait so a long
@@ -51,65 +59,115 @@ const MAX_WAIT_MS = 6 * 60 * 60 * 1000; // 6h
 // due time — fine for "wake me in N minutes"; cheap (reads a small JSON, writes only when one is due).
 const WAKEUP_POLL_MS = 30 * 1000;
 
-export function createScheduler({ agent, stateRoot, schedules, now = () => new Date() }: SchedulerOptions): Scheduler {
+/** Drive ONE turn (a cron fire or a wake-up) and log its outcome. Total — never throws (its callers are
+ *  void-scheduled). Output is the agent's tools' job; this only fires and logs. Returns the turn's audit
+ *  material — `failed` (details, if it failed), the accumulated `reply` text, `ms` — plus `busy`: whether
+ *  it failed specifically because the session was BUSY (the turn never started) — the ONLY replay-safe
+ *  reason to re-fire a wake-up; every other outcome is terminal (side effects may have run). Module-level
+ *  (not a scheduler closure) so {@link fireScheduleOnce} — the external-clock fire path — shares it. */
+async function runTurn(
+  agent: Agent,
+  label: string,
+  session: string,
+  prompt: string,
+): Promise<{ busy: boolean; failed?: string; reply: string; ms: number }> {
+  const startedAt = Date.now();
+  log.info(`[schedule] ${label} firing (session=${session})`);
+  try {
+    let failed: string | undefined;
+    let busy = false;
+    let reply = "";
+    for await (const e of agent.invoke({ session }, { text: prompt })) {
+      if (e.type === "text") reply += e.delta;
+      if (e.type === "failed") {
+        failed = e.details;
+        busy = e.code === SESSION_BUSY_CODE; // structured (SPEC §8), not a details-text match
+      }
+    }
+    if (failed) log.error(`[schedule] ${label} failed (${Date.now() - startedAt}ms): ${failed}`);
+    else log.info(`[schedule] ${label} completed (${Date.now() - startedAt}ms)`);
+    return { busy: failed !== undefined && busy, failed, reply, ms: Date.now() - startedAt };
+  } catch (e) {
+    // invoke shouldn't throw (SPEC MUST 2 turns failures into events), but stay total regardless. A throw
+    // is not the busy case, so don't defer on it.
+    log.error(`[schedule] ${label} errored (${Date.now() - startedAt}ms): ${String(e)}`);
+    return { busy: false, failed: String(e), reply: "", ms: Date.now() - startedAt };
+  }
+}
+
+/** One schedule fire's outcome, for the external caller (the AgentCore adapter returns it to the
+ *  triggering clock's logs). The resident scheduler ignores it beyond completion. */
+export interface ScheduleFireOutcome {
+  fired: boolean;
+  /** Set when a slot-keyed fire was skipped because that slot (or a later one) was already claimed. */
+  skippedReason?: string;
+  failed?: string;
+  ms: number;
+}
+
+/**
+ * Fire ONE schedule's turn: claim (persist lastFired BEFORE invoking, so a crash mid-turn does not
+ * re-fire on restart), run, audit. Shared by the resident scheduler's timers and the external-clock
+ * serving surface (the AgentCore adapter).
+ *
+ * `slot` is the external clock's idempotency key — the cron instant this fire is FOR. External
+ * delivery (EventBridge-style) is at-least-once, so a duplicate slot must not double-fire: when
+ * lastFired ≥ slot the fire is SKIPPED (at-most-once per slot, same trade as the resident claim —
+ * "a digest late once" beats "twice"). The resident scheduler omits `slot`: its timers fire each
+ * slot exactly once, so the unconditional claim is already correct.
+ *
+ * A state fault while claiming (loadFires/saveFires — both before the invoke, so nothing ran)
+ * THROWS: the resident path catches it at its single skip+audit boundary ({@link createScheduler}'s
+ * fireThenReArm — skipping rather than firing unclaimed also avoids an infinite catch-up loop on
+ * restart), and the external path lets it surface as a failed request (visible in the clock's logs).
+ */
+export async function fireScheduleOnce(opts: {
+  agent: Agent;
+  stateRoot: string;
+  schedule: LoadedSchedule;
+  slot?: Date;
+  now?: () => Date;
+}): Promise<ScheduleFireOutcome> {
+  const { agent, stateRoot, schedule: s, slot, now = () => new Date() } = opts;
+  const fires = loadFires(stateRoot);
+  const last = fires[s.name];
+  if (slot && last && new Date(last).getTime() >= slot.getTime()) {
+    const reason = `slot ${slot.toISOString()} already fired (lastFired=${last})`;
+    log.info(`[schedule] ${s.name}: skipping — ${reason}`);
+    return { fired: false, skippedReason: reason, ms: 0 };
+  }
+  // An external delivery claims the cron instant it represents, not its (possibly much later)
+  // delivery time. Otherwise a delayed fire can make the next distinct slot look like a duplicate.
+  fires[s.name] = (slot ?? now()).toISOString();
+  saveFires(stateRoot, fires);
+  const firedAt = now().toISOString();
+  const r = await runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
+  appendRun(stateRoot, {
+    name: s.name,
+    session: scheduleSession(s.name),
+    firedAt,
+    ms: r.ms,
+    outcome: r.failed ? "failed" : "completed",
+    reply: r.failed ? undefined : r.reply,
+    error: r.failed,
+  });
+  return { fired: true, failed: r.failed, ms: r.ms };
+}
+
+export function createScheduler({
+  agent,
+  stateRoot,
+  schedules,
+  now = () => new Date(),
+  externalClock = false,
+}: SchedulerOptions): Scheduler {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let wakeupTimer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
-  /** Drive ONE turn (a cron fire or a wake-up) and log its outcome. Total — never throws (its callers are
-   *  void-scheduled). Output is the agent's tools' job; this only fires and logs. Returns the turn's audit
-   *  material — `failed` (details, if it failed), the accumulated `reply` text, `ms` — plus `busy`: whether
-   *  it failed specifically because the session was BUSY (the turn never started) — the ONLY replay-safe
-   *  reason to re-fire a wake-up; every other outcome is terminal (side effects may have run). */
-  async function runTurn(
-    label: string,
-    session: string,
-    prompt: string,
-  ): Promise<{ busy: boolean; failed?: string; reply: string; ms: number }> {
-    const startedAt = Date.now();
-    log.info(`[schedule] ${label} firing (session=${session})`);
-    try {
-      let failed: string | undefined;
-      let busy = false;
-      let reply = "";
-      for await (const e of agent.invoke({ session }, { text: prompt })) {
-        if (e.type === "text") reply += e.delta;
-        if (e.type === "failed") {
-          failed = e.details;
-          busy = e.code === SESSION_BUSY_CODE; // structured (SPEC §8), not a details-text match
-        }
-      }
-      if (failed) log.error(`[schedule] ${label} failed (${Date.now() - startedAt}ms): ${failed}`);
-      else log.info(`[schedule] ${label} completed (${Date.now() - startedAt}ms)`);
-      return { busy: failed !== undefined && busy, failed, reply, ms: Date.now() - startedAt };
-    } catch (e) {
-      // invoke shouldn't throw (SPEC MUST 2 turns failures into events), but stay total regardless. A throw
-      // is not the busy case, so don't defer on it.
-      log.error(`[schedule] ${label} errored (${Date.now() - startedAt}ms): ${String(e)}`);
-      return { busy: false, failed: String(e), reply: "", ms: Date.now() - startedAt };
-    }
-  }
-
-  /** Fire one schedule's turn: claim the slot (persist lastFired BEFORE invoking) so a crash mid-turn
-   *  does not re-fire this slot on restart, then run the turn. A state fault while claiming (loadFires or
-   *  saveFires — both before the invoke, so nothing ran) THROWS to the single skip+audit boundary in
-   *  {@link fireThenReArm}; skipping rather than firing unclaimed also avoids an infinite catch-up loop
-   *  on restart. */
+  /** The resident fire path — the shared claim+run+audit, without a slot (see {@link fireScheduleOnce}). */
   async function fire(s: LoadedSchedule): Promise<void> {
-    const fires = loadFires(stateRoot);
-    fires[s.name] = now().toISOString();
-    saveFires(stateRoot, fires);
-    const firedAt = now().toISOString();
-    const r = await runTurn(s.name, scheduleSession(s.name), s.prompt);
-    appendRun(stateRoot, {
-      name: s.name,
-      session: scheduleSession(s.name),
-      firedAt,
-      ms: r.ms,
-      outcome: r.failed ? "failed" : "completed",
-      reply: r.failed ? undefined : r.reply,
-      error: r.failed,
-    });
+    await fireScheduleOnce({ agent, stateRoot, schedule: s, now });
   }
 
   /**
@@ -142,7 +200,10 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       if (!w) break;
       const label = `wake ${w.id.slice(0, 8)}`;
       const firedAt = now().toISOString();
-      const r = await runTurn(label, w.session, wakeEnvelope(w));
+      // A wake turn runs in the BACKGROUND (no open request tracks it) — count it as in-flight work
+      // (busy.ts) so a serving surface that must not idle mid-turn (the AgentCore /ping) sees it.
+      const workDone = beginWork();
+      const r = await runTurn(agent, label, w.session, wakeEnvelope(w)).finally(workDone);
       // Busy handling differs by kind (busy = the turn never started — replay-safe; every other outcome is
       // terminal for this occurrence, since a turn that DID start may have run side effects). ONE-SHOT: defer (bounded) — it has no "next time", dropping it
       // would lose it forever. RECURRING: the claim already ADVANCED the entry to the next instant (see
@@ -234,9 +295,12 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
   return {
     start() {
       stopped = false;
-      const fires = loadFires(stateRoot);
+      // External-clock mode: no cron timers, no boot catch-up — slot delivery (including instants
+      // that passed while this process was down) belongs to the external clock; only the wake-up
+      // pump below runs. See SchedulerOptions.externalClock.
+      const fires = externalClock ? {} : loadFires(stateRoot);
       const current = now();
-      for (const s of schedules) {
+      for (const s of externalClock ? [] : schedules) {
         // Anchor on the last fire (catch-up basis), or `now` on a first-ever run so a brand-new schedule
         // never back-fires before the process first booted.
         const lastFired = fires[s.name];
