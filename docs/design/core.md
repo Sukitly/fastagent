@@ -119,16 +119,21 @@ template). No command reads, verifies or rewrites an ignore file, ever. The exce
 one-directional: **the directory fastagent writes secrets into carries its own `.gitignore`** — so
 `add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`, never over an existing
 one) when the resolved secrets dir has none. The reachable cases are a hand-made agent and a
-`FASTAGENT_SECRETS_DIR` pointed at an existing directory; the accepted cost is that someone who deleted
-that file to track secrets deliberately gets it back once. The risk is not symmetric — that is an
-annoyance, the other way is a published credential. They are split because the root one is the file an
-author has reason to edit: git's nested-ignore precedence keeps the credentials protected whatever
-happens to it. The version that had fastagent MANAGE ignore files carried a decision procedure ("is this
-path under a directory we control?") that approximated git's own semantics with containment comparisons
-against a different anchor per command; it produced four reversals of the same predicate in review, could
-WRITE a `*`-ignoring file into a directory the operator named, and could ABORT `login` over an ignore
-file the author had edited. The question it was approximating — "will git see this?" — has exactly one
-authority, and users configure their own ignore rules.
+`FASTAGENT_SECRETS_DIR` pointed at an existing directory. Both costs are accepted knowingly: someone who
+deleted that file to track secrets deliberately gets it back once, and the operator who named that
+directory gets one file in it they did not ask for. The risk is not symmetric — those are annoyances,
+the other way is a published credential. The two ignore files are split because the root one is the file
+an author has reason to edit: git's nested-ignore precedence keeps the credentials protected whatever
+happens to it.
+
+What was deleted is not "writing into a directory the operator named" — the exception above keeps
+exactly that, deliberately. What was deleted is fastagent MANAGING ignore files: unconditionally, from
+several commands, behind a decision procedure ("is this path under a directory we control?") that
+approximated git's own semantics with containment comparisons against a different anchor per command. It
+produced four reversals of the same predicate in review, and could ABORT `login` over an ignore file the
+author had edited. The question it was approximating — "will git see this?" — has exactly one authority,
+and users configure their own ignore rules. What remains is one write, from one command, at the moment a
+credential is created, and never over an existing file.
 
 (“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
 see docs/embedding.md.)

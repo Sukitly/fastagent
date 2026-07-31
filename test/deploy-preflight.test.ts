@@ -95,6 +95,47 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
+  it("the .env family is interrogated at BOTH levels, like the generated rules — not just the root", async () => {
+    // The generated file excludes `**/.env` + `**/.env.*` (minus .env.example). A kept file must be
+    // asked about the same set, or the two most likely credential files ship: `<agent>/.env` (the file
+    // habit puts there — env.ts warns about it by name) and a host `.env.local`.
+    const agentDir = await workspace();
+    const host = dirname(agentDir);
+    await writeFile(join(agentDir, ".env"), "TELEGRAM_BOT_TOKEN=real\n");
+    await writeFile(join(host, ".env.local"), "DATABASE_URL=real\n");
+    await writeFile(join(agentDir, ".secrets", ".env.example"), "TOKEN=\n"); // committable by design
+    await writeFile(join(host, ".dockerignore"), "**/.secrets\n**/.state\nnode_modules\n");
+
+    const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) {
+      expect(gated.gate).toMatch(/BAKE SECRETS INTO THE IMAGE/);
+      expect(gated.gate).toMatch(/fastagent\/\.env/);
+      expect(gated.gate).toMatch(/\.env\.local/);
+      expect(gated.gate).not.toMatch(/\.env\.example/); // never gated — the template travels on purpose
+    }
+  });
+
+  it("the drop-the-agent check asks about a DIRECTORY: `fastagent/` gates, an allowlist does not", async () => {
+    // Both halves of one rule. `fastagent/` is a directory-only pattern — the spelling a hand-written
+    // ignore file most likely carries — and a bare-name test answers `false` for it, so the agent would
+    // be dropped from the build context with no warning. An allowlist that re-includes the agent must
+    // still not gate a deployment that is actually correct.
+    const dropped = await workspace();
+    await writeFile(join(dirname(dropped), ".dockerignore"), "fastagent/\n");
+    const gated = await call(dropped, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/would ship WITHOUT the agent/);
+
+    const allowed = await workspace();
+    await writeFile(join(dirname(allowed), ".dockerignore"), "*\n!fastagent\n!fastagent/**\n");
+    // warn posture, so the OTHER checks (this allowlist really does re-include `fastagent/.secrets`)
+    // report instead of gating — leaving exactly the agent-drop branch under test.
+    const pre = await call(allowed, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/ship WITHOUT the/);
+  });
+
   it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {
     // The name-based `**/.secrets` excludes reach a directory called `.secrets`; an override pointing
     // somewhere else in the baked tree is invisible to them, and `COPY . .` would ship the credential.

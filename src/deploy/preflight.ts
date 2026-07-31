@@ -9,7 +9,7 @@
  * the run modules' {@link import("./fly/run.ts").FlyRunOutcome}: a model that won't travel is a GATE the
  * CLI stops on, distinct from the advisory warnings/notes it prints and proceeds past.
  */
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import type { FastagentConfig } from "../engines/pi/config.ts";
@@ -286,9 +286,20 @@ export async function preflightDeploy(input: {
   // State gets the same treatment (a custom in-tree FASTAGENT_STATE_DIR is invisible to the
   // name-based `**/.state`), at warn level: shipping stale sessions is waste, not a credential leak.
   const stateRel = inContext(resolveStateRoot(agentDir));
-  // A workspace-root `.env` is checked only when one EXISTS: gating a deploy over a file that is not
-  // in the context would be a refusal about a spelling, not about what would ship.
-  const leakCandidates = await present([...secretPaths, ".env"]);
+  // The `.env` family, ISOMORPHIC with what the generated file excludes (`**/.env`, `**/.env.*`, minus
+  // the committable `.env.example`). A kept ignore file must be asked about the same files ours would
+  // have covered, and asking only about a root-level `.env` missed both halves that matter: an
+  // `<agent>/.env` — exactly the file habit puts there, which env.ts warns about by name — and the
+  // `.env.local` / `.env.production` spellings a host project uses. DISCOVERED rather than spelled, so
+  // the existing rule still holds: only a file that is there can be baked, so only it is gated.
+  const dotEnvFiles = async (relDir: string): Promise<string[]> => {
+    const names = await readdir(join(workspace, relDir || ".")).catch(() => [] as string[]);
+    return names
+      .filter((n) => (n === ".env" || n.startsWith(".env.")) && n !== ".env.example")
+      .map((n) => join(relDir, n));
+  };
+  const envFiles = (await Promise.all([...new Set(["", agentPrefix])].map(dotEnvFiles))).flat();
+  const leakCandidates = [...(await present(secretPaths)), ...envFiles];
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present([...new Set([`${agentPrefix}node_modules`, "node_modules"])]);
   const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : [])];
@@ -311,10 +322,16 @@ export async function preflightDeploy(input: {
         ? `Re-run with --force to regenerate it.`
         : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before deploying (the same lines the generated ${rel} writes).`;
     const excluded = dockerignoreMatcher(kept);
-    // Both the directory AND a file inside it: an allowlist ignore file (`*` + `!fastagent` +
-    // `!fastagent/**`) re-includes the dir, so requiring both keeps that dialect gap from gating a
-    // deployment that is actually correct.
-    if (nested && excluded(basename(agentDir)) && excluded(`${agentPrefix}persona.md`)) {
+    // Asked as a DIRECTORY (trailing slash), which is what it is. A bare-name test answers `false` for
+    // the `fastagent/` spelling — a directory-only pattern, and the one a hand-written ignore file is
+    // most likely to carry — so the agent would be dropped from the context with no warning at all. The
+    // pairing this replaced (the directory AND a file inside it) was dead weight rather than a
+    // safeguard: git's rule that a file under an excluded directory cannot be re-included is
+    // implemented by the matcher, so `excluded(dir)` already implies `excluded(dir/persona.md)` and the
+    // second test could never change the answer. What it was aimed at — an allowlist (`*` +
+    // `!fastagent` + `!fastagent/**`) that re-includes the agent — is handled by the first test alone,
+    // which reads `false` there, as it should.
+    if (nested && excluded(`${basename(agentDir)}/`)) {
       const text =
         `your ${rel} (kept) excludes \`${basename(agentDir)}\` — the build context would ship WITHOUT the ` +
         `agent entirely (the deployed box has no persona/config and crash-loops). Remove that rule ` +

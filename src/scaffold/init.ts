@@ -219,8 +219,12 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     );
   }
 
-  // Was the agent dir OURS to create? "Empty" is not ownership: a user may have pre-created it (or
-  // left one behind), and the rollback below must not delete a directory this run did not make.
+  // Which directories were OURS to create? "Empty" is not ownership: a user may have pre-created any of
+  // them (`--agent-dir .` adopts a directory that can already carry an empty `skills/` or `.secrets/`),
+  // and the rollback below must delete only what THIS run made. Recorded before the first write, since
+  // afterwards the two are indistinguishable.
+  const preexisting = new Set<string>();
+  for (const rel of parents) if (await exists(join(dir, rel))) preexisting.add(rel);
   const agentDirExisted = await exists(join(dir, root));
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
@@ -247,14 +251,14 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   } catch (error) {
     // Best-effort rollback of a partial scaffold: anything that won't delete is left behind (the
     // original error below is the one worth surfacing — a cleanup failure must not mask it). Files
-    // first, then the directories they lived in, deepest first: `rmdir` removes only what BECAME
-    // empty, so a pre-existing sibling is never touched. The `fastagent/` root goes last, and only
-    // when THIS run created it — "empty" was never proof of ownership. (Reaching here at all takes a
+    // first, then the directories THIS RUN created, deepest first; `rmdir` additionally removes only
+    // what is empty, so a pre-existing sibling inside one of ours is never touched. The agent root goes
+    // last, and only when this run created it — "empty" was never proof of ownership. (Reaching here at all takes a
     // real fs fault: the occupancy refusal above proved the target empty, so nothing else can fail
     // mid-loop. The covered case is a permission fault before the first write.)
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
     for (const rel of [...parents].sort((a, b) => b.split(sep).length - a.split(sep).length)) {
-      if (rel !== root) await rmdir(join(dir, rel)).catch(() => {});
+      if (rel !== root && !preexisting.has(rel)) await rmdir(join(dir, rel)).catch(() => {});
     }
     if (!agentDirExisted) await rmdir(join(dir, root)).catch(() => {});
     throw error;
