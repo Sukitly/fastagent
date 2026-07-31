@@ -51,7 +51,7 @@ Creates a self-iterating agent — it can edit its own definition (persona.md an
 
 `--agent-dir .` (spelled `--flat`) puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package, where the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.*` refuses, because that means it is already an agent.
 
-What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup would not return — an agent already resolving at `dir` (a config there beats anything inside it), or a second agent beside an existing one (`dir` would then name neither). The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
+What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup could never SELECT — an agent already resolving AT `dir`, which wins over anything inside it and would hide the new one. A second agent BESIDE an existing one is fine and supported: several agents can share one workspace (an engineer's, a PM's, a content owner's, all driving the same repository), and `FASTAGENT_AGENT=<name>` picks between them — the one named `fastagent` answers by default. `init` prints the note when a workspace crosses into that shape. The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
 
 Options:
 
@@ -300,6 +300,7 @@ Port precedence:
 Session directory precedence:
 
 ```txt
+FASTAGENT_AGENT          > the agent named `fastagent`  (which agent, when a workspace holds several)
 FASTAGENT_STATE_DIR      > <agent dir>/.state       (mutable machine state)
 FASTAGENT_SECRETS_DIR    > <agent dir>/.secrets        (.env + auth.json)
 --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions

@@ -112,15 +112,38 @@ export function agentsAt(dir: string): string[] {
 }
 
 /**
- * Resolve `dir` into its placement, or undefined when it is not exactly one agent. The whole rule:
- * `dir` is the WORKSPACE, and the agent is the single `fastagent.config.*` holder at it or one level
- * inside ({@link agentsAt}). More than one is a refusal, not a precedence question — nothing in the tree
- * names which was meant (see {@link placementDeadEnd}).
+ * WHICH of several agents at one level is meant: `FASTAGENT_AGENT` names one, else the one carrying the
+ * {@link DEFAULT_AGENT_DIRNAME} wins. Undefined leaves the caller to refuse ({@link placementDeadEnd}
+ * tells the two apart). Several agents on ONE workspace is the point — different roles (an engineer's,
+ * a PM's, a content owner's) driving the same repository — so they must be selectable, not refused.
+ *
+ * Two properties worth stating, because both are choices:
+ *
+ * - The env SELECTS among candidates and does nothing when there is only one. Selection is per-person
+ *   (that is the whole scenario), so it belongs in the environment rather than a committed file — and a
+ *   `FASTAGENT_AGENT` exported in a shell profile must not then refuse every single-agent directory it
+ *   is carried into. With one candidate there is no ambiguity for it to resolve.
+ * - The default NAME breaks the tie. It is the one place a directory name carries weight, and it is
+ *   deliberately not an identity rule (the config alone says what is an agent): it only decides which
+ *   already-identified agent answers when nothing else does. What it buys is that adding a second agent
+ *   to a working `<workspace>/fastagent/` setup does not break the command everyone already types.
  */
-function findPlacement(dir: string): ResolvedPlacement | undefined {
+function selectAgent(agents: string[], env: NodeJS.ProcessEnv): string | undefined {
+  const [only, ...rest] = agents;
+  if (only === undefined || rest.length === 0) return only;
+  const wanted = env.FASTAGENT_AGENT;
+  return agents.find((a) => basename(a) === (wanted ?? DEFAULT_AGENT_DIRNAME));
+}
+
+/**
+ * Resolve `dir` into its placement, or undefined when nothing selects one agent. The whole rule: `dir`
+ * is the WORKSPACE, and the agent is a `fastagent.config.*` holder at it or one level inside
+ * ({@link agentsAt}), narrowed by {@link selectAgent} when there are several.
+ */
+function findPlacement(dir: string, env: NodeJS.ProcessEnv = process.env): ResolvedPlacement | undefined {
   const base = resolve(dir);
-  const [agentDir, ...rest] = agentsAt(base);
-  return agentDir !== undefined && rest.length === 0 ? { agentDir, workspace: base } : undefined;
+  const agentDir = selectAgent(agentsAt(base), env);
+  return agentDir === undefined ? undefined : { agentDir, workspace: base };
 }
 
 /**
@@ -186,13 +209,13 @@ export function agentDefinitionOwner(dir: string): string | undefined {
 /**
  * Why `dir` is not an agent, when it has its OWN way out — or undefined when it is simply not near one.
  * Two positions qualify: standing INSIDE an agent (its `tools/`, its `src/`), and standing on a
- * directory holding SEVERAL agents. Both matter because the generic advice ("run `fastagent init`") is
- * advice that would not help — the agent already exists, one step away.
+ * directory whose several agents nothing selects between. Both matter because the generic advice ("run
+ * `fastagent init`") would not help — the agent already exists, one step away.
  *
  * Exported because `login` is the one command allowed to run outside an agent, and it must tell "truly
  * outside" (→ the global credential) from "a dead end" (→ refuse, like every other command).
  */
-export function placementDeadEnd(dir: string): string | undefined {
+export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const base = resolve(dir);
   const enclosing = enclosingAgentDir(base);
   if (enclosing) {
@@ -200,11 +223,13 @@ export function placementDeadEnd(dir: string): string | undefined {
   }
   const agents = agentsAt(base).map((a) => basename(a));
   if (agents.length > 1) {
-    return (
-      `${base} holds ${agents.length} agents (${agents.join(", ")}) — a directory resolves to ONE, and ` +
-      `nothing here names which. Point fastagent at the one you want (it then works on ITSELF: ` +
-      `\`fastagent <command> ./<name>\`), or keep a single agent here`
-    );
+    const listed = `${base} holds ${agents.length} agents (${agents.join(", ")})`;
+    // Naming a missing agent is a different mistake from naming none: the value is right there in the
+    // environment, so echo it back rather than describing the general rule at someone who tried.
+    return env.FASTAGENT_AGENT !== undefined
+      ? `${listed}, and FASTAGENT_AGENT names "${env.FASTAGENT_AGENT}", which is not one of them — set it to one of those, or unset it`
+      : `${listed} and none of them is named "${DEFAULT_AGENT_DIRNAME}" (the default) — pick one with ` +
+          `FASTAGENT_AGENT=<name>, or point fastagent at the one you want (it then works on ITSELF)`;
   }
   return undefined;
 }
@@ -219,12 +244,12 @@ export function placementDeadEnd(dir: string): string | undefined {
  * arbitrarily deep inside it — but the MESSAGE reads the path, so each dead end gets the exit that fits
  * it ({@link placementDeadEnd}).
  */
-export function resolvePlacement(dir: string): ResolvedPlacement {
-  const placement = findPlacement(dir);
+export function resolvePlacement(dir: string, env: NodeJS.ProcessEnv = process.env): ResolvedPlacement {
+  const placement = findPlacement(dir, env);
   if (!placement) {
     const base = resolve(dir);
     throw new Error(
-      placementDeadEnd(base) ??
+      placementDeadEnd(base, env) ??
         `${base} is not a fastagent agent — no fastagent.config.* here, and no directory holding one ` +
           `directly inside; run \`fastagent init\` to scaffold one`,
     );

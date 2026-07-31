@@ -77,7 +77,7 @@ definition. That is not a separate placement mode; it is the one rule with the t
 |---|---|
 | holds a `fastagent.config.*` | `{ agentDir: dir, workspace: dir }` |
 | exactly one directory inside it holds one | `{ agentDir: <that dir>, workspace: dir }` |
-| several do | throws: names them, point at the one you mean |
+| several do | `FASTAGENT_AGENT` names one, else the one named `fastagent` — else throws, naming them |
 | none | throws: not a fastagent agent, with the exit that fits the position |
 
 - **The marker is the config, at every position — and it is a DECLARATION, not configuration.** Nothing
@@ -137,10 +137,29 @@ see docs/embedding.md.)
 never further, because the lookup only ever finds an agent at the directory you named or one level
 inside it. Reaching an agent two levels down means pointing at the level above it.
 
-**Known boundary (accepted, documented):** a directory holding several agents resolves to none of them,
-and `init` refuses to create the second one. "Two agents that both work ON this repo" therefore needs a
-way to SAY which — a flag naming the agent while the target keeps naming the workspace — which is
-deliberately not built until the need is real. Today: two agents, each pointed at separately.
+**Several agents on ONE workspace** is a supported shape, not a collision: an engineer's, a PM's and a
+content owner's agent can each drive the same repository, all with that repository as their workspace.
+`FASTAGENT_AGENT` selects between them, and the directory named `fastagent` (the `init` default) breaks
+the tie when nothing else does.
+
+Two properties of that, both choices:
+
+- **The env selects, a file does not.** Selection is per-PERSON — that is the whole scenario — and a
+  committed workspace file is shared by construction, so it cannot express "mine". The per-repo,
+  per-person file this needs already exists and is not ours to invent: `.envrc`
+  (`export FASTAGENT_AGENT=pm`), committed for a shared default or ignored for a personal one. A
+  workspace-level REGISTRY was considered and rejected for a second reason too: the one-level scan
+  already answers "which agents are here", so a list could only drift from it — and it would centralize
+  what the scan decentralizes (adding an agent means creating a directory, not editing a file three
+  teams share).
+- **The env selects AMONG candidates and does nothing when there is only one.** A `FASTAGENT_AGENT`
+  exported in a shell profile travels everywhere; refusing on it would break every single-agent
+  directory it is carried into, and with one candidate there is no ambiguity for it to resolve. Naming
+  an agent that is not among several, however, refuses — that value is a mistake worth surfacing.
+- **The default NAME breaking the tie is the one place a directory name carries weight**, and it is
+  deliberately not an identity rule: the config alone says what IS an agent, the name only decides which
+  already-identified one answers. It buys that adding a second agent to a working `<workspace>/fastagent/`
+  setup does not break the command everyone already types.
 
 The pi reference prompt has four segments:
 

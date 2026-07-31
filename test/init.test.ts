@@ -195,20 +195,20 @@ describe("init: scaffoldAgent", () => {
     for (const noise of [".DS_Store", ".gitkeep"]) await writeFile(join(dir3, "fastagent", noise), "");
     expect((await scaffoldAgent(dir3)).created).toContain(agentPath("persona.md"));
 
-    // A config AT the dir wins over anything inside it, so nesting one under it would never be served
-    // from here. Refused in both directions, since either unreachable agent is a silent no-op.
+    // A config AT the dir wins over anything inside it, so nesting one under it would be HIDDEN, never
+    // served. Refused in both directions, since either unreachable agent is a silent no-op.
     const flatAlready = await freshDir();
     await writeFile(join(flatAlready, "fastagent.config.ts"), "export default {};\n");
-    await expect(scaffoldAgent(flatAlready)).rejects.toThrow(/already resolves to .*never be served/s);
+    await expect(scaffoldAgent(flatAlready)).rejects.toThrow(/already resolves to .*never served/s);
 
     const nestedAlready = await freshDir();
     await mkdir(join(nestedAlready, "fastagent"), { recursive: true });
     await writeFile(join(nestedAlready, "fastagent", "fastagent.config.mjs"), "export default {};\n");
-    await expect(scaffoldAgent(nestedAlready, { agentDir: "." })).rejects.toThrow(/never be served/);
+    await expect(scaffoldAgent(nestedAlready, { agentDir: "." })).rejects.toThrow(/never served/);
 
-    // A SECOND agent beside an existing one is refused for the same reason: `dir` would then resolve
-    // over two and name neither. (Lifting this needs a way to SAY which — deliberately not built yet.)
-    await expect(scaffoldAgent(nestedAlready, { agentDir: "releaser" })).rejects.toThrow(/already resolves to/);
+    // …but a SIBLING is a supported shape, not a collision: several agents on ONE workspace is how
+    // different roles drive the same repository, and the lookup selects between them.
+    expect((await scaffoldAgent(nestedAlready, { agentDir: "releaser", minimal: true })).agentDir).toBe("releaser");
   });
 
   it("refuses init inside an agent's own LOADED surface — the outer agent would load it as content", async () => {

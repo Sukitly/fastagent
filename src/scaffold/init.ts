@@ -186,18 +186,19 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       throw e;
     })
   ).filter((f) => ![".DS_Store", ".gitkeep", ".keep"].includes(f));
-  // Would `dir` still resolve to the agent this run creates? An agent already resolving there makes the
-  // new one unreachable (a config AT `dir` wins over anything inside it) or the pair ambiguous (two
-  // subdirectory agents, and nothing names which) — either way an agent nothing would serve. So the
-  // condition is exactly the lookup's: `dir` must resolve over NOTHING yet.
-  // The TARGET itself is not in the way: a config already there means "already an agent", which the
-  // refusal below says in those words. Anything ELSE resolving here is what makes the new agent unservable.
-  const resolving = agentsAt(dir).filter((a) => a !== resolve(dir, root));
-  if (resolving.length > 0) {
+  // Could `dir` still SELECT the agent this run creates? SIBLINGS are fine — several agents at one level
+  // is a supported shape (different roles driving one repository), picked between by FASTAGENT_AGENT or
+  // the default name. A SHADOW is not: a config AT `dir` wins over everything inside it, so scaffolding
+  // under one (or scaffolding one over existing children) makes an agent the lookup can never return.
+  // The target itself is never in the way — a config already there means "already an agent", which the
+  // refusal below says in those words.
+  const shadowed = agentsAt(dir).filter((a) => a !== resolve(dir, root) && (flat || a === resolve(dir)));
+  if (shadowed.length > 0) {
     throw new Error(
-      `"${dir}" already resolves to ${resolving.map((a) => displayPath(process.cwd(), a) ?? a).join(", ")} — ` +
-        `an agent scaffolded ${flat ? "here" : `in ./${root}/`} would never be served from "${dir}". Use ` +
-        `that agent, move it away, or init in a different directory.`,
+      `"${dir}" already resolves to ${shadowed.map((a) => displayPath(process.cwd(), a) ?? a).join(", ")} — ` +
+        `an agent scaffolded ${flat ? "here" : `in ./${root}/`} would be hidden by it and never served ` +
+        `from "${dir}" (an agent AT a directory wins over any inside it). Use that agent, move it away, ` +
+        `or init in a different directory.`,
     );
   }
 

@@ -6,8 +6,8 @@
  * (spelled `--flat`) makes the directory itself the agent (a standalone agent repo, a monorepo package).
  */
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
-import { SECRETS_DIRNAME } from "../../paths.ts";
+import { basename, join, resolve } from "node:path";
+import { DEFAULT_AGENT_DIRNAME, SECRETS_DIRNAME, agentsAt } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { agentDirName, agentDirNameError, scaffoldAgent } from "../../scaffold/init.ts";
 import { displayPath } from "../../paths.ts";
@@ -45,6 +45,17 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"} — ${flat ? "the directory IS the agent" : `agent in ./${rel}/`}`,
   );
   console.error(`  created: ${created.join(", ")}`);
+  // A second agent beside an existing one is a supported shape, not an accident (an engineer's, a PM's
+  // and a content owner's agent can drive one repository), but it changes how this workspace resolves
+  // from now on — so say it HERE, at the moment it becomes true, instead of at the next command's
+  // refusal. The default name is the tie-break, so a workspace keeping `fastagent/` needs nothing.
+  const siblings = agentsAt(dir).map((a) => basename(a));
+  if (siblings.length > 1) {
+    const pick = siblings.includes(DEFAULT_AGENT_DIRNAME)
+      ? `\`${DEFAULT_AGENT_DIRNAME}\` answers by default; set FASTAGENT_AGENT=<name> for another`
+      : `set FASTAGENT_AGENT=<name> (in your shell or .envrc) to pick one`;
+    console.error(`[fastagent] note: ${dir} now holds ${siblings.length} agents (${siblings.join(", ")}) — ${pick}`);
+  }
   if (kept.length > 0) {
     // Adopting a directory: its own files win, always. Say which ones — and for the two that carry a
     // consequence, say what that consequence is, because keeping them silently leaves the agent broken
