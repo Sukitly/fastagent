@@ -12,7 +12,7 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 // Shared flags — same name, same meaning, on every command that supports them (clig: consistency).
 const DIR_ARG = {
   name: "[dir]",
-  description: "workspace directory (the agent is here, or in its ./fastagent/)",
+  description: "workspace directory (the agent is here, or in a directory inside it)",
   default: ".",
 };
 const MODEL: FlagSpec = {

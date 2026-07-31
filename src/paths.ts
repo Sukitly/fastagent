@@ -187,8 +187,8 @@ export function findAgentDir(dir: string): string | undefined {
 /** The agent `dir` sits INSIDE (the nearest proper ancestor that IS an agent dir), or undefined.
  *  Module-private: the two questions callers actually ask are "where do I `cd` to?"
  *  ({@link placementDeadEnd}) and "would a new agent here become part of an existing one's definition?"
- *  ({@link agentDefinitionOwner}) — and those answers differ for a flat agent, so exporting the raw
- *  containment fact would invite conflating them.
+ *  ({@link agentDefinitionOwner}) — and those answers differ (an agent's `src/` is inside it, but is not
+ *  part of what it loads), so exporting the raw containment fact would invite conflating them.
  *  Placement resolution deliberately never walks up — the answer must not depend on how deep you stand
  *  — but "you are inside an agent, just not at its root" is the likeliest reason resolution fails, and
  *  both the refusal below and `login`'s global-fallback decision need to tell that case apart. Uses the

@@ -20,7 +20,7 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
   });
 
-  it("the NAME is not a rule — an agent directory can be called anything", async () => {
+  it("the NAME does not decide what IS an agent — the directory can be called anything", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-name-"));
     await config(join(dir, "reviewer"));
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "reviewer"), workspace: dir });
