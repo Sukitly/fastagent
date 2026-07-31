@@ -13,7 +13,7 @@ import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
-import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
+import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
   NOTHING_TO_COMPACT_CODE,
@@ -320,8 +320,13 @@ describe("session control (Phase 1): observation plane", () => {
     const { join } = await import("node:path");
     const dir = await mkdtemp(join(tmpdir(), "fa-sc-ws-"));
     try {
-      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
-      const opened = await createPiAgentFromWorkspace(dir, { sessionControl: true });
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(dir, "fastagent"));
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
       expect(opened.sessionControl).toBeDefined();
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
       // The control is live over this workspace's (jsonl) store: read-only observation works
@@ -330,7 +335,7 @@ describe("session control (Phase 1): observation plane", () => {
       expect(await control.entries("ghost")).toEqual({ entries: [] });
       expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
       // Not requested → not built.
-      const plain = await createPiAgentFromWorkspace(dir, {});
+      const plain = await createPiAgentFromDir(dir, {});
       expect(plain.sessionControl).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -1118,9 +1123,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const { join } = await import("node:path");
     const dir = await mkdtemp(join(tmpdir(), "fa-sc-tap-"));
     try {
-      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(dir, "fastagent"));
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
       const seen: string[] = [];
-      const opened = await createPiAgentFromWorkspace(dir, {
+      const opened = await createPiAgentFromDir(dir, {
         sessionControl: true,
         observer: (_s, event) => {
           seen.push(event.type);

@@ -7,18 +7,19 @@ import { dirname, resolve } from "node:path";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
+import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
-import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { exists } from "../../scaffold/init.ts";
-import { failStartup } from "../fail.ts";
+import { exists } from "../../paths.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { maybeTunnel, mountAgentcore, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
+import { parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -32,16 +33,19 @@ export interface StartOptions {
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const dir = resolve(dirArg);
-  setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
+  // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
+  // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
-  loadDotEnv(dir);
+  const placement = placementOrExit(dir);
+  setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
+  loadDotEnv(placement.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(dir, opts);
+  await resolveFirstRunModel(placement.agentDir, opts);
 
   // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
-  // materialize it onto the writable state root BEFORE the opener resolves auth (once, absent-only).
+  // materialize it into the writable secrets dir BEFORE the opener resolves auth (once, absent-only).
   // Same resolveAuthPath the opener uses — ONE owner of the flag > env > default chain.
-  await maybeSeedAuth(resolveAuthPath(dir, opts.authPath));
+  await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);
@@ -49,6 +53,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     agent,
     definition,
     agentDir,
+    workspace,
     config,
     modelSpec,
     stateRoot,
@@ -59,37 +64,49 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     toolCollisions,
     toolFailures,
     sessionControl,
-  } = await createPiAgentFromWorkspace(dir, {
+  } = await createPiAgentFromDir(dir, {
     model: opts.model,
     sessionsDir: sessionsDirOverride,
     authPath: opts.authPath,
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
 
-  log.info(`[fastagent] start:  ${dir}`);
-  if (agentDir !== dir) log.info(`[fastagent] agent:  ${agentDir}`);
-  log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
+  reportLine("agent", agentDir);
+  reportLine("workspace", workspace);
+  reportWorkspaceHint(workspaceHint({ agentDir, workspace }));
+  reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
-  log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
-  if (definition.persona) log.info(`[fastagent] persona: persona.md`);
-  log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
-  if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
+  reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
+  if (definition.persona) reportLine("persona", "persona.md");
+  reportLine("skills", definition.skills.map((s) => s.name).join(", ") || "(none)");
+  if (toolNames.length > 0) reportLine("tools", toolNames.join(", "));
   if (deferredToolNames.length > 0) {
-    log.info(`[fastagent] deferred: ${deferredToolNames.join(", ")} (activated via search_tools)`);
+    reportLine("deferred", `${deferredToolNames.join(", ")} (activated via search_tools)`);
   }
   reportToolCollisions(toolCollisions);
   reportModuleLoadFailures(toolFailures);
-  log.info(`[fastagent] state:  ${stateRoot}`);
-  log.info(`[fastagent] sessions: ${sessionsDir}`);
-  // State defaults under the definition dir, which a redeploy may replace wholesale. Gate on where the
-  // root ACTUALLY resolved (in-tree?), not on the raw env var: an empty `FASTAGENT_STATE_DIR=""` reads
-  // as unset (resolveStateRoot) and still lands in-tree, so a raw `=== undefined` check would wrongly
-  // silence the warning. A sessions/auth override to a volume does not help — channel state (the
-  // telegram turn/context files replay depends on) is still in-tree.
-  if (isUnderDir(stateRoot, dir)) {
+  reportLine("state", stateRoot);
+  reportLine("sessions", sessionsDir);
+  // State defaults under the agent dir, which a redeploy may replace wholesale. Gate on where the
+  // state root ACTUALLY resolved (inside the agent dir?), not on the raw env var: an empty
+  // `FASTAGENT_STATE_DIR=""` reads as unset (resolveStateRoot) and still lands in-agent, so a raw
+  // `=== undefined` check would wrongly silence the warning. A sessions override to a volume does not
+  // help — channel state (the telegram turn/context files replay depends on) is still in-agent.
+  // (auth.json is NOT under the state root — it lives in the secrets dir, resolveSecretsDir.)
+  if (isUnderDir(stateRoot, agentDir)) {
     log.info(
-      `[fastagent] note: state (auth, sessions, channel state) lives under the definition dir; point ` +
+      `[fastagent] note: state (sessions, channel state) lives under the definition dir; point ` +
         `FASTAGENT_STATE_DIR at a persistent volume so a redeploy that replaces the dir does not wipe it.`,
+    );
+  }
+  // The secrets dir is the SAME trap on a different lifecycle: auth.json is MACHINE-WRITTEN (OAuth
+  // rotation), so the copy under the definition dir is the only valid one — a redeploy that replaces
+  // the dir loses a credential no re-seed can restore. An independent check on purpose: moving ONE
+  // of the two to a volume must not silence the note about the other.
+  if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
+    log.info(
+      `[fastagent] note: secrets (.env, rotated auth.json) live under the definition dir; point ` +
+        `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
     );
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
@@ -148,7 +165,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
     (p) => {
       withControl.announce(p);
-      maybeTunnel(dir, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);
+      maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
@@ -158,8 +175,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 }
 
 /**
- * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy --run`) onto the
- * writable state root ONCE — only when the seed is set AND the auth file is absent, so a refreshed
+ * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy --run`) into the
+ * writable secrets dir ONCE — only when the seed is set AND the auth file is absent, so a refreshed
  * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
  * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
  */

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent workspace: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.*."
+description: "Configure a FastAgent agent: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.*."
 status: current
 ---
 
@@ -10,11 +10,11 @@ FastAgent keeps behavior and deployment choices separate:
 
 - agent behavior lives in `persona.md` (identity), `skills/`, `tools/`, and `AGENTS.md` project context,
 - deployment choices live in `fastagent.config.*`, CLI flags, and environment variables,
-- secrets live in `.env`, provider env vars, or the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`).
+- secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
 ## Config file
 
-A workspace may contain exactly one config file:
+An agent may contain exactly one config file:
 
 ```txt
 fastagent.config.ts
@@ -39,7 +39,6 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `agentDir` | The agent-definition subdirectory (`persona.md`, `skills/`, `tools/`, `channels/`), relative to the config file. Default: the config directory itself (flat). Set it to e.g. `"./agent"` to serve an existing repo as a coding agent — the config directory stays the run root (`cwd`, whose `AGENTS.md` is read as context), while the agent's own surface lives in the subdir and does not collide with the host's `tools/`/`src/`. Must exist, stay inside the config directory, and be a real directory — a missing path is refused at load (a typo would otherwise silently serve an empty agent), and so is a symlink (its target can escape the config directory, where `dev`'s watch would never see edits). |
 | `tools` | Extra programmatic tools appended after default pi tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |
@@ -47,7 +46,7 @@ Supported keys:
 | `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |
 | `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
 
-Unknown keys fail at startup. This catches typos such as `modle` instead of silently running zero-config.
+Unknown keys fail at startup. This catches typos such as `modle` instead of silently degrading to defaults.
 
 The generated `.dockerignore` excludes `.git` to keep the image small. If your agent runs git over its **own** history (e.g. `git log`/`git blame` on the repo it ships in), delete the `.git` line from the generated `.dockerignore` so that history is included in the image.
 
@@ -90,9 +89,9 @@ FastAgent resolves model credentials through the model provider layer. Common op
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<state root>/auth.json` (default `<cwd>/.fastagent/auth.json`; override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global file). |
+| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run outside any agent for the global `~/.fastagent/.secrets/auth.json` — announced on stderr). |
 | Provider env vars | Good for servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
-| Workspace `.env` | Local development secrets loaded by CLI commands. Keep it gitignored. |
+| Agent `.env` | Local development secrets at `<agent dir>/.secrets/.env`, loaded by CLI commands. Excluded by the `.secrets/.gitignore` that `init` scaffolds. |
 
 Do not commit `.env` or provider credentials.
 
@@ -114,34 +113,45 @@ Port precedence for `start`:
 
 Use `PORT` in hosted environments that inject a port.
 
-## Sessions
+## Machinery: `.state/` and `.secrets/`
 
-`<workspace>/.fastagent/` is the agent's **machine-state home**: sessions, credentials (`auth.json`),
-and channel state (`channels/<kind>/`) all live under one root with one lifecycle — precious,
-single-process, must survive a redeploy. It is gitignored and never part of the definition.
+The agent carries two fastagent-managed machinery dirs, split by deploy lifecycle:
 
-For deployments, move the WHOLE root to durable storage with one knob:
+- `<agent dir>/.state/` — **mutable machine state**: sessions, channel state (`channels/<kind>/`),
+  schedule state. Precious, single-process, must survive a redeploy → a container points it at a
+  volume.
+- `<agent dir>/.secrets/` — **secrets**: the agent's `.env` and the project-level `auth.json`.
+  Never committed (the scaffolded `.secrets/.gitignore` excludes it; only `.env.example` travels), never baked into an image —
+  a deployed box gets values through the host's secret store, and its seeded (possibly rotated)
+  `auth.json` also lives on the volume so refresh survives restarts.
+
+For deployments, point both at durable storage:
 
 ```bash
-FASTAGENT_STATE_DIR=/data fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
-Everything derives from it (`/data/sessions`, `/data/auth.json`, `/data/channels/telegram`, …), so a
-container mounts one volume. The finer knobs still override their specific path on top:
+The finer knobs still override their specific path on top:
 
 ```txt
-state root: FASTAGENT_STATE_DIR                          > <workspace>/.fastagent
+state root: FASTAGENT_STATE_DIR                          > <agent dir>/.state
+secrets:    FASTAGENT_SECRETS_DIR                        > <agent dir>/.secrets
 sessions:   --sessions-dir > FASTAGENT_SESSIONS_DIR      > <state root>/sessions
-auth:       --auth-path    > FASTAGENT_AUTH_PATH         > <state root>/auth.json
+auth:       --auth-path    > FASTAGENT_AUTH_PATH         > <secrets>/auth.json
 ```
 
 A leading `~` in any of these is expanded to your home dir.
+
+`FASTAGENT_SECRETS_DIR` moves both the agent's `.env` and `auth.json`. The `.env`'s own location
+resolves from the real environment — a `FASTAGENT_SECRETS_DIR` set *inside* `.env` still relocates
+`auth.json` but cannot move the file it is read from. The committable `.env.example` template always
+stays at `<agent dir>/.secrets/.env.example`.
 
 ## Tools
 
 There are two ways to add tools:
 
-1. Files under `tools/` — recommended for workspace authors.
+1. Files under `tools/` — recommended for agent authors.
 2. `config.tools` — programmatic injection for advanced embedding/config use.
 
 `tools/` files are auto-discovered. The filename is the tool name:
@@ -167,11 +177,29 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ### When the repo already owns `tools/` or `channels/`
 
-Use `config.agentDir` so FastAgent scans the agent kit's directories instead of the host repo's names;
-`fastagent init` chooses this layout automatically when those directories are occupied. Within the agent
-kit, a broken tool is reported and skipped, while a broken declared channel fails serving — an inbound
-endpoint must not silently disappear. If you want programmatic tools outside `agentDir`, declare them
-with `config.tools`.
+Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,
+never the workspace's names (the placement is structural — the `fastagent/` directory name is the
+marker, nothing is configured). Within the agent, a broken tool is reported and skipped, while
+a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
+programmatic tools outside the agent, declare them with `config.tools`.
+
+### More than one agent
+
+`fastagent/` is a fixed name, so a directory holds at most one agent. Give each agent its own
+directory instead — that is what `init <name>` is for:
+
+```bash
+fastagent init reviewer     # reviewer/fastagent/
+fastagent init releaser     # releaser/fastagent/
+```
+
+Each is fully independent: its own persona, skills, tools, config, model, channels, schedules,
+`.state/` and `.secrets/`. Run them separately (`fastagent dev reviewer`), deploy them separately.
+
+One consequence to know: an agent's workspace is always the directory holding its `fastagent/`, so
+`reviewer`'s cwd is `reviewer/`, not the repo above it. Its `AGENTS.md` context still walks up to the
+repo root (the ancestor walk), and its tools can reach the repo through `../`; if that matters for
+your agent, say so in its `persona.md`.
 
 ## Channels
 

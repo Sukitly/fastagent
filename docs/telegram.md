@@ -12,7 +12,7 @@ Unlike the GitHub channel, Telegram is request/reply: the channel holds the bot 
 
 ## Add the channel
 
-From an agent workspace:
+From an agent directory:
 
 ```bash
 fastagent add telegram
@@ -29,13 +29,13 @@ It also appends the required env vars to `.env.example` when possible.
 
 ## Configure Telegram
 
-Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the run-root `.env`:
+Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the agent's `.secrets/.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
 ```
 
-`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.env` when `.env` is gitignored. If it could not write one, add it yourself:
+`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.secrets/.env` (gitignored by the scaffolded `.secrets/.gitignore`). If it could not write one, add it yourself:
 
 ```bash
 TELEGRAM_SECRET_TOKEN=... # any random string; verifies inbound updates
@@ -185,7 +185,7 @@ Downloaded files persist until the operator cleans them up. Treat `<state root>/
 
 ## State & restarts
 
-The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
+The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<agent dir>/.state`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start.
@@ -196,7 +196,7 @@ The per-session turn queue is **in-memory** (one turn at a time per session; a s
 - **L1 (this channel).** An accepted turn's intent is persisted before the webhook ACK, then removed when the turn completes. `start` has no graceful drain, so a crash **or** a rolling deploy exits mid-turn — but the intent survives and is replayed on the next start (the ACKed-but-un-completed window Telegram won't redeliver). This is **at-least-once**: replay re-runs the whole turn, so side-effecting tools re-run (safe for a Q&A bot; the bar for adding side-effecting ones) and, in a narrow pre-ACK crash window, a turn can run twice. A turn that keeps being interrupted mid-run is dropped after a few attempts and its asker is told to re-ask (this cannot distinguish a process-crashing turn from one repeatedly caught by deploys). Two residual windows are deliberately not covered: an answer produced but not yet delivered when the process dies is committed to the session, not replayed (the asker re-asks; the answer is in history); and if a state write fails outright (disk full), the turn is deferred to the next start rather than run untracked, which can replay it after later turns in the same session (a rare, disk-degraded reorder).
 - **L2 (a K-axis backend).** Exactly-once delivery and deterministic step-replay need a durable queue with distributed-locking recovery and the engine's resume hook — deferred to the backend, not the channel.
 
-The state home self-ignores (a nested `.gitignore`), so buffered chat content is never committable. A corrupt `buffers.json` or `turns.json` logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir.
+The state home lives under `.state/`, which the agent `.gitignore` excludes, so buffered chat content is not committable. A corrupt `buffers.json` or `turns.json` logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir.
 
 ## Sending messages and files back (`telegram-send`)
 

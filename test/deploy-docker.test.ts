@@ -13,6 +13,7 @@ const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
 const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join("\n");
 
 const base = {
+  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,
@@ -26,14 +27,16 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"] });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
-      "fastagent.compose.yml",
-      "Dockerfile",
+      "fastagent/fastagent.compose.yml",
+      "fastagent/Dockerfile",
       ".dockerignore",
+      "fastagent/Dockerfile.dockerignore",
     ]);
 
     const yaml = compose(plan);
     expect(yaml).toContain('"127.0.0.1:8787:8787"');
-    expect(yaml).toContain('FASTAGENT_STATE_DIR: "/data"');
+    expect(yaml).toContain('FASTAGENT_STATE_DIR: "/data/.state"');
+    expect(yaml).toContain('FASTAGENT_SECRETS_DIR: "/data/.secrets"');
     expect(yaml).toContain("- state:/data");
     expect(yaml).toContain("restart: unless-stopped");
     expect(yaml).not.toContain("cloudflared");
@@ -97,29 +100,24 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("sk-");
   });
 
-  it("namespaces agentDir artifacts and builds from the repository root, including nested kits", () => {
-    const plan = planDockerDeploy({
-      ...base,
-      modelAuth: undefined,
-      channels: [],
-      kitDir: "packages/agent",
-    });
+  it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {
+    const plan = planDockerDeploy({ ...base, modelAuth: undefined, channels: [] });
     expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
       ".dockerignore",
-      "packages/agent/Dockerfile",
-      "packages/agent/Dockerfile.dockerignore",
-      "packages/agent/fastagent.compose.yml",
+      "fastagent/Dockerfile",
+      "fastagent/Dockerfile.dockerignore",
+      "fastagent/fastagent.compose.yml",
     ]);
-    expect(plan.composePath).toBe("packages/agent/fastagent.compose.yml");
-    expect(compose(plan)).toContain("context: ../..");
-    expect(compose(plan)).toContain("dockerfile: packages/agent/Dockerfile");
-    expect(runbook(plan)).toContain("run from the REPO ROOT");
+    expect(plan.composePath).toBe("fastagent/fastagent.compose.yml");
+    expect(compose(plan)).toContain("context: ..");
+    expect(compose(plan)).toContain("dockerfile: fastagent/Dockerfile");
+    expect(runbook(plan)).toContain("Run from the WORKSPACE ROOT");
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram", "github"] }));
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
-    expect(out).toContain("docker compose -f fastagent.compose.yml up -d --build");
+    expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");
     expect(out).toContain("Public ingress is operator-owned");

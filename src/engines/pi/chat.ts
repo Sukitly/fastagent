@@ -8,7 +8,7 @@
  * pi's TUI `/login`, which writes through the same credential store into the workspace auth file).
  */
 import { InteractiveMode } from "@earendil-works/pi-coding-agent";
-import { type BuildSessionRuntimeOptions, buildWorkspaceSessionRuntime } from "./session-builder.ts";
+import { type BuildSessionRuntimeOptions, buildAgentSessionRuntime } from "./session-builder.ts";
 
 /**
  * Open the workspace's agent in pi's interactive TUI and run until the user exits. The agent is
@@ -16,6 +16,6 @@ import { type BuildSessionRuntimeOptions, buildWorkspaceSessionRuntime } from ".
  * handles login, rendering, and same-workspace sessions natively.
  */
 export async function runPiChat(dir: string, options: BuildSessionRuntimeOptions = {}): Promise<void> {
-  const runtime = await buildWorkspaceSessionRuntime(dir, options);
+  const runtime = await buildAgentSessionRuntime(dir, options);
   await new InteractiveMode(runtime, {}).run();
 }

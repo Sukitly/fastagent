@@ -99,7 +99,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 | If you want to… | Read |
 |---|---|
 | Get running quickly | [Quickstart](quickstart.md) |
-| Configure a workspace | [Configuration](configuration.md) |
+| Configure an agent | [Configuration](configuration.md) |
 | Understand design choices | [Design principles](principles.md) |
 | Use CLI commands | [CLI reference](cli.md) |
 | Embed in an app | [Embedding](embedding.md) |
@@ -127,7 +127,7 @@ Implemented today:
 - Cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit.
 - `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
-- CLI login backed by a project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; override: `--auth-path` / `FASTAGENT_AUTH_PATH`, root: `FASTAGENT_STATE_DIR`).
+- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
 
 Not implemented yet:
 

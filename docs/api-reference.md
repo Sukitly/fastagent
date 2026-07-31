@@ -142,14 +142,14 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `persona.md`/`skills/` from `dir` (the agent-definition dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the run/working directory (where tools operate, whose repo `AGENTS.md` is context) from the definition dir.
+Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` always passes the resolved workspace, which is the directory fastagent was pointed at (the agent dir's parent when the agent was found one level inside it, the agent dir itself when you aimed straight at it).
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
-### `createPiAgentFromWorkspace`
+### `createPiAgentFromDir`
 
 ```ts
-function createPiAgentFromWorkspace(
+function createPiAgentFromDir(
   dir: string,
   options?: { model?: string; sessionsDir?: string; authPath?: string; serving?: boolean },
 ): Promise<{
@@ -158,7 +158,8 @@ function createPiAgentFromWorkspace(
   config: FastagentConfig;
   configPath?: string;
   modelSpec: string;
-  agentDir: string;
+  agentDir: string; // where the agent lives
+  workspace: string; // the agent's cwd — the agent dir's parent
   stateRoot: string;
   sessionsDir: string;
   authPath: string;
@@ -219,7 +220,7 @@ conversation.
 
 For tool-heavy agents, `defineTool({ ..., deferred: true })` registers a tool without activating it:
 its schema stays out of every request (and the model's sight) until discovered. When any deferred tool
-is mounted, fastagent automatically mounts the built-in **`search_tools`** loader (a workspace tool
+is mounted, fastagent automatically mounts the built-in **`search_tools`** loader (an agent's own tool
 named `search_tools` wins — the author owns the concept then): the model searches by keywords, matching
 tools are activated mid-turn, and the activation is recorded in the session, so it survives fastagent's
 per-invoke harness rebuild for the rest of that conversation.
@@ -236,7 +237,7 @@ Costs and behavior to know:
   loader can use; `activate` is additive and ignores unknown names. A custom loader must also declare
   `executionMode: "sequential"` (a `defineTool` option; pi then serializes the batch — in chat, pi's
   own before/after diff around SDK tools would otherwise attribute one activation to two parallel
-  calls). A workspace `search_tools` missing the mode gets it forced, with a warning.
+  calls). An agent's `search_tools` missing the mode gets it forced, with a warning.
   Both types are exported: `ToolActivation`, and `FastagentTool` (`AgentTool` + the `deferred` marker —
   the type `config.tools` and the L1/L2 `tools` options accept, so a raw object literal with
   `deferred: true` type-checks).
@@ -246,7 +247,7 @@ Costs and behavior to know:
   which is weaker).
 - An activation is persisted as a dedicated DELTA entry in the session ("this conversation activated
   these deferred tools"): on reopen the active set is rebuilt as the initial set (current non-deferred
-  tools) plus the accumulated deltas. A tool you add to the workspace later joins existing
+  tools) plus the accumulated deltas. A tool you add to the agent later joins existing
   conversations, and a tool you later flip to `deferred` drops out of sessions that never discovered
   it.
 - **`fastagent chat` emulates deferral** like the serving path (what you iterate is what you serve):
@@ -261,7 +262,7 @@ Costs and behavior to know:
 ```ts
 interface ChannelContext {
   agent: Agent;
-  stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <dir>/.fastagent), absolute
+  stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <root>/.state), absolute
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
 interface LongConnection {
@@ -285,7 +286,7 @@ function loadChannels(
 }>;
 ```
 
-A workspace channel default-exports either a route `ChannelModule` or a
+An agent channel default-exports either a route `ChannelModule` or a
 `LongConnectionChannelModule`. Bundled webhook adapters (`telegramChannel(opts)`,
 `githubChannel(opts)`, `feishuChannel(opts)`) return `ChannelModule`; `feishuWebSocketChannel(opts)`
 and `larkWebSocketChannel(opts)` return `LongConnectionChannelModule`. In both forms the channel file
@@ -320,7 +321,7 @@ function createScheduler(opts: SchedulerOptions): Scheduler; // { start(): void;
 function scheduleSession(name: string): string; // the derived stable session id
 ```
 
-A workspace declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
+An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
 the filename becomes the schedule name. Each file default-exports `defineSchedule({ cron, tz?, prompt })`.
 
 ```ts
@@ -373,13 +374,13 @@ function probeAuthSource(models: Models, spec: string): Promise<string | undefin
 Auth:
 
 ```ts
-const GLOBAL_AUTH_PATH: string; // ~/.fastagent/auth.json — the cross-project share target
+const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json — the cross-project share target
 function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
 ```
 
-`fastagent login` writes the **project-level** `<state root>/auth.json` by default; `GLOBAL_AUTH_PATH`
+`fastagent login` writes the **project-level** `<agent dir>/.secrets/auth.json` by default; `GLOBAL_AUTH_PATH`
 is `createPiModels`'s default when no `authPath` is passed, and the explicit one-file share target
-(`FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`). Note the two defaults differ: an embedder calling
+(`FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`). Note the two defaults differ: an embedder calling
 `createPiModels()` bare reads the global file, not a project-level `login` — pass `authPath` explicitly
 to read the project's credential (the `createPiAgentFrom*` openers already do).
 
@@ -486,13 +487,13 @@ serving path, channels included. Boundary mutations require an EXISTING session 
 otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
 `invalid_command` before acceptance;
 `capabilities()` lists `allowedModels`/`allowedLevels`. Boundary commands require the wiring the
-workspace opener provides (`sessionControl: true`); a hub without it reports them off and rejects
+agent opener provides (`sessionControl: true`); a hub without it reports them off and rejects
 with `unsupported_capability`.
 
-For workspace assembly the store lives inside the opener, so ask the opener to wire the hub:
+For agent assembly the store lives inside the opener, so ask the opener to wire the hub:
 
 ```ts
-const { agent, sessionControl } = await createPiAgentFromWorkspace(dir, { sessionControl: true });
+const { agent, sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
 ```
 
 ### Remote (HTTP + SSE)

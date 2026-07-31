@@ -807,10 +807,10 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
 
 /** Compute the AgentCore deploy plan from the resolved definition. */
 export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
-  const { name, channels, kitDir } = input;
+  const { name, channels } = input;
   const stack = `fastagent-${name}`;
   const repo = `fastagent/${name}`;
-  const prefix = kitDir ? `${kitDir}/` : "";
+  const prefix = input.agentPrefix;
 
   // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings —
   // a schedule silently missing from the template would be the worst failure mode (nothing ever fires).
@@ -892,8 +892,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
-    kitDir
-      ? `docker buildx build --platform linux/arm64 -f ${kitDir}/Dockerfile -t ${image} --push .`
+    prefix
+      ? `docker buildx build --platform linux/arm64 -f ${prefix}Dockerfile -t ${image} --push .`
       : `docker buildx build --platform linux/arm64 -t ${image} --push .`,
     ``,
     `# 3. Deploy the stack (runtime + ingress + schedules in one template). Secrets ride NoEcho parameters:`,

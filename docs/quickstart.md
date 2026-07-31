@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: "From an installed CLI to a live local agent service: scaffold a workspace, run it, add a typed tool, connect channels, and put the agent on a clock."
+description: "From an installed CLI to a live local agent service: scaffold an agent, run it, add a typed tool, connect channels, and put the agent on a clock."
 status: current
 ---
 
@@ -13,7 +13,7 @@ This guide takes you from an installed CLI to a live local agent service.
 - Node >= 22.19 (`node --version`).
 - FastAgent CLI: `npm i -g @fastagent-sh/fastagent`.
 
-Model credentials come in step 2 — after the workspace exists, because `fastagent login` stores them
+Model credentials come in step 2 — after the agent exists, because `fastagent login` stores them
 **per project**.
 
 List available model specs with:
@@ -22,27 +22,28 @@ List available model specs with:
 fastagent models
 ```
 
-## 1. Create an agent workspace
+## 1. Create an agent
 
 ```bash
 fastagent init my-agent
 cd my-agent
 ```
 
-The default scaffold is a **self-iterating agent** — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh workspace is minimal:
+The default scaffold is a **self-iterating agent** — it is files, and it can edit its own definition (persona.md and skills are re-read every turn). The agent lands in `fastagent/`; the directory around it is its WORKSPACE — what it works on, and where its `AGENTS.md` is read from:
 
 ```txt
-my-agent/
-├── persona.md                         # the agent's identity — how to improve yourself
-├── skills/writing-great-skills/       # the example skill: how to author skills well
-├── tools/fetch-url.ts                 # an example code tool
-├── fastagent.config.mjs
-├── package.json
-├── .env.example
-└── .gitignore
+my-agent/                              # the workspace — the agent's cwd, untouched by init
+└── fastagent/                         # the agent
+    ├── persona.md                     # its identity — how to improve yourself
+    ├── skills/writing-great-skills/   # the example skill: how to author skills well
+    ├── tools/fetch-url.ts             # an example code tool
+    ├── fastagent.config.mjs
+    ├── package.json
+    ├── .secrets/.env.example          # secrets live here, never committed
+    └── .gitignore
 ```
 
-`persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. For a workspace with no code tool or dependencies (persona.md + the skill + config only):
+`persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. For a agent with no code tool or dependencies (persona.md + the skill + config only):
 
 ```bash
 fastagent init my-agent --minimal
@@ -56,13 +57,15 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools/`, `channels/`, or `skills/`), `init` puts the agent kit into `./agent` instead of flat, writes `agentDir: "./agent"` into the config, and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--agent-dir <name>`.
+**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. The placement is structural, marked by the directory name itself, never configured or detected.
 
-A fresh workspace presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
+**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.*` inside is what makes a directory an agent, never its name.
+
+A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
 stored login, or a provider API key in your env/`.env`) come first, annotated with the source; picking
 one that needs auth runs the login flow right there — and writes your pick back to
-`fastagent.config.mjs`. Credentials are stored per project (`<cwd>/.fastagent/auth.json`, no global
+`fastagent.config.mjs`. Credentials are stored per project (`<agent dir>/.secrets/auth.json`, no global
 fallback), so a login from another directory is invisible here. To set the model non-interactively
 (or in CI/deploy, where there is no prompt):
 
@@ -78,7 +81,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` assembles the workspace and serves it on `:8787`. persona.md/AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The default channel is `POST /invoke`.
+`dev` assembles the agent and serves it on `:8787`. persona.md/AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The default channel is `POST /invoke`.
 
 Send one turn:
 
@@ -98,7 +101,7 @@ data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"
 data: {"type":"completed"}
 ```
 
-Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.fastagent/sessions`), so a dev restart keeps conversation history.
+Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `fastagent/.state/sessions`), so a dev restart keeps conversation history.
 
 ## 4. Try authoring loops
 
@@ -151,7 +154,7 @@ Mention the tool in `persona.md` so the model knows when to use it. `fastagent d
 fastagent start
 ```
 
-`start` uses the same assembly as `dev`, but does not watch files. There is no build step: copy the workspace to a host with Node >= 22.19, install dependencies, and run `fastagent start`.
+`start` uses the same assembly as `dev`, but does not watch files. There is no build step: copy the agent to a host with Node >= 22.19, install dependencies, and run `fastagent start`.
 
 For deployments, point the whole machine-state root (auth, sessions, **and** channel state — Telegram's durable turn replay lives there too) at durable storage:
 

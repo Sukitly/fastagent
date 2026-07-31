@@ -1,5 +1,5 @@
 /**
- * Open a definition directory into an agent — the single workspace opener BOTH `fastagent dev` and
+ * Open a definition directory into an agent — the single agent opener BOTH `fastagent dev` and
  * `fastagent start` drive.
  *
  * A thin command-posture composition over L2 `createPiAgentFromDefinition`: open the directory →
@@ -16,35 +16,34 @@ import {
   type LoadedConfig,
   defaultSessionsDir,
   loadConfig,
-  resolveAgentDir,
   resolveAuthPath,
   resolveModelSpec,
-  resolveStateRoot,
 } from "./config.ts";
+import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
-import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
+import { createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./invoke.ts";
 import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
+import type { LoadedDefinition } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
-export interface CreatePiAgentFromWorkspaceOptions {
+export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /**
-   * Session store directory. Default `<dir>/.fastagent/sessions` (gitignored machine state). `start`
+   * Session store directory. Default `<agentDir>/.state/sessions` (machine state). `start`
    * overrides it (--sessions-dir / FASTAGENT_SESSIONS_DIR / a mounted volume) so production continuity
    * survives redeploys.
    */
   sessionsDir?: string;
   /**
-   * Credentials file override. Default `<dir>/.fastagent/auth.json` (project-level, gitignored under
-   * the same `*`-ignored `.fastagent`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
-   * `~/.fastagent/auth.json` to share one credential across projects.
+   * Credentials file override. Default `<agentDir>/.secrets/auth.json` (project-level, under the
+   * `.secrets/`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
+   * the global `~/.fastagent/.secrets/auth.json` to share one credential across projects.
    */
   authPath?: string;
   /**
@@ -53,7 +52,7 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * and never poll). The built-in `wake` tool mounts only when this is set AND `config.selfSchedule` is on.
    */
   serving?: boolean;
-  /** Assemble the session control plane over this workspace's session store and return it as
+  /** Assemble the session control plane over this agent's session store and return it as
    *  {@link sessionControl} — the store is created inside this opener, so the hub must be wired
    *  here too (an external `createPiSessionControl` cannot exist before the store does).
    *  Default: `config.sessionControl` AND {@link serving} — the config key means "serve the control
@@ -69,24 +68,27 @@ export interface CreatePiAgentFromWorkspaceOptions {
 }
 
 /**
- * The workspace assembly FRONT HALF — everything that is independent of how pi consumes the
+ * The agent assembly FRONT HALF — everything that is independent of how pi consumes the
  * definition (transient harness for serving vs resident AgentSession for chat / session control):
- * config → model spec → agentDir → the full tool surface ({@link resolveWorkspaceTools} — the ONE
- * place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
+ * placement resolution → config → model spec → the full tool surface ({@link resolveAgentTools} — the
+ * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromDir} and the
  * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two
  * consumption shapes. (Definition loading and prompt assembly stay per-consumer: serving re-reads
  * them live per invoke, the session builder snapshots at startup and lets pi append skills/env.)
  */
-export interface WorkspaceAssembly {
+export interface AgentAssembly {
   config: FastagentConfig;
   configPath?: string;
   /** The resolved "provider/modelId" spec in use. */
   modelSpec: string;
-  /** Absolute agent-definition dir (config.agentDir resolved against dir; = dir when unset). */
+  /** Absolute agent dir — definition + config + machinery live here (resolvePlacement().agentDir). */
   agentDir: string;
-  /** Absolute state root (FASTAGENT_STATE_DIR > <dir>/.fastagent). */
+  /** Absolute workspace — the agent's cwd and the start of the ②-context walk: the agent dir's parent
+   *  when the agent sits inside it, the agent dir ITSELF when you point at the agent. */
+  workspace: string;
+  /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
-  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <stateRoot>/auth.json). */
+  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
   /** The full mounted tool surface (config.tools + discovered tools/, search_tools applied). */
   tools: AgentTool[];
@@ -96,42 +98,38 @@ export interface WorkspaceAssembly {
   toolFailures: ModuleLoadFailure[];
 }
 
-export async function resolveWorkspaceAssembly(
+export async function resolveAgentAssembly(
   dir: string,
   options: { model?: string; authPath?: string } = {},
-): Promise<WorkspaceAssembly> {
-  const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
+): Promise<AgentAssembly> {
+  // Placement is structural (resolvePlacement): the AGENT DIR carries definition + config + machinery;
+  // its parent — the WORKSPACE — is what the agent works on: its cwd and the start of the ②-context
+  // walk (that is where it reads the project's AGENTS.md from).
+  const { agentDir, workspace } = resolvePlacement(dir);
+  const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
   const modelSpec = resolveModelSpec(options.model, config);
   if (!modelSpec) {
     throw new Error(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  // The run root is `dir` (cwd — where config lives, whose AGENTS.md is ② context); the agent's own
-  // surface (persona/skills/tools/channels) lives in `agentDir` (config.agentDir, or `dir` when flat).
-  const agentDir = resolveAgentDir(dir, config);
-  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveAgentTools(
     config,
     agentDir,
-    dir,
+    workspace,
   );
-  // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
-  // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
-  // still win for their specific path.
-  const stateRoot = resolveStateRoot(dir);
-  // The credentials file: project-level by default (under the state root); only resolved here, never
+  // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
+  // in one knob — a container points it at its volume); the finer overrides below still win.
+  const stateRoot = resolveStateRoot(agentDir);
+  // The credentials file: project-level by default (under `<agentDir>/.secrets`); only resolved here, never
   // created (a missing file reads as not-configured — `fastagent login` creates it).
-  const authPath = resolveAuthPath(dir, options.authPath);
-  // Self-ignore the state root iff it lands in-tree — which covers everything under it (sessions, auth,
-  // every channel's `channels/<kind>` home). HERE, not in the serving opener: every consumer of this
-  // assembly can WRITE under the state root (serving: sessions/channels; the session builder: pi's
-  // `/login` writing auth.json), so resolving a workspace's state root must make it leak-safe.
-  await ensureStateRootSelfIgnored(dir, stateRoot);
+  const authPath = resolveAuthPath(agentDir, options.authPath);
   return {
     config,
     configPath,
     modelSpec,
     agentDir,
+    workspace,
     stateRoot,
     authPath,
     tools,
@@ -143,13 +141,14 @@ export async function resolveWorkspaceAssembly(
 }
 
 /**
- * "Point at a workspace → agent": load the config, resolve model and tools, then L2. Throws a clear
- * error when no model source is set (fail visibly at startup). Returns everything an entry point needs
- * to report what it assembled.
+ * "Point at a directory → agent": resolve the placement (`dir` may be either end — the workspace or
+ * the agent dir itself), load the config, resolve model and tools, then L2. Throws a clear error when
+ * no model source is set (fail visibly at startup). Returns everything an entry point needs to report
+ * what it assembled.
  */
-export async function createPiAgentFromWorkspace(
+export async function createPiAgentFromDir(
   dir: string,
-  options: CreatePiAgentFromWorkspaceOptions = {},
+  options: CreatePiAgentFromDirOptions = {},
 ): Promise<{
   agent: Agent;
   definition: LoadedDefinition;
@@ -157,9 +156,11 @@ export async function createPiAgentFromWorkspace(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
-  /** Absolute agent-definition dir in use (config.agentDir resolved against dir; = dir when unset). Channels/tools/persona come from here. */
+  /** Absolute agent dir in use — channels/tools/persona come from here. */
   agentDir: string;
-  /** Absolute state root in use (FASTAGENT_STATE_DIR > <dir>/.fastagent) — the ChannelContext's stateRoot. */
+  /** Absolute workspace in use — the agent's cwd: ALWAYS the directory that was pointed at. */
+  workspace: string;
+  /** Absolute state root in use (FASTAGENT_STATE_DIR > <agentDir>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
@@ -167,7 +168,7 @@ export async function createPiAgentFromWorkspace(
   authPath: string;
   /** The session store in use — also a {@link PiSessionReader}. */
   sessions: PiSessionStore & PiSessionReader;
-  /** The observation plane over this workspace's sessions; present iff `options.sessionControl`. */
+  /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
    *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
@@ -183,6 +184,7 @@ export async function createPiAgentFromWorkspace(
     configPath,
     modelSpec,
     agentDir,
+    workspace,
     stateRoot,
     authPath,
     tools,
@@ -190,13 +192,13 @@ export async function createPiAgentFromWorkspace(
     deferredToolNames,
     toolCollisions,
     toolFailures,
-  } = await resolveWorkspaceAssembly(dir, options);
+  } = await resolveAgentAssembly(dir, options);
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND
-  // the author opted into self-scheduling (config.selfSchedule). The workspace's own `wake` wins if defined.
+  // the author opted into self-scheduling (config.selfSchedule). The agent's own `wake` wins if defined.
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
-  const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: dir });
+  const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: workspace });
   // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
   // needs the store; the agent needs the hub's observer). Boundary parts (models/factory/lease)
   // only exist after the assembly below — the hub takes them as a lazy thunk, filled by the
@@ -226,7 +228,7 @@ export async function createPiAgentFromWorkspace(
   const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,
-    cwd: dir,
+    cwd: workspace,
     tools: mountedTools,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
@@ -248,6 +250,7 @@ export async function createPiAgentFromWorkspace(
     sessions,
     sessionControl: hub?.control,
     agentDir,
+    workspace,
     config,
     configPath,
     modelSpec,

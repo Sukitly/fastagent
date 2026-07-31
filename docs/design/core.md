@@ -34,41 +34,151 @@ Engine-neutral consumers use `/core`.
 
 ## 2. Workspace shape and prompt assembly
 
-A flat workspace uses one root for both the run directory and the agent definition:
+There is ONE agent shape and ONE marker. The shape:
 
 ```txt
-workspace/
+<agent dir>/                # any name — the config below is what makes it an agent
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
 ├── skills/
 ├── tools/
 ├── channels/
 ├── schedules/
-├── fastagent.config.mjs
-└── .fastagent/             # machine state, gitignored
+├── fastagent.config.mjs    # THE marker
+├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .state, a stray .env
+├── .secrets/               # secrets: .env + auth.json, behind their own .gitignore (only .env.example travels)
+└── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
-When an existing repository already owns names such as `tools/` or has its own build/deploy files,
-`config.agentDir` moves the agent surface into a subdirectory while the repository remains the working
-directory:
+The other noun is the WORKSPACE — what the agent works ON: its cwd, its coding tools' root, deploy's
+build context, and whose `AGENTS.md` ancestors are ② context.
+
+**The workspace is the directory you point fastagent at.** That is the whole rule, and it means the same
+tree answers two ways depending on where you aim it:
 
 ```txt
-repo/
+repo/                       # `fastagent dev` here  → agent = repo/agent, workspace = repo
 ├── AGENTS.md
-├── fastagent.config.mjs    # { agentDir: "./agent" }
-└── agent/
-    ├── persona.md
-    ├── skills/
-    ├── tools/
-    └── channels/
+├── src/
+└── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo/agent
+    ├── persona.md  skills/  tools/  channels/  schedules/
+    ├── fastagent.config.mjs
+    └── .secrets/  .state/
 ```
+
+Neither reading is wrong. Point at the project and its agent serves with the project as its workspace
+(what `init` sets up, and the common case). Point at the agent directory — all a deployed box may have
+been shipped — and it works on itself; a rule insisting the workspace is always the parent would hand
+that container `/`. The same holds when the agent directory IS the project (`init --flat`: a standalone
+agent repo, a monorepo package), where the agent's `read`/`write`/`bash` tools operate on its own
+definition. That is not a separate placement mode; it is the one rule with the two directories equal.
+
+| `dir` | Result |
+|---|---|
+| holds a `fastagent.config.*` | `{ agentDir: dir, workspace: dir }` |
+| exactly one directory inside it holds one | `{ agentDir: <that dir>, workspace: dir }` |
+| several do | `FASTAGENT_AGENT` names one, else the one named `fastagent` — else throws, naming them |
+| none | throws: not a fastagent agent, with the exit that fits the position |
+
+- **The marker is the config, at every position — and it is a DECLARATION, not configuration.** Nothing
+  in an agent directory is logically required to serve a turn (the model can come from `--model`, the
+  tools default from pi, the loop is fastagent); what a directory must do is SAY it is an agent, because
+  the alternative is guessing. `export default {}` is a signature. So the marker has to be the one
+  artifact present in EVERY agent and absent from every non-agent: `persona.md`, `skills/`, `tools/`,
+  `channels/` and `schedules/` are each optional by design, and generic enough that scanning for them
+  would read half the world's repositories as agents. Only the config qualifies — the same job
+  `package.json`, `Cargo.toml`, `go.mod` and `pyproject.toml` do for their tools, none of which sniff for
+  evidence or make the manifest optional. An agent directory needs no reserved name either
+  (`--agent-dir` calls it anything), and a directory holding nothing but a config IS a complete agent.
+- **The scan is ONE level.** Deeper is that directory's own workspace, not this one's agent: for
+  `repo/packages/reviewer/` you point at the package (or run from inside it), and it works on itself.
+- Resolution never walks UP (an agent must not be claimed from arbitrarily deep inside it), but the
+  REFUSAL reads the path so each dead end gets its own exit: inside an agent → `cd` to it; on a
+  directory holding several → point at one.
+- **The cost of aiming being load-bearing** is that `cd agent && fastagent dev` narrows the workspace to
+  the agent's own directory. Three things carry it: `dev`/`start`/`info` print `agent:` and `workspace:`
+  on every run; the explicit form (`fastagent dev ..`) is always exact; and when the parent carries an
+  `AGENTS.md` or a `.git`, the report adds a `hint:` line pointing at it. A hint may use that heuristic
+  precisely because a RULE may not.
+
+`init` mirrors the same discipline — it either creates, or refuses with the reason. Its one placement
+duty follows from the lookup: **the target must be an agent the lookup would return**, so `init` refuses
+when `dir` already resolves over something else (a config AT `dir` beats anything inside it; a second
+sibling agent would make `dir` name neither). Beyond that, a SUBDIRECTORY target must be empty (content
+there is an unfinished agent or something unrelated, and landing persona.md beside it would be a silent
+mix), while `--agent-dir .` is a directory being adopted — content is expected, so every existing file is
+KEPT (reported, never overwritten, never verified).
+
+The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret
+store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
+point both at it in a container).
+
+**Git is the author's, not fastagent's — with one stated exception.** `init` scaffolds two ignore files:
+the agent's own (`node_modules`, `.state`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the
+template). No command reads, verifies or rewrites an ignore file, ever. The exception is narrow and
+one-directional: **the directory fastagent writes secrets into carries its own `.gitignore`** — so
+`add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`, never over an existing
+one) when the DEFAULT `<agentDir>/.secrets` has none — the reachable case being a hand-made agent. The
+accepted cost: someone who deleted that file to track secrets deliberately gets it back once. The risk
+is not symmetric — that is an annoyance, the other way is a published credential. The two ignore files
+are split because the root one is the file an author has reason to edit: git's nested-ignore precedence
+keeps the credentials protected whatever happens to it.
+
+The exception stops at fastagent's OWN directory. A secrets dir named by `FASTAGENT_SECRETS_DIR` belongs
+to the operator, and the template is `*` plus two negations — dropping it there would hide that
+directory's other contents from their `git add`, a bigger harm than the one it prevents and inflicted on
+a path they chose deliberately. `add <channel>` states the fact instead and lets them own it.
+
+What was deleted, then, is fastagent MANAGING ignore files: unconditionally, from
+several commands, behind a decision procedure ("is this path under a directory we control?") that
+approximated git's own semantics with containment comparisons against a different anchor per command. It
+produced four reversals of the same predicate in review, and could ABORT `login` over an ignore file the
+author had edited. The question it was approximating — "will git see this?" — has exactly one authority,
+and users configure their own ignore rules. What remains is one write, from one command, at the moment a
+credential is created, and never over an existing file.
+
+(“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
+see docs/embedding.md.)
+
+**Known boundary (accepted, documented):** the workspace is `agentDir` itself or its immediate parent —
+never further, because the lookup only ever finds an agent at the directory you named or one level
+inside it. Reaching an agent two levels down means pointing at the level above it.
+
+**Several agents on ONE workspace** is a supported shape, not a collision: an engineer's, a PM's and a
+content owner's agent can each drive the same repository, all with that repository as their workspace.
+`FASTAGENT_AGENT` selects between them, and the directory named `fastagent` (the `init` default) breaks
+the tie when nothing else does.
+
+Two properties of that, both choices:
+
+- **The env selects, a file does not.** Selection is per-PERSON — that is the whole scenario — and a
+  committed workspace file is shared by construction, so it cannot express "mine". The per-repo,
+  per-person file this needs already exists and is not ours to invent: `.envrc`
+  (`export FASTAGENT_AGENT=pm`), committed for a shared default or ignored for a personal one. A
+  workspace-level REGISTRY was considered and rejected for a second reason too: the one-level scan
+  already answers "which agents are here", so a list could only drift from it — and it would centralize
+  what the scan decentralizes (adding an agent means creating a directory, not editing a file three
+  teams share).
+- **It ASSERTS, at any count.** A directory holding no agent by that name resolves to nothing, even
+  when exactly one agent is sitting there: serving a DIFFERENT agent than the one asked for is the
+  silent wrong-target refused everywhere else here, and a rule that changed meaning with the sibling
+  count would be worse than the cost it avoids. Stated cost: a value exported in a shell PROFILE
+  refuses in every unrelated directory it travels into — scope it per-repo, which the refusal says.
+- **`deploy` bakes it.** The container re-resolves placement at `/app`, and a workspace holding several
+  agents ships all of them (the build context is the whole tree), so the generated Dockerfile pins
+  `ENV FASTAGENT_AGENT=<name>`. Without it the image would pick by its own rules rather than by the
+  deploy — the artifact depending on the builder's environment, which is what it must never do.
+- **The default NAME breaking the tie is the one place a directory name carries weight**, and it is
+  deliberately not an identity rule: the config alone says what IS an agent, the name only decides which
+  already-identified one answers. It buys that adding a second agent to a working `<workspace>/fastagent/`
+  setup does not break the command everyone already types.
 
 The pi reference prompt has four segments:
 
 | Segment | Source |
 |---|---|
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
-| ② project context | `AGENTS.md` files loaded by pi from `agentDir` and the cwd ancestor walk |
+| ② project context | `AGENTS.md` files loaded by pi from the agent dir and the workspace ancestor walk |
 | ③ skills listing | definition-local Agent Skills |
 | ④ runtime context | cwd only — no date, deliberately: a date line would invalidate the provider prefix cache at every day boundary (mirrors pi ≥0.80.7) |
 
@@ -89,9 +199,9 @@ The pi reference implementation has three reusable rungs:
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromWorkspace` sits above L2. It loads config, resolves `agentDir`, model, auth, tools,
-sessions, and state paths. `dev`, `start`, `invoke`, and `fire` share this assembly rather than carrying
-parallel implementations.
+`createPiAgentFromDir` sits above L2. It resolves the placement (`resolvePlacement`), config,
+model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
+assembly rather than carrying parallel implementations.
 
 Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
 continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
@@ -212,7 +322,7 @@ modules or opening connections, so top-level module construction must not requir
 adapter owns reconnects; `AbortSignal` is the sole shutdown command, while `ready` and `closed` expose
 lifecycle observation without a second `close()` path.
 
-Enabled workspace channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming a
+Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming a
 file to `telegram.ts.disabled` disables it without adding a second config source.
 
 The loader collects all per-file diagnostics, but `dev` / `start` treats any broken enabled channel or
@@ -230,7 +340,7 @@ listener, force-closes active HTTP streams, and has a bounded exit fallback so s
 ### GitHub
 
 The GitHub adapter verifies the HMAC over the capped raw body, maps a verified delivery through the
-workspace's `on(event)` policy, acknowledges with 202, and runs turns in the process. It has no durable
+agent's `on(event)` policy, acknowledges with 202, and runs turns in the process. It has no durable
 post-ACK replay; an interrupted review is lost and logged.
 
 ### Telegram
@@ -314,7 +424,7 @@ wire formats, but Lark international trails Feishu in app creation and applicati
 `src/channels/feishu/cloud.ts` record those capability differences. A kind still owns its channel
 identity, env, state, logs, and onboarding: `feishuChannel` returns `POST /feishu`, while
 `feishuWebSocketChannel` returns a long-connection module; the Lark factories mirror those boundaries
-without becoming the core. Both share `channels/<kind>/` state and the same event engine. One workspace
+without becoming the core. Both share `channels/<kind>/` state and the same event engine. One agent
 can run both clouds. Outbound APIs and webhook protocol handling remain fetch-based; WebSocket ingress is
 isolated behind the official `@larksuiteoapi/node-sdk` because its protobuf connection protocol is not
 a stable hand-authored surface. What is platform-different:
@@ -427,14 +537,17 @@ would silently miss clock events.
 `FASTAGENT_STATE_DIR` selects the one machine-state root:
 
 ```txt
-<stateRoot>/
-├── auth.json
+<stateRoot>/                # <agent dir>/.state (FASTAGENT_STATE_DIR overrides)
 ├── sessions/
 ├── channels/telegram/
 ├── channels/slack/
 ├── channels/feishu/
 └── schedule/
 ```
+
+Credentials live separately, under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides):
+a different deploy lifecycle — secrets ride the host's secret store / the auth seed, state rides the
+volume; a deployed box points both env knobs at its volume so a rotated OAuth credential persists.
 
 The shipped file-backed implementations are single-process. Multiple instances require shared session,
 lease, credential, and channel-state backends; sharing one local state directory between processes is
@@ -444,8 +557,19 @@ unsupported.
 wiring, required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one
 app service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
-Quick Tunnel URL and registers webhooks. The `agentDir` repo-as-workspace recipe remains experimental;
-`--run` stays gated for every target pending explicit end-to-end validation of that layout.
+Quick Tunnel URL and registers webhooks. Deploy has ONE semantic — bake the
+workspace as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Every artifact
+(Dockerfile, fly.toml, compose, railway.json) sits under ONE derived value, the agent prefix: the agent
+directory's name plus a slash when it sits inside the workspace, `""` when the agent IS the workspace.
+When they differ, the single write outside the agent is the workspace-root `.dockerignore` the host CLIs'
+context packers require (kept if the workspace owns one — when they are the same directory that file is
+the agent's own artifact and is
+refreshed like the rest; preflight then ASKS that file — through the `ignore` matcher, with dockerignore's
+root-anchoring applied — whether it would drop the agent dir or ship `fastagent/.secrets/auth.json`:
+either gates `--run`, else warn). `.git`
+ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
+deploy machinery — the git binary is baked in exactly when the workspace ships a `.git`; a non-git
+workspace adds it via `config.deploy.apt`.
 
 **AgentCore** (AWS Bedrock AgentCore Runtime) differs from the resident-box hosts in kind: the platform
 has no public URL (ingress is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute
@@ -509,10 +633,10 @@ The following are explicit limits, not implied capabilities:
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
 - GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
-- the repo-as-workspace deploy path is experimental;
 - the AgentCore target has no resident process: long-connection channels are unsupported there, and
   a wake-up set in a direct-invoke session (outside the ingress surface) fires only while that
   session's compute is awake;
+
 - observability is logs/traces, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.

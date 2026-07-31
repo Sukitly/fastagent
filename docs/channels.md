@@ -26,11 +26,11 @@ A channel decides:
 - what prompt text/images/files to pass,
 - how to acknowledge or reply to the external system.
 
-The agent remains the same assembled workspace.
+The agent remains the same assembled agent.
 
 ## Workspace discovery
 
-A workspace declares channels with files under `channels/`:
+An agent declares channels with files under `channels/`:
 
 ```txt
 channels/
@@ -78,7 +78,7 @@ through `AbortSignal`, and report first readiness plus terminal closure through 
 
 With no enabled channel files, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
 A channel file is enabled by its importable extension (`.ts`, `.js`, or `.mjs`); rename it to, for
-example, `telegram.ts.disabled` to keep it in the workspace without mounting it. A declared channel that
+example, `telegram.ts.disabled` to keep it in the agent without mounting it. A declared channel that
 fails to load, or overlaps another channel's route, makes `dev` / `start` fail — it never silently
 disappears or triggers the `/invoke` fallback.
 
@@ -192,9 +192,9 @@ A channel usually has two layers:
 | Layer | Reusable? | Example |
 |---|---|---|
 | Adapter | yes | verify a GitHub signature, parse a Telegram update, call an SDK |
-| Glue | workspace-specific | map one event to `{ session, text }`, choose routing policy |
+| Glue | agent-specific | map one event to `{ session, text }`, choose routing policy |
 
-Keep transport mechanics in reusable adapters. Keep product/agent policy in the workspace's `channels/*.ts` file.
+Keep transport mechanics in reusable adapters. Keep product/agent policy in the agent's `channels/*.ts` file.
 
 ## Local webhook development
 
@@ -227,7 +227,7 @@ Heavy or long-tail adapters should live outside `@fastagent-sh/fastagent`:
 }
 ```
 
-The user's workspace installs the adapter and wires it with a channel file:
+The user's agent installs the adapter and wires it with a channel file:
 
 ```ts
 import { acmeChannel } from "fastagent-channel-acme";

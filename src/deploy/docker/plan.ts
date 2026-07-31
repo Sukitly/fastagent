@@ -28,7 +28,7 @@ export interface DockerPlanInput extends ContainerInput {
 export interface DockerPlan {
   /** fastagent.compose.yml + the shared Dockerfile/ignore artifacts. */
   artifacts: Artifact[];
-  /** Compose file path relative to the workspace root (namespaced for agentDir layouts). */
+  /** Compose file path relative to the workspace root (under the agent prefix). */
   composePath: string;
   /** Ordered local build/run/operate instructions. */
   runbook: string[];
@@ -79,23 +79,16 @@ function composeInterpolation(name: string): string {
   return `\${${name}:-}`;
 }
 
-/** Relative path from the namespaced Compose file's directory back to the workspace/build root. */
-function buildContext(kitDir?: string): string {
-  if (!kitDir) return ".";
-  return kitDir
-    .split("/")
-    .map(() => "..")
-    .join("/");
-}
-
 function composeYaml(input: DockerPlanInput): string {
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
   // Always leave the auth-seed seam in the committed topology. `--run` uses it for OAuth/stored auth;
   // it is empty otherwise. Values never land in this file — Compose interpolates them at invocation.
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
-  const context = buildContext(input.kitDir);
-  const dockerfile = input.kitDir ? `${input.kitDir}/Dockerfile` : "Dockerfile";
+  // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the
+  // WORKSPACE, so it climbs back out of the prefix (`..` per level, `.` when there is none).
+  const context = input.agentPrefix ? ".." : ".";
+  const dockerfile = `${input.agentPrefix}Dockerfile`;
   const tunnelService = input.tunnel
     ? `
   # Cloudflare Quick Tunnel: ephemeral URL, generated only with \`deploy docker --tunnel\`.
@@ -131,7 +124,9 @@ services:
       - "127.0.0.1:${input.port}:${input.port}"
     environment:
       PORT: "${input.port}"
-      FASTAGENT_STATE_DIR: "${MOUNT}"
+      # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets.
+      FASTAGENT_STATE_DIR: "${MOUNT}/.state"
+      FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
 ${secretEnv}
     volumes:
       - state:${MOUNT}
@@ -144,7 +139,7 @@ volumes:
 
 /** Compute local-Docker artifacts + the runbook; no Docker process is touched here. */
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
-  const composePath = input.kitDir ? `${input.kitDir}/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
+  const composePath = `${input.agentPrefix}${DOCKER_COMPOSE_FILE}`;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
   const compose = `docker compose -f ${composePath}`;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
@@ -161,7 +156,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   if (required.length > 0) {
     runbook.push(
-      `# Required environment values (put them in the workspace .env or export them):`,
+      `# Required environment values (put them in the agent's .secrets/.env or export them):`,
       ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
     );
   }
@@ -177,12 +172,13 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     );
   }
 
-  if (input.kitDir) {
-    runbook.push(
-      `# Repo-as-workspace: run from the REPO ROOT. Compose lives under ${input.kitDir}/ but builds`,
-      `# the whole repository; only the kit's dependencies are installed by ${input.kitDir}/Dockerfile.`,
-    );
-  }
+  runbook.push(
+    input.agentPrefix
+      ? `# Run from the WORKSPACE ROOT (the directory containing ${input.agentPrefix}).`
+      : `# Run from this directory — it is both the agent and its workspace.`,
+    `# The build bakes the whole directory as the agent's workspace; only the agent's own`,
+    `# dependencies (${input.agentPrefix}package.json) are installed.`,
+  );
 
   runbook.push(
     ``,

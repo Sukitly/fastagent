@@ -36,6 +36,7 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   runtime: "node",
   hasLockfile: false,
   version: "0.15.0",
+  agentPrefix: "",
   ...over,
 });
 
@@ -116,7 +117,12 @@ describe("deploy agentcore: cron translation", () => {
 describe("deploy agentcore: the plan", () => {
   it("pure-invoke shape: template only (no forwarder, no schedules), lean runbook", () => {
     const plan = planAgentcoreDeploy(baseInput());
-    expect(plan.artifacts.map((a) => a.path)).toEqual([TEMPLATE_FILE, "Dockerfile", ".dockerignore"]);
+    expect(plan.artifacts.map((a) => a.path)).toEqual([
+      TEMPLATE_FILE,
+      "Dockerfile",
+      ".dockerignore",
+      "Dockerfile.dockerignore",
+    ]);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::BedrockAgentCore::Runtime");
     expect(template).toContain("AgentRuntimeName: my_agent");
@@ -209,7 +215,7 @@ describe("deploy agentcore: the plan", () => {
 
   it("kit layout namespaces the template + forwarder under the kit", () => {
     const plan = planAgentcoreDeploy(
-      baseInput({ kitDir: "agent", routeChannels: ["telegram"], channels: ["telegram"] }),
+      baseInput({ agentPrefix: "agent/", routeChannels: ["telegram"], channels: ["telegram"] }),
     );
     const paths = plan.artifacts.map((a) => a.path);
     expect(paths).toContain(`agent/${TEMPLATE_FILE}`);

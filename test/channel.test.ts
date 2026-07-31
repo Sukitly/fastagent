@@ -138,7 +138,7 @@ describe("loadChannels (filesystem discovery)", () => {
     const ext = await freshDir();
     await mkdir(join(ext, "ch"));
     await symlink(join(ext, "ch"), join(esc, "channels"));
-    await expect(loadChannels(esc, fakeCtx)).rejects.toThrow(/outside the workspace/);
+    await expect(loadChannels(esc, fakeCtx)).rejects.toThrow(/outside the agent dir/);
   });
 
   it("loads an explicit long-connection module without manufacturing route/mount metadata", async () => {
@@ -258,6 +258,6 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     const ext = await freshDir();
     await mkdir(join(ext, "ch"));
     await symlink(join(ext, "ch"), join(dir, "channels"));
-    await expect(discoverChannelFiles(dir)).rejects.toThrow(/outside the workspace/);
+    await expect(discoverChannelFiles(dir)).rejects.toThrow(/outside the agent dir/);
   });
 });

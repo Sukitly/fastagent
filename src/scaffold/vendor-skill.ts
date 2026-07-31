@@ -1,5 +1,5 @@
 /**
- * `fastagent add skill <source>`: vendor an Agent Skills skill into `<workspace>/skills/<name>/` —
+ * `fastagent add skill <source>`: vendor an Agent Skills skill into `<agent dir>/skills/<name>/` —
  * copy-in, git-tracked, never a runtime registry. Source is a giget ref (github default), a local
  * path, or a bare name (resolved against the local global skill dirs as an add-time copy source only).
  * Fetch → staging → validate → rollback-protected replace, so a bad fetch never destroys an existing
@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { type LoadedDefinition, loadAgentDefinition } from "../engines/pi/definition.ts";
-import { assertInsideWorkspace } from "../workspace.ts";
+import { assertInsideAgentDir } from "../paths.ts";
 
 /** Derive the destination skill name from a source ref: the last path segment, sans `#ref`. */
 function skillNameFromSource(source: string): string {
@@ -20,12 +20,12 @@ function skillNameFromSource(source: string): string {
 }
 
 /**
- * The skills/ path must be safe to write through: never follow a symlink that escapes the workspace
+ * The skills/ path must be safe to write through: never follow a symlink that escapes the agent dir
  * (mkdir would), and reject a plain file with one clear message.
  */
-async function assertSkillsDirUsable(workspaceDir: string): Promise<void> {
-  await assertInsideWorkspace(workspaceDir, "skills");
-  const skillsDir = join(workspaceDir, "skills");
+async function assertSkillsDirUsable(agentDir: string): Promise<void> {
+  await assertInsideAgentDir(agentDir, "skills");
+  const skillsDir = join(agentDir, "skills");
   const st = await stat(skillsDir).catch(() => undefined);
   if (st && !st.isDirectory()) {
     throw new Error(`${skillsDir} exists and is not a directory — remove it (skills must be a directory)`);
@@ -66,14 +66,14 @@ export interface VendoredSkill {
 }
 
 /**
- * Vendor an Agent Skills skill into `<workspace>/skills/<name>/` from a giget ref (github default), a
+ * Vendor an Agent Skills skill into `<agent dir>/skills/<name>/` from a giget ref (github default), a
  * local path, or a bare name (resolved against the local global skill dirs). Copy-in, git-tracked.
  * Refuses to overwrite unless `options.update` (then a plain git-tracked overwrite, never a merge).
  * Validates a staging copy with the runtime loader BEFORE replacing, so a bad fetch never destroys an
  * existing skill.
  */
 export async function vendorSkill(
-  workspaceDir: string,
+  agentDir: string,
   source: string,
   options: { update?: boolean } = {},
 ): Promise<VendoredSkill> {
@@ -81,8 +81,8 @@ export async function vendorSkill(
   if (name === "" || name === "." || name === "..") {
     throw new Error(`cannot derive a skill name from "${source}" — point at a skill directory (…/skills/<name>)`);
   }
-  const skillsDir = join(workspaceDir, "skills");
-  await assertSkillsDirUsable(workspaceDir);
+  const skillsDir = join(agentDir, "skills");
+  await assertSkillsDirUsable(agentDir);
   const dest = join(skillsDir, name);
   // A process can die between moving the old skill aside and installing staging. Never guess that an
   // arbitrary hidden directory is ours or delete it: stop with the exact backup path for manual restore.
@@ -166,15 +166,15 @@ export async function vendorSkill(
 
   // Report via the runtime loader, matching THIS skill by EXACT directory (a substring match would
   // prefix-pollute a sibling `<name>-x` and break on Windows path separators).
-  const def = await loadAgentDefinition(workspaceDir);
+  const def = await loadAgentDefinition(agentDir);
   const rel = join("skills", name);
-  const skill = def.skills.find((sk) => relative(workspaceDir, dirname(sk.filePath)) === rel);
+  const skill = def.skills.find((sk) => relative(agentDir, dirname(sk.filePath)) === rel);
   return {
     name: skill?.name ?? name,
     description: skill?.description,
     dest: rel,
     hasScripts: existsSync(join(dest, "scripts")),
-    diagnostics: def.diagnostics.filter((d) => d.path !== undefined && relative(workspaceDir, dirname(d.path)) === rel),
+    diagnostics: def.diagnostics.filter((d) => d.path !== undefined && relative(agentDir, dirname(d.path)) === rel),
     overwritten,
   };
 }

@@ -8,9 +8,12 @@ import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
-import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveStateRoot } from "../../engines/pi/config.ts";
+import { dotEnvPath, loadDotEnv } from "../../env.ts";
+import { resolveStateRoot } from "../../paths.ts";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
+import { isUnderDir } from "../../engines/pi/definition.ts";
+import { displayPath } from "../../paths.ts";
 import {
   type ChannelKind,
   type GroupBehavior,
@@ -22,10 +25,9 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "../../scaffold/add-channel.ts";
-import { exists } from "../../scaffold/init.ts";
+import { exists } from "../../paths.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
-import { loadRootIgnore } from "../../workspace.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 export async function runAddChannel(
@@ -33,11 +35,24 @@ export async function runAddChannel(
   dirArg: string,
   opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
-  const target = resolve(dirArg);
+  // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
+  // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
+  // Flag conflicts first: a bad combination is a USAGE error (exit 2), and reporting it must not depend
+  // on the directory being an agent (a runtime/environment failure, exit 1) — the same order start/tool
+  // follow.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
+  const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
+  // Paths are printed to someone standing in their CWD, usually the workspace, while every file
+  // belongs to the AGENT dir — prefix them, or they point at nothing. `displayPath` owns the
+  // relative-vs-absolute policy (shared with `init`). The `.env` label names the file actually
+  // WRITTEN (FASTAGENT_SECRETS_DIR relocates it, possibly out of the agent), never the default spelling.
+  const agentFromCwd = displayPath(process.cwd(), target);
+  const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
+  const envPath = dotEnvPath(target);
+  const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
   // and only path there). The retired --create-app spelling gets a pointer, not silence.
   if (opts.createApp) {
@@ -53,18 +68,13 @@ export async function runAddChannel(
       failStartup(new Error("--create-app is retired — app creation is the default behavior of `add feishu`"));
     }
   }
-  // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
-  // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
-  // hygiene stay at the run root, where .env is actually read.
-  const { config: addConfig } = await loadConfig(target).catch(failStartup);
-  const channelHome = resolveAgentDir(target, addConfig);
   // Preconditions before the write, so a refusal is side-effect-free. slack/feishu/lark are exceptions:
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
   // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
-  const file = join(channelHome, "channels", `${channelKind}.ts`);
-  const slackToolFile = join(channelHome, "tools", "slack-send.ts");
+  const file = join(target, "channels", `${channelKind}.ts`);
+  const slackToolFile = join(target, "tools", "slack-send.ts");
   const slackToolExisted = channelKind === "slack" ? await exists(slackToolFile) : false;
-  const existsAlready = await channelExists(channelHome, channelKind).catch(failStartup);
+  const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
   const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
@@ -73,27 +83,15 @@ export async function runAddChannel(
     }
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
-    await assertChannelReady(channelHome).catch(failStartup);
-    await scaffoldChannel(channelHome, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(
-      failStartup,
-    );
+    await assertChannelReady(target).catch(failStartup);
+    await scaffoldChannel(target, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
     if (channelKind === "slack") {
       console.error(`[fastagent] ${slackToolExisted ? "kept existing" : "created"} ${relative(target, slackToolFile)}`);
     }
   }
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
-    console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
-  }
-  // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
-  // written into `.env` — but only when `.env` is already gitignored: the CLI must never materialize a
-  // secret into a committable file. Warn, not refuse, when it is exposed — channel glue may read a real
-  // env var instead.
-  const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
-  if (!envIgnored) {
-    console.error(
-      `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
-    );
+    console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
   }
   // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
   // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
@@ -103,21 +101,20 @@ export async function runAddChannel(
     created = await onboardSlackInternalApp({
       target,
       stateRoot: resolveStateRoot(target),
-      envIgnored,
       groupBehavior,
       replaceConfig: opts.replaceConfig,
     })
       .then(() => undefined)
       .catch(failStartup);
   } else if (channelKind === "feishu" || channelKind === "lark") {
-    created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress, groupBehavior).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, ingress, groupBehavior).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          "Slack internal app created/configured/installed through OAuth; runtime credentials are in .env",
+          `Slack internal app created/configured/installed through OAuth; runtime credentials are in ${envLabel}`,
           "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
           "invite the app to every channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
@@ -129,41 +126,47 @@ export async function runAddChannel(
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
   // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
   // Feishu's irreversible credentials were already staged inside add-feishu.ts before bootstrap.
-  const dotEnv = envIgnored
-    ? await appendChannelDotEnv(
-        target,
-        channelKind,
-        { ...generated, ...created },
-        Object.keys(created ?? {}),
-        ingress,
-      ).catch(failStartup)
-    : undefined;
-  if (dotEnv && dotEnv.written.length > 0) {
-    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
+  const dotEnv = await appendChannelDotEnv(
+    target,
+    channelKind,
+    { ...generated, ...created },
+    Object.keys(created ?? {}),
+    ingress,
+  ).catch(failStartup);
+  if (dotEnv.unprotectedSecretsDir) {
+    console.error(
+      `[fastagent] note: ${dotEnv.unprotectedSecretsDir} (FASTAGENT_SECRETS_DIR) now holds a secret and has ` +
+        `no .gitignore — that directory is yours, so fastagent will not write one into it. Make sure git ` +
+        `does not track what is in there.`,
+    );
+  }
+  if (dotEnv.written.length > 0) {
+    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to ${envLabel}`);
   }
   const install =
-    detectRuntime(channelHome, await readPackageJson(channelHome)).runtime === "bun" ? "bun install" : "npm install";
-  // The kit's manifest lives in channelHome (agentDir when set) — point the install there, not the run root.
-  const installCmd = channelHome === target ? install : `(cd ${relative(target, channelHome)} && ${install})`;
+    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
   console.error(`  next steps:`);
-  console.error(`    ${installCmd}                      # if @fastagent-sh/fastagent is not installed yet`);
+  console.error(
+    `    ${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,
+  );
   for (const e of env) {
-    if (dotEnv?.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
-    if (dotEnv?.written.includes(e.name)) {
+    if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
+    if (dotEnv.written.includes(e.name)) {
       // Written, but its hint may still carry an action (github: paste the same value into the webhook
       // UI) — keep the variable visible instead of silently absorbing it.
-      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to .env   # ${e.hint}`);
+      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to ${envLabel}   # ${e.hint}`);
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
     const action = e.required ? "set" : "optionally set";
-    console.error(`    ${action} ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
+    console.error(`    ${action} ${e.name}${value} in ${envLabel}   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
-  // knowledge) — resolve them to the real workspace-relative locations (agentDir-aware) here.
-  const kitPrefix = channelHome === target ? "" : `${relative(target, channelHome)}/`;
+  // knowledge) — resolve them to the real agent-dir-relative locations here.
   for (const s of steps) {
-    console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
+    console.error(
+      `    ${s.replace("{channel}", inAgent(relative(target, file))).replace("{tools}", inAgent("tools"))}`,
+    );
   }
   if (ingress === "websocket") {
     console.error(`    fastagent dev            # no public URL or tunnel required`);
@@ -287,7 +290,7 @@ export async function runAddSkill(
   dirArg: string,
   opts: { update?: boolean },
 ): Promise<void> {
-  const target = resolve(dirArg);
+  const { agentDir: target } = placementOrExit(resolve(dirArg));
   if (!source) {
     // A missing source is a usage error (exit 2), but the guide is worth more than a bare
     // missing-argument line — the common path (writing your own skill) needs no command at all.
@@ -302,10 +305,8 @@ export async function runAddSkill(
         `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
   }
-  // Skills are agent surface — vendored into agentDir/skills (config.agentDir, or target when flat).
-  const { config: skillConfig } = await loadConfig(target).catch(failStartup);
-  const skillHome = resolveAgentDir(target, skillConfig);
-  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(skillHome, source, {
+  // Skills are agent surface — vendored into the agent dir's `skills/`.
+  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);
   console.error(`[fastagent] ${overwritten ? "updated" : "vendored"} skill "${name}" → ${dest}/`);

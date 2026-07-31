@@ -1,16 +1,15 @@
 /**
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
- * `.env.example` vars) into an existing workspace. `add` checks and guides; it never bootstraps a
- * workspace (that is `init`'s job). Each channel's template files live in its own bundle at
- * src/channels/<kind>/scaffold/, read here at scaffold time.
+ * `.secrets/.env.example` vars) into an existing agent. `add` checks and guides; it never
+ * bootstraps an agent (that is `init`'s job). Each channel's template files live in its own bundle
+ * at src/channels/<kind>/scaffold/, read here at scaffold time.
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { assertInsideWorkspace } from "../workspace.ts";
-import { channelBundleFiles, channelTemplate } from "./templates.ts";
-import { exists } from "./init.ts";
-import { parseEnvContent } from "../env.ts";
+import { SECRETS_DIRNAME, assertInsideAgentDir, exists } from "../paths.ts";
+import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
+import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
 export type ChannelKind = "github" | "telegram" | "slack" | "feishu" | "lark";
@@ -51,8 +50,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         generate: true,
       },
     ],
-    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real workspace-relative
-    // location (agentDir-aware) — the CLI holds no channel-private filenames.
+    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real agent-dir-relative
+    // location — the CLI holds no channel-private filenames.
     steps: [
       "edit {channel} — map events to intents in on()",
       "add the webhook in your repo (Settings → Webhooks): Payload URL = <public-url>/webhook, content type application/json",
@@ -232,7 +231,7 @@ export async function appendChannelEnv(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<boolean> {
-  const file = join(dir, ".env.example");
+  const file = envExamplePath(dir);
   let current: string;
   try {
     current = await readFile(file, "utf8");
@@ -257,6 +256,10 @@ export interface DotEnvWriteResult {
   written: string[];
   /** Vars already present with a non-empty active value; left untouched and omitted from next steps. */
   alreadySet: string[];
+  /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no
+   *  `.gitignore`: a secret was just written into a directory fastagent does not own, so the caller
+   *  states the fact rather than dropping a `*`-ignoring file into someone else's path. */
+  unprotectedSecretsDir?: string;
 }
 
 /** Whether `.env` content carries a non-empty ACTIVE value for `name` — decided by THE .env parser
@@ -272,8 +275,8 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Append generated channel secrets to the run-root `.env` (never `.env.example`) after the CLI has
- * verified that `.env` is gitignored. Existing non-empty values are kept — EXCEPT the names listed in
+ * Append generated channel secrets to the agent's `.env` (`.secrets/.env` — never `.env.example`)
+ * Existing non-empty values are kept — EXCEPT the names listed in
  * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
  * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
  * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is
@@ -286,7 +289,34 @@ export async function appendChannelDotEnv(
   overwrite: readonly string[] = [],
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
-  const file = join(dir, ".env");
+  const file = dotEnvPath(dir);
+  const secretsDir = dirname(file);
+  await mkdir(secretsDir, { recursive: true });
+  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into
+  // carries its own `.gitignore`. `init` writes it, and so does this — the reachable case where it is
+  // missing (a hand-made agent) is exactly the one where the next line mints an unrecoverable app
+  // secret. `wx`, so a file the author wrote is never touched; the accepted cost is that someone who
+  // DELETED it to track secrets deliberately gets it back once. The risk is not symmetric — that is an
+  // annoyance; the other way is a published credential.
+  //
+  // Scoped to the DEFAULT `<agentDir>/.secrets`, which is fastagent's own directory. A dir named by
+  // `FASTAGENT_SECRETS_DIR` belongs to the operator, and this template is `*` plus two negations —
+  // dropping it there would hide that directory's OTHER contents from their `git add`, which is a
+  // bigger harm than the one it prevents, and inflicted on a path they chose deliberately. They get the
+  // fact instead, and own the decision.
+  const owned = secretsDir === join(dir, SECRETS_DIRNAME);
+  let unprotectedSecretsDir: string | undefined;
+  if (owned) {
+    // Only EEXIST is tolerable (already protected, or a concurrent writer). A permission/disk failure on
+    // the file that keeps credentials out of git must surface, not be swallowed.
+    await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
+      (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EEXIST") throw e;
+      },
+    );
+  } else if (!(await exists(join(secretsDir, ".gitignore")))) {
+    unprotectedSecretsDir = secretsDir;
+  }
   let current = "";
   try {
     current = await readFile(file, "utf8");
@@ -344,7 +374,7 @@ export async function appendChannelDotEnv(
       await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`);
     }
   }
-  return { written, alreadySet };
+  return { written, alreadySet, unprotectedSecretsDir };
 }
 
 /** The path `add <kind>` scaffolds to. */
@@ -367,8 +397,8 @@ export async function scaffoldChannel(
   options: { ingress?: FeishuSubscriptionMode; groupBehavior?: GroupBehavior } = {},
 ): Promise<string> {
   const channelsDir = join(dir, "channels");
-  // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
-  await assertInsideWorkspace(dir, "channels");
+  // Don't write through a channels/ symlink that escapes the agent dir; one inside it is fine.
+  await assertInsideAgentDir(dir, "channels");
   const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
@@ -426,7 +456,7 @@ export async function scaffoldChannel(
 }
 
 /**
- * Verify the workspace is ready to host a channel: an ESM package.json that declares
+ * Verify the AGENT DIR is ready to host a channel: an ESM package.json that declares
  * `@fastagent-sh/fastagent` (the channel file imports it). `add` checks and guides, never bootstraps — that
  * is `init`'s job.
  */
@@ -437,12 +467,12 @@ export async function assertChannelReady(dir: string): Promise<void> {
     raw = await readFile(pkgPath, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      // `dir` is where the kit lives (agentDir when set) — "run init" is only the right advice when no
-      // workspace exists yet; a kit missing its manifest (e.g. a --minimal init) needs the manifest, not init.
+      // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it — the
+      // right remedy is the missing manifest (a --minimal init writes none), or init in the workspace.
       throw new Error(
-        `${dir}: no package.json — a channel adapter is code and needs the kit's own manifest. ` +
-          `Run \`fastagent init\` for a fresh workspace, or add a package.json with @fastagent-sh/fastagent there ` +
-          `(a --minimal init has none)`,
+        `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
+          `Add a package.json declaring @fastagent-sh/fastagent there (a --minimal init writes none), ` +
+          `or run \`fastagent init\` in the workspace for a fresh agent`,
       );
     }
     throw e;

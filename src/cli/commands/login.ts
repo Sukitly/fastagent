@@ -1,19 +1,25 @@
 /**
  * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
- * (`<cwd>/.fastagent/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`. The positional is
- * the PROVIDER (not a dir), so the project is cwd — `cd` into your agent before logging in (running it
- * from $HOME writes the global `~/.fastagent/auth.json`).
+ * (`<agentDir>/.secrets/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`. The
+ * positional is the PROVIDER (not a dir), so the agent resolves from cwd — `cd` into your agent
+ * before logging in. OUTSIDE an agent there is no project credential to write, so the target is the
+ * user-global `~/.fastagent/.secrets/auth.json` (which is what running it from $HOME has always
+ * meant) — announced on stderr BEFORE the flow, because that is a different credential than the one
+ * `dev`/`start` in a real agent would read, and a silent scope switch is exactly the surprise this
+ * command must not ship.
  *
- * Creates and self-ignores `<cwd>/.fastagent/` (the credential's gitignored home) BEFORE the auth flow,
- * so the secret can never land untracked — a flow that then fails (bad provider, abort) leaves that
- * empty state dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
+ * fastagent writes no `.gitignore` here or anywhere else at runtime: `init` scaffolds the agent's one
+ * ignore file (covering `.secrets/`) and the author owns it from then on. The credential store creates
+ * its own directory, mode 0700.
  */
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolveAuthPath, resolveStateRoot } from "../../engines/pi/config.ts";
-import { ensureStateRootSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
+import { resolveAuthPath } from "../../engines/pi/config.ts";
+import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
@@ -23,23 +29,33 @@ export interface LoginOptions {
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
-  const loginDir = process.cwd();
+  const cwd = process.cwd();
+  const agentDir = findAgentDir(cwd);
+  // "Outside an agent" must mean exactly that: a position with its own way out (inside an agent, or on a
+  // directory holding several) is a dead end every other command refuses, and taking the global fallback
+  // there would write a credential to a different scope under a message saying there is no agent here.
+  if (!agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
+  // Outside any agent the target is the user-global machinery home — handed over explicitly, so the
+  // path resolvers need no "is this $HOME?" special case to infer it.
+  const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
-  const stateRoot = resolveStateRoot(loginDir);
   const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
-  // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
-  // in the opener): on an adapted project dir, a `login` before the first dev/start would otherwise
-  // leave the secret untracked-but-committable. Unlike the opener (which populates the WHOLE root, so
-  // it always self-ignores an in-tree root), login writes ONLY auth.json — so guard iff the credential
-  // actually lands under the in-tree root. An external `--auth-path`/`FASTAGENT_AUTH_PATH` writes
-  // nothing in-tree (don't create an empty `.fastagent`); the guard also skips the HOME-global root.
-  if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(loginDir, stateRoot);
+  // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path,
+  // the credential lands somewhere no agent will read. An explicit `--auth-path`/FASTAGENT_AUTH_PATH
+  // is the user naming the file, so there is no surprise to announce (and announcing a path this run
+  // does not write would be worse than saying nothing). The resolved path goes in the message.
+  if (!agentDir && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
+    console.error(
+      `[fastagent] no agent here (no fastagent.config.*, here or one level inside) — ` +
+        `logging in GLOBALLY (${authPath}). An agent reads its own .secrets/auth.json: \`cd\` into one ` +
+        `first, or point this run at it with --auth-path.`,
+    );
+  }
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
   // prompts for a key). In a non-TTY (a pipe, CI, a coding-agent shell) the menu can't receive keystrokes
   // and would hang; --no-input asks for the same posture explicitly. Fail fast with the reason instead
-  // of stalling on an unanswerable prompt. (After the secret-hygiene self-ignore above, which is cheap
-  // prep, so a later terminal login is safe.)
+  // of stalling on an unanswerable prompt.
   if (opts.input === false || !isInteractive()) {
     failStartup(
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),

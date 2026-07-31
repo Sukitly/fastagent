@@ -6,7 +6,7 @@
  *   L1  createPiAgent(options)                       — assemble from typed parts (the canonical ctor).
  *   L0  createPiAgentFromHarness({ harnessFactory }) — in invoke.ts (its body is the turn mechanism).
  *
- * Above L2 sits the workspace opener createPiAgentFromWorkspace (workspace.ts), which both `dev` and
+ * Above L2 sits the agent opener createPiAgentFromDir (open.ts), which both `dev` and
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
  */
@@ -16,7 +16,8 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, defaultAuthPath, resolveModel, resolveStateRoot } from "./config.ts";
+import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
+import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
@@ -52,11 +53,11 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
 }
 
 /**
- * The full tool set a workspace mounts: pi defaults + `config.tools` + discovered `tools/` (deduped,
+ * The full tool set an agent mounts: pi defaults + `config.tools` + discovered `tools/` (deduped,
  * existing win), plus the non-default tool names and collisions to report. One source for the
  * dev/start openers AND `fastagent tool`, so they all mount exactly the same set.
  */
-export async function resolveWorkspaceTools(
+export async function resolveAgentTools(
   config: FastagentConfig,
   agentDir: string,
   cwd: string = agentDir,
@@ -69,13 +70,13 @@ export async function resolveWorkspaceTools(
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
-  // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the run root the agent operates on);
-  // discovered `tools/` come from `agentDir` (the agent's own surface). They coincide in the flat case.
+  // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the workspace the agent operates
+  // on); discovered `tools/` come from `agentDir` (the agent's own surface).
   const discovered = await loadTools(agentDir);
   const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
-  // The built-in `search_tools` loader mounts here — the one place the workspace's full tool set is
-  // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; a
-  // workspace-defined search_tools wins).
+  // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
+  // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; an
+  // agent-defined search_tools wins).
   const tools = withSearchTool(merged.tools);
   // Builtin = a search_tools that was ABSENT before withSearchTool (a reference compare would misfire
   // on the deferred-authored-loader case, where withSearchTool returns a new array without adding one).
@@ -131,7 +132,7 @@ export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } 
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
-  // (the standalone×code-repo cell's persona; core.md §11), keeping the tools list + guidelines below.
+  // (core.md §11), keeping the tools list + guidelines below.
   const identity =
     options.persona?.trim() ||
     "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
@@ -279,8 +280,8 @@ export interface CreatePiAgentOptions {
    */
   providers?: Provider[];
   /**
-   * Credentials file for stored OAuth/API-key auth. Defaults to `~/.fastagent/auth.json`; the
-   * directory opener passes the project-level `<dir>/.fastagent/auth.json` instead. Env vars are still
+   * Credentials file for stored OAuth/API-key auth. Defaults to `~/.fastagent/.secrets/auth.json`; the
+   * directory opener passes the project-level `<root>/.secrets/auth.json` instead. Env vars are still
    * consulted when a provider is absent from the file (resolution order is upstream-owned).
    */
   authPath?: string;
@@ -331,16 +332,16 @@ export interface CreatePiAgentFromDefinitionOptions {
   tools?: FastagentTool[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
-   * ② project context (AGENTS.md). Defaults to `dir` (flat: the definition dir is also the run root).
-   * Set it to the enclosing repo so a coding agent whose definition lives in `dir` operates on — and
-   * reads the AGENTS.md of — that repo (core.md scenario grid).
+   * ② project context (AGENTS.md). Defaults to `dir`. Set it to the enclosing repo so a coding agent
+   * whose definition lives in `dir` operates on — and reads the AGENTS.md of — that repo (core.md
+   * scenario grid); that is what the CLI's opener does with the workspace.
    */
   cwd?: string;
   /** Extra providers registered on top of the built-ins (your own gateway / self-hosted endpoint). */
   providers?: Provider[];
   /**
    * Credentials file (see {@link CreatePiAgentOptions.authPath}). Being dir-aware, this rung defaults
-   * to the PROJECT-level `<dir>/.fastagent/auth.json` (matching `fastagent dev`/`start` on the same
+   * to the PROJECT-level `<dir>/.secrets/auth.json` (matching `fastagent dev`/`start` on the same
    * dir) — unlike the dir-less {@link createPiAgent}/{@link createPiModels}, which default global.
    */
   authPath?: string;
@@ -388,9 +389,9 @@ export async function createPiAgentFromDefinition(
     model: options.model,
     thinkingLevel: options.thinkingLevel,
     providers: options.providers,
-    // Dir-aware default: the same state-root-derived file the opener uses for this dir (the opener
+    // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener
     // passes an explicit authPath, so this only affects direct L2 callers).
-    authPath: options.authPath ?? defaultAuthPath(resolveStateRoot(dir)),
+    authPath: options.authPath ?? defaultAuthPath(resolveSecretsDir(dir)),
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
     // edits (the author's, or the agent's own self-modification) take effect on the next turn with
     // no process restart — restarts are reserved for code (tools/channels/config, module cache).

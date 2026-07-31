@@ -271,7 +271,7 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
-    ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
+    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     // The participant model replaced the owned-thread index (a cache, so nothing is lost). REMOVE THIS
     // after the release following the participant model ships — by then no live deployment can still
     // be carrying the file. test/migration-deadline.test.ts fails when due.
