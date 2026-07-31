@@ -133,6 +133,13 @@ export async function runAddChannel(
     Object.keys(created ?? {}),
     ingress,
   ).catch(failStartup);
+  if (dotEnv.unprotectedSecretsDir) {
+    console.error(
+      `[fastagent] note: ${dotEnv.unprotectedSecretsDir} (FASTAGENT_SECRETS_DIR) now holds a secret and has ` +
+        `no .gitignore — that directory is yours, so fastagent will not write one into it. Make sure git ` +
+        `does not track what is in there.`,
+    );
+  }
   if (dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to ${envLabel}`);
   }

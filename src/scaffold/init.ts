@@ -54,14 +54,16 @@ export function agentDirName(raw: string | undefined): string {
 
 /** Why `name` cannot be an agent directory name, or undefined when it can. It must stay ONE segment
  *  inside the target: anything else (a separator, `..`, an absolute path) would land the agent where the
- *  one-level lookup cannot see it — an agent nothing would ever serve. Shared with the CLI, which reports
- *  it as the USAGE error it is (exit 2) rather than a runtime failure; the throw inside
- *  {@link scaffoldAgent} guards its own contract for programmatic callers. */
+ *  one-level lookup cannot see it — an agent nothing would ever serve.
+ *
+ *  Returns the CONSTRAINT, not a sentence: the CLI prefixes the flag it owns and reports it as the usage
+ *  error it is (exit 2), while {@link scaffoldAgent} prefixes the option name for a programmatic caller,
+ *  who never passed a flag and should not be told to fix one. */
 export function agentDirNameError(name: string): string | undefined {
   if (name === "." || (name !== "" && name !== ".." && name === basename(name))) return undefined;
   return (
-    `--agent-dir "${name}" must be a single directory name (or "." for the target itself) — a path would ` +
-    `put the agent outside it, where fastagent would not find it`
+    `must be a single directory name (or "." for the target itself) — a path would put the agent outside ` +
+    `the target directory, where fastagent would not find it`
   );
 }
 
@@ -105,7 +107,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   const root = agentDirName(options.agentDir);
   const flat = root === ".";
   const invalid = agentDirNameError(root);
-  if (invalid) throw new Error(invalid);
+  if (invalid) throw new Error(`agentDir "${root}" ${invalid}`);
   const skill = (name: string) => ({
     rel: join(root, "skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),

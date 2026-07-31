@@ -99,7 +99,7 @@ describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () =>
 });
 
 describe("env: a stray .env at the agent root is announced, not silently ignored", () => {
-  it("warns while the agent has no env of its own; silent once .secrets/.env exists", async () => {
+  it("warns only about keys fastagent itself reads — an application's .env is not ours to lecture about", async () => {
     const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
     const { tmpdir, homedir } = await import("node:os");
     const { join } = await import("node:path");
@@ -109,21 +109,26 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
     const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
     await mkdir(agent);
     await writeFile(join(agent, "fastagent.config.mjs"), "export default {};\n"); // THE marker
-    await writeFile(join(agent, ".env"), "K=v\n"); // NOT the file fastagent reads
+    await writeFile(join(agent, ".env"), "FASTAGENT_MODEL=prov/m\n"); // NOT the file fastagent reads
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
       loadDotEnv(agent);
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read.*\.secrets\/\.env/);
-      expect(process.env.K).toBeUndefined(); // announced, never loaded behind the user's back
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets FASTAGENT_MODEL/);
+      expect(process.env.FASTAGENT_MODEL).toBeUndefined(); // announced, never loaded behind the user's back
 
-      // Once the agent HAS its env in the right place, a root `.env` is very likely the author's own
-      // application's (an agent directory can be their repository too) — and the warning would be noise
-      // on every boot. The gate is that fact, not the placement, which says nothing about whose file it is.
-      await mkdir(join(agent, ".secrets"), { recursive: true });
-      await writeFile(join(agent, ".secrets", ".env"), "REAL=1\n");
+      // An agent directory can be the author's repository too (`--agent-dir .` exists for that shape),
+      // where a root `.env` is their APPLICATION's and "move the values there" would break it. Nothing
+      // here can tell those apart, so the warning is scoped to keys fastagent itself reads — and stays
+      // silent about everything else, however long the agent runs without a `.secrets/.env`.
+      await writeFile(join(agent, ".env"), "DATABASE_URL=postgres://real\n");
       warn.mockClear();
       loadDotEnv(agent);
       expect(warn).not.toHaveBeenCalled();
+
+      // …and the agent's own env still loads from the right place, warning or not.
+      await mkdir(join(agent, ".secrets"), { recursive: true });
+      await writeFile(join(agent, ".secrets", ".env"), "REAL=1\n");
+      loadDotEnv(agent);
       expect(process.env.REAL).toBe("1");
 
       // Nothing to warn about where fastagent's own machinery home lives (no root `.env` there).

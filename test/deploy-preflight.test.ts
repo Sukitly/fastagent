@@ -82,6 +82,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("a kept workspace .dockerignore: warns for missing secret/machinery/node_modules excludes; notes a .git exclude", async () => {
     const agentDir = await workspace({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
+    await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
     await writeFile(join(dirname(agentDir), ".dockerignore"), ".git\nnode_modules\n"); // the workspace's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });

@@ -68,21 +68,28 @@ export function envExamplePath(agentDir: string): string {
  */
 export function loadDotEnv(agentDir: string): void {
   const path = dotEnvPath(agentDir);
-  let loaded = true;
   try {
     loadEnvFile(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    loaded = false;
   }
   // A `.env` at the agent's root is the file habit puts there, and nothing reads it. Left silent, the
-  // symptom is a channel missing its token with no way back to the cause. Gated on the agent having NO
-  // env of its own: an agent directory can be the author's repository too, where a root `.env` is very
-  // likely their application's — and once `.secrets/.env` exists they have demonstrably found the right
-  // place, so the warning would be noise on every boot. Not gated on placement, which says nothing about
-  // whose file this is (the same directory serves as its own workspace or as a project's agent).
+  // symptom is a setting that appears configured and is not.
+  //
+  // Scoped to keys FASTAGENT itself reads, because that is the only case we can be sure about: an agent
+  // directory can be the author's repository too (the shape `--agent-dir .` exists for), where a root
+  // `.env` is their APPLICATION's — and "move the values" would break it. Nothing here can tell those
+  // apart, so the broader guess (warn whenever the agent has no env of its own) was a warning on every
+  // boot, with destructive advice, aimed at the population that never had the problem. Channel
+  // credentials are deliberately out of scope: a channel that cannot find its token reports that itself,
+  // and it is the one that knows the name.
   const stray = join(agentDir, ".env");
-  if (!loaded && stray !== path && existsSync(stray)) {
-    log.warn(`[fastagent] ${stray} is NOT read — the agent's env lives at ${path}; move the values there`);
+  if (stray === path || !existsSync(stray)) return;
+  const misplaced = [...parseEnvContent(readFileSync(stray, "utf8")).keys()].filter((k) => k.startsWith("FASTAGENT_"));
+  if (misplaced.length > 0) {
+    log.warn(
+      `[fastagent] ${stray} is NOT read — it sets ${misplaced.join(", ")}, and this agent's env lives at ` +
+        `${path}; move those values there`,
+    );
   }
 }

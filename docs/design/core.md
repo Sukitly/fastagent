@@ -118,16 +118,18 @@ the agent's own (`node_modules`, `.state`, a stray `.env`) and `.secrets/.gitign
 template). No command reads, verifies or rewrites an ignore file, ever. The exception is narrow and
 one-directional: **the directory fastagent writes secrets into carries its own `.gitignore`** — so
 `add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`, never over an existing
-one) when the resolved secrets dir has none. The reachable cases are a hand-made agent and a
-`FASTAGENT_SECRETS_DIR` pointed at an existing directory. Both costs are accepted knowingly: someone who
-deleted that file to track secrets deliberately gets it back once, and the operator who named that
-directory gets one file in it they did not ask for. The risk is not symmetric — those are annoyances,
-the other way is a published credential. The two ignore files are split because the root one is the file
-an author has reason to edit: git's nested-ignore precedence keeps the credentials protected whatever
-happens to it.
+one) when the DEFAULT `<agentDir>/.secrets` has none — the reachable case being a hand-made agent. The
+accepted cost: someone who deleted that file to track secrets deliberately gets it back once. The risk
+is not symmetric — that is an annoyance, the other way is a published credential. The two ignore files
+are split because the root one is the file an author has reason to edit: git's nested-ignore precedence
+keeps the credentials protected whatever happens to it.
 
-What was deleted is not "writing into a directory the operator named" — the exception above keeps
-exactly that, deliberately. What was deleted is fastagent MANAGING ignore files: unconditionally, from
+The exception stops at fastagent's OWN directory. A secrets dir named by `FASTAGENT_SECRETS_DIR` belongs
+to the operator, and the template is `*` plus two negations — dropping it there would hide that
+directory's other contents from their `git add`, a bigger harm than the one it prevents and inflicted on
+a path they chose deliberately. `add <channel>` states the fact instead and lets them own it.
+
+What was deleted, then, is fastagent MANAGING ignore files: unconditionally, from
 several commands, behind a decision procedure ("is this path under a directory we control?") that
 approximated git's own semantics with containment comparisons against a different anchor per command. It
 produced four reversals of the same predicate in review, and could ABORT `login` over an ignore file the

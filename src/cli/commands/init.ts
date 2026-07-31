@@ -27,7 +27,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   // where exit 2 lives, not inside the scaffolder (whose throws are runtime failures, exit 1).
   const requested = agentDirName(opts.agentDir);
   const invalid = agentDirNameError(requested);
-  if (invalid) failUsage(invalid);
+  if (invalid) failUsage(`--agent-dir "${requested}" ${invalid}`);
   const {
     complete,
     agentDir: rel,

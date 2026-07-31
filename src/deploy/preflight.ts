@@ -286,6 +286,11 @@ export async function preflightDeploy(input: {
   // State gets the same treatment (a custom in-tree FASTAGENT_STATE_DIR is invisible to the
   // name-based `**/.state`), at warn level: shipping stale sessions is waste, not a credential leak.
   const stateRel = inContext(resolveStateRoot(agentDir));
+  // Existence gates the WARNING, never the generated exclude (same split as secretPaths vs
+  // leakCandidates): an agent that has never run has no `.state/`, so telling its author a kept ignore
+  // file fails to exclude one is a remark about a spelling — while the file we generate must still carry
+  // the line, since it is written once and correct the moment the directory appears.
+  const stateShips = stateRel !== undefined && (await exists(join(workspace, stateRel)));
   // The `.env` family, ISOMORPHIC with what the generated file excludes (`**/.env`, `**/.env.*`, minus
   // the committable `.env.example`). A kept ignore file must be asked about the same files ours would
   // have covered, and asking only about a root-level `.env` missed both halves that matter: an
@@ -294,9 +299,13 @@ export async function preflightDeploy(input: {
   // the existing rule still holds: only a file that is there can be baked, so only it is gated.
   const dotEnvFiles = async (relDir: string): Promise<string[]> => {
     const names = await readdir(join(workspace, relDir || ".")).catch(() => [] as string[]);
+    // POSIX separators, like every other context-relative path here (`inContext`): these strings are
+    // matched against dockerignore patterns, and a Windows `fastagent\.env` would match none of them —
+    // silently turning the one check whose failure mode is "credentials in a published image" into a
+    // no-op.
     return names
       .filter((n) => (n === ".env" || n.startsWith(".env.")) && n !== ".env.example")
-      .map((n) => join(relDir, n));
+      .map((n) => join(relDir, n).split(sep).join("/"));
   };
   const envFiles = (await Promise.all([...new Set(["", agentPrefix])].map(dotEnvFiles))).flat();
   const leakCandidates = [...(await present(secretPaths)), ...envFiles];
@@ -351,7 +360,7 @@ export async function preflightDeploy(input: {
       if (run) return { ok: false, gate: text };
       messages.push({ level: "warn", text });
     }
-    if (stateRel && !excluded(`${stateRel}/sessions`)) {
+    if (stateShips && stateRel && !excluded(`${stateRel}/sessions`)) {
       messages.push({
         level: "warn",
         text: `your ${rel} (kept) does not exclude \`${stateRel}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateRel}`])}`,

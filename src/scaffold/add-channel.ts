@@ -7,7 +7,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { assertInsideAgentDir, exists } from "../paths.ts";
+import { SECRETS_DIRNAME, assertInsideAgentDir, exists } from "../paths.ts";
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
@@ -256,6 +256,10 @@ export interface DotEnvWriteResult {
   written: string[];
   /** Vars already present with a non-empty active value; left untouched and omitted from next steps. */
   alreadySet: string[];
+  /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no
+   *  `.gitignore`: a secret was just written into a directory fastagent does not own, so the caller
+   *  states the fact rather than dropping a `*`-ignoring file into someone else's path. */
+  unprotectedSecretsDir?: string;
 }
 
 /** Whether `.env` content carries a non-empty ACTIVE value for `name` — decided by THE .env parser
@@ -286,21 +290,33 @@ export async function appendChannelDotEnv(
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
-  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into
-  // carries its own `.gitignore`. `init` writes it, and so does this — because the reachable cases where
-  // it is missing (a hand-made agent, a `FASTAGENT_SECRETS_DIR` pointed at an existing directory) are
-  // exactly the ones where the next line mints an unrecoverable app secret. `wx`, so a file the author
-  // wrote is never touched. The accepted cost: someone who DELETED it to track secrets deliberately gets
-  // it back once. The risk is not symmetric — that is an annoyance; the other way is a published credential.
   const secretsDir = dirname(file);
   await mkdir(secretsDir, { recursive: true });
-  // Only EEXIST is tolerable (already protected, or a concurrent writer). A permission/disk failure on
-  // the file that keeps credentials out of git must surface, not be swallowed.
-  await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
-    (e: NodeJS.ErrnoException) => {
-      if (e.code !== "EEXIST") throw e;
-    },
-  );
+  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into
+  // carries its own `.gitignore`. `init` writes it, and so does this — the reachable case where it is
+  // missing (a hand-made agent) is exactly the one where the next line mints an unrecoverable app
+  // secret. `wx`, so a file the author wrote is never touched; the accepted cost is that someone who
+  // DELETED it to track secrets deliberately gets it back once. The risk is not symmetric — that is an
+  // annoyance; the other way is a published credential.
+  //
+  // Scoped to the DEFAULT `<agentDir>/.secrets`, which is fastagent's own directory. A dir named by
+  // `FASTAGENT_SECRETS_DIR` belongs to the operator, and this template is `*` plus two negations —
+  // dropping it there would hide that directory's OTHER contents from their `git add`, which is a
+  // bigger harm than the one it prevents, and inflicted on a path they chose deliberately. They get the
+  // fact instead, and own the decision.
+  const owned = secretsDir === join(dir, SECRETS_DIRNAME);
+  let unprotectedSecretsDir: string | undefined;
+  if (owned) {
+    // Only EEXIST is tolerable (already protected, or a concurrent writer). A permission/disk failure on
+    // the file that keeps credentials out of git must surface, not be swallowed.
+    await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
+      (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EEXIST") throw e;
+      },
+    );
+  } else if (!(await exists(join(secretsDir, ".gitignore")))) {
+    unprotectedSecretsDir = secretsDir;
+  }
   let current = "";
   try {
     current = await readFile(file, "utf8");
@@ -358,7 +374,7 @@ export async function appendChannelDotEnv(
       await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`);
     }
   }
-  return { written, alreadySet };
+  return { written, alreadySet, unprotectedSecretsDir };
 }
 
 /** The path `add <kind>` scaffolds to. */
