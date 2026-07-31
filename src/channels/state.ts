@@ -16,9 +16,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { log } from "../log.ts";
 
-/** Create the channel's state home. Nothing else: fastagent does not write `.gitignore` files at
- *  runtime — the agent's own (scaffolded once by `init`, the author's from then on) already excludes
- *  `.state/`, and an operator who relocated the state root owns that directory's ignore rules. */
+/** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
 export function ensureStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }

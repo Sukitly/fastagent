@@ -291,12 +291,17 @@ export async function preflightDeploy(input: {
   // file fails to exclude one is a remark about a spelling — while the file we generate must still carry
   // the line, since it is written once and correct the moment the directory appears.
   const stateShips = stateRel !== undefined && (await exists(join(workspace, stateRel)));
-  // The `.env` family, ISOMORPHIC with what the generated file excludes (`**/.env`, `**/.env.*`, minus
-  // the committable `.env.example`). A kept ignore file must be asked about the same files ours would
-  // have covered, and asking only about a root-level `.env` missed both halves that matter: an
-  // `<agent>/.env` — exactly the file habit puts there, which env.ts warns about by name — and the
-  // `.env.local` / `.env.production` spellings a host project uses. DISCOVERED rather than spelled, so
-  // the existing rule still holds: only a file that is there can be baked, so only it is gated.
+  // The `.env` family at the two levels fastagent is RESPONSIBLE for: the agent dir and the workspace
+  // root. Asking only about a root-level `.env` missed both halves that matter — an `<agent>/.env`, the
+  // file habit puts there (env.ts warns about it by name), and the `.env.local` / `.env.production`
+  // spellings. DISCOVERED rather than spelled, so the existing rule still holds: only a file that is
+  // there can be baked, so only it is gated.
+  //
+  // Deliberately NOT the recursive `**/.env` the generated file carries: walking a whole monorepo for
+  // credential files is a secret scanner, not a placement pre-flight, and a bounded walk would be a
+  // heuristic pretending to be a guarantee. The division of responsibility is the honest one — the file
+  // WE generate covers every level; an author who keeps their own owns its coverage of their own tree,
+  // and this gate speaks only for the paths fastagent itself puts credentials in.
   const dotEnvFiles = async (relDir: string): Promise<string[]> => {
     const names = await readdir(join(workspace, relDir || ".")).catch(() => [] as string[]);
     // POSIX separators, like every other context-relative path here (`inContext`): these strings are

@@ -115,7 +115,12 @@ export function agentsAt(dir: string): string[] {
  * WHICH agent is meant, when a directory holds several: an engineer's, a PM's and a content owner's
  * agent can each drive the same repository, so they must be selectable rather than refused.
  *
- * `FASTAGENT_AGENT` is an ASSERTION, not a preference: it names the agent, and a directory without one
+ * `FASTAGENT_AGENT` reaches this from the REAL environment only. Placement resolves before anything
+ * reads the agent's `.env` — it is what tells the loader which agent's `.env` to read — so a value set
+ * there is a silent no-op (the same ordering caveat `FASTAGENT_SECRETS_DIR` carries). A shell, an
+ * `.envrc`, or the command itself.
+ *
+ * It is an ASSERTION, not a preference: it names the agent, and a directory without one
  * by that name resolves to nothing — even when exactly one agent is sitting there. Serving a DIFFERENT
  * agent than the one asked for is the silent-wrong-target this codebase refuses everywhere else, and the
  * uniform rule ("it names the agent") beats one that changes meaning with the sibling count. The stated
