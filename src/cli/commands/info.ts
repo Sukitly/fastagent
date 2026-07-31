@@ -109,7 +109,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("agent", agentDir);
   line("workspace", workspace);
   const hint = workspaceHint({ agentDir, workspace });
-  if (hint) console.log(`${"hint:".padEnd(13)} ${hint}`);
+  if (hint) line("hint", hint);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);

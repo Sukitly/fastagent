@@ -290,7 +290,7 @@ export async function preflightDeploy(input: {
   // leakCandidates): an agent that has never run has no `.state/`, so telling its author a kept ignore
   // file fails to exclude one is a remark about a spelling — while the file we generate must still carry
   // the line, since it is written once and correct the moment the directory appears.
-  const stateShips = stateRel !== undefined && (await exists(join(workspace, stateRel)));
+  const stateShips = stateRel !== undefined && (await exists(join(workspace, stateRel))) ? stateRel : undefined;
   // The `.env` family at the two levels fastagent is RESPONSIBLE for: the agent dir and the workspace
   // root. Asking only about a root-level `.env` missed both halves that matter — an `<agent>/.env`, the
   // file habit puts there (env.ts warns about it by name), and the `.env.local` / `.env.production`
@@ -365,7 +365,7 @@ export async function preflightDeploy(input: {
       if (run) return { ok: false, gate: text };
       messages.push({ level: "warn", text });
     }
-    if (stateShips && stateRel && !excluded(`${stateRel}/sessions`)) {
+    if (stateShips && !excluded(`${stateShips}/sessions`)) {
       messages.push({
         level: "warn",
         text: `your ${rel} (kept) does not exclude \`${stateRel}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateRel}`])}`,

@@ -67,8 +67,9 @@ const init: CommandSpec = {
     { cmd: "fastagent init . --flat", note: "this repo IS the agent" },
   ],
   notes:
-    "An agent is a directory holding a fastagent.config.* — the NAME is never a rule, so --agent-dir can " +
-    "call it anything. What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
+    "An agent is a directory holding a fastagent.config.* — never its NAME, so --agent-dir can call it " +
+    "anything (the name decides only which agent answers when a workspace holds several: see " +
+    "FASTAGENT_AGENT). What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
     "whatever directory you later point fastagent at: point at the project and the agent inside it " +
     "serves with the project as its workspace; point at the agent directory (all a deployed box may " +
     "hold) and it works on itself. A directory resolves to ONE agent, at it or one level inside.",

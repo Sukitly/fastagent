@@ -103,8 +103,8 @@ function agentChildren(dir: string): string[] {
 
 /**
  * The agents `dir` resolves over: ITSELF when it holds a config, else the ones directly inside it —
- * never both, because aiming at an agent can only mean that agent. Exported for `init`, which must
- * refuse to create an agent that this lookup would not return (see scaffold/init.ts).
+ * never both, because aiming at an agent can only mean that agent. Exported for `init`, which asks the
+ * same question this lookup asks: which agents would `dir` resolve over, before and after scaffolding.
  */
 export function agentsAt(dir: string): string[] {
   const base = resolve(dir);
@@ -158,20 +158,28 @@ function findPlacement(dir: string, env: NodeJS.ProcessEnv = process.env): Resol
  * context is not affected — that walk climbs ancestors either way.) Resolution must not guess which you
  * wanted, so this is a HINT — and a hint may use the heuristic ("the parent carries an AGENTS.md or a
  * .git") that a rule may not.
+ *
+ * It suggests a command only after RUNNING the lookup that command would run, because a hint that dead-ends
+ * is worse than none: with several agents beside this one, `..` refuses and names them — sending the
+ * reader to a refusal whose own advice points back here.
  */
-export function workspaceHint({ agentDir, workspace }: ResolvedPlacement): string | undefined {
+export function workspaceHint(
+  { agentDir, workspace }: ResolvedPlacement,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
   if (agentDir !== workspace) return undefined;
   const parent = dirname(agentDir);
-  // A config-holding parent is an agent itself, so `..` would resolve to IT — not the project view asked
-  // about here.
-  if (parent === agentDir || hasConfig(parent)) return undefined;
+  if (parent === agentDir) return undefined;
+  // Would `..` actually serve THIS agent? A parent holding a config is an agent itself, and one holding
+  // siblings resolves to none without a selector — neither is the project view asked about here.
+  if (findPlacement(parent, env)?.agentDir !== agentDir) return undefined;
   if (!["AGENTS.md", ".git"].some((name) => existsSync(join(parent, name)))) return undefined;
   return `${parent} looks like a project — point fastagent at it (\`..\`) to have the agent work ON it`;
 }
 
-/** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair.
- *  For callers that only need "is this an agent, and which one" (`login`'s global fallback, the
- *  stray-`.env` warning). */
+/** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair,
+ *  and without the throw. `login` is the caller: it is the one command allowed to run outside an agent,
+ *  so it needs the answer as a value rather than as a refusal. */
 export function findAgentDir(dir: string): string | undefined {
   return findPlacement(dir)?.agentDir;
 }

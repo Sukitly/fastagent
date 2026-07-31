@@ -9,7 +9,7 @@
  * Placement — no detection and no prompt, just a default and one flag. By DEFAULT the whole agent —
  * definition, config, `.secrets/`, machinery — lands in `<dir>/fastagent/`; the surrounding tree gets
  * ZERO writes and becomes the workspace the agent works on. `--agent-dir <name>` picks another name for
- * that directory (the name is never a rule — `fastagent.config.*` is the marker), and `--agent-dir .`
+ * that directory (`fastagent.config.*` is the marker of what IS an agent, never the name), and `--agent-dir .`
  * (spelled `--flat`) lands the identical shape in `dir` itself, for the case where the directory IS the
  * agent (a standalone agent repo, a monorepo package).
  *
@@ -194,7 +194,10 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   // under one (or scaffolding one over existing children) makes an agent the lookup can never return.
   // The target itself is never in the way — a config already there means "already an agent", which the
   // refusal below says in those words.
-  const shadowed = agentsAt(dir).filter((a) => a !== resolve(dir, root) && (flat || a === resolve(dir)));
+  const existing = agentsAt(dir).filter((a) => a !== resolve(dir, root));
+  const shadowed = flat
+    ? existing // the new agent lands AT `dir` and hides everything inside it
+    : existing.filter((a) => a === resolve(dir)); // an agent AT `dir` hides the new one inside it
   if (shadowed.length > 0) {
     throw new Error(
       `"${dir}" already resolves to ${shadowed.map((a) => displayPath(process.cwd(), a) ?? a).join(", ")} — ` +

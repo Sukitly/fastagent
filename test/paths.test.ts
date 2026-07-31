@@ -44,6 +44,11 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     await writeFile(join(dir, "AGENTS.md"), "# project\n");
     expect(workspaceHint(resolvePlacement(agent))).toMatch(/looks like a project/);
     expect(workspaceHint(resolvePlacement(dir))).toBeUndefined(); // already working on it
+
+    // A sibling does not silence it while THIS agent is the one `..` would serve (it carries the default
+    // name, so the tie-break points here) — the hint is about what the command would do, not about count.
+    await config(join(dir, "sibling"));
+    expect(workspaceHint(resolvePlacement(agent), {})).toMatch(/looks like a project/);
   });
 
   it("SEVERAL agents on one workspace: FASTAGENT_AGENT picks, the default NAME breaks the tie", async () => {
@@ -70,6 +75,23 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
 
     // Each is also its own workspace when pointed at — same rule, no special case for siblings.
     expect(resolvePlacement(join(dir, "pm"))).toEqual({ agentDir: join(dir, "pm"), workspace: join(dir, "pm") });
+  });
+
+  it("the workspace hint stays silent when `..` would not serve THIS agent — no dead-end advice", async () => {
+    // A hint that dead-ends is worse than none. Pointed at `pm` beside `content`, the parent resolves to
+    // neither and refuses, naming them — and that refusal's own advice ("point at the one you want")
+    // points straight back here. Suggesting `..` would walk the reader around that loop, so the hint
+    // RUNS the lookup its advice would run before offering it.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-hint-"));
+    await writeFile(join(dir, "AGENTS.md"), "# project\n");
+    await config(join(dir, "pm"));
+    const pm = resolvePlacement(join(dir, "pm"));
+    expect(workspaceHint(pm, {})).toMatch(/looks like a project/); // alone: `..` serves it
+
+    await config(join(dir, "content"));
+    expect(workspaceHint(pm, {})).toBeUndefined(); // ambiguous: `..` would refuse
+    expect(workspaceHint(pm, { FASTAGENT_AGENT: "pm" })).toMatch(/looks like a project/); // selected: true again
+    expect(workspaceHint(pm, { FASTAGENT_AGENT: "content" })).toBeUndefined(); // `..` would serve the OTHER one
   });
 
   it("FASTAGENT_AGENT ASSERTS — a directory without that agent resolves to nothing, even holding one", async () => {

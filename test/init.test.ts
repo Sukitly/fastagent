@@ -242,6 +242,9 @@ describe("init: scaffoldAgent", () => {
     for (const bad of [join("nested", "bot"), "..", ""]) {
       await expect(scaffoldAgent(await freshDir(), { agentDir: bad })).rejects.toThrow(/single directory name/);
     }
+    // …but `./bot` is not a path in any meaningful sense — basename already says it means `bot`, so
+    // refusing the spelling would be pedantry rather than a guard.
+    expect((await scaffoldAgent(await freshDir(), { agentDir: "./bot", minimal: true })).agentDir).toBe("bot");
   });
 
   it("`init` nests by DEFAULT — no detection, no prompt; the choice is a flag or nothing", async () => {
