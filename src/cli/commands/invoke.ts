@@ -2,10 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+
+import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface InvokeOptions {
@@ -17,14 +18,17 @@ export interface InvokeOptions {
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   const invokeDir = resolve(dirArg);
-  loadDotEnv(invokeDir);
+  const placement = placementOrExit(invokeDir);
+  loadDotEnv(placement.agentDir);
   installProxyFetch();
-  await resolveFirstRunModel(invokeDir, opts);
-  const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
+  await resolveFirstRunModel(placement.agentDir, opts);
+  const { agent, modelSpec, authPath } = await createPiAgentFromDir(invokeDir, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
-  console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
+  // BOTH directories, like dev/start: from the workspace, `placement.workspace` alone equals the dir you
+  // typed, so it cannot tell you which agent actually ran.
+  console.error(`[fastagent] invoke: ${placement.agentDir} (workspace ${placement.workspace}, ${modelSpec})`);
   await reportAuth(modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).

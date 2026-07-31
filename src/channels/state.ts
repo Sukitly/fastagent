@@ -16,17 +16,9 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { log } from "../log.ts";
 
-/** Create the state home and self-ignore it (`.gitignore="*"`): its contents (buffers, downloaded
- *  files) can carry chat content and must never be committable. The workspace opener already protects
- *  an in-tree state root; this local guard also covers direct embedders. `wx` never clobbers an
- *  operator's own file. */
+/** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
 export function ensureStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
-  try {
-    writeFileSync(join(dir, ".gitignore"), "*\n", { flag: "wx" });
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-  }
 }
 
 /** Returns `unknown` on purpose — no generic pretending otherwise: the file is an IO boundary, and the

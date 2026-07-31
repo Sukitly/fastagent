@@ -6,7 +6,7 @@ status: current
 
 # Deploy
 
-FastAgent has **no application build step** — the directory is the deployable unit. Deployment is: copy the workspace to a host with Node >= 22.19 (or Bun), install dependencies, and run `fastagent start`. The `deploy` command wraps that for a target: it generates a definition-aware container recipe plus target config and prints an ordered runbook. `--run` drives the target CLI instead of handing you the runbook.
+FastAgent has **no application build step** — the directory is the deployable unit. Deployment is: copy the agent to a host with Node >= 22.19 (or Bun), install dependencies, and run `fastagent start`. The `deploy` command wraps that for a target: it generates a definition-aware container recipe plus target config and prints an ordered runbook. `--run` drives the target CLI instead of handing you the runbook.
 
 ```bash
 fastagent deploy docker                 # Dockerfile + local Compose + runbook
@@ -29,7 +29,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 |---|---|---|
 | **Model is in `fastagent.config.*`** | A `--model` flag, `FASTAGENT_MODEL`, or `.env` value is builder-local and does **not** travel (`.env` is dockerignored). Only the config file ships. | `model: "provider/id"` in `fastagent.config.mjs`. `deploy` warns (or, under `--run`, gates) if it's missing. |
 | **Secrets are declared** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). |
-| **State goes on a volume** | Sessions, `auth.json`, and channel state live under one root; a redeploy that replaces the directory wipes them otherwise. | Every generated target mounts a volume at `/data` and sets `FASTAGENT_STATE_DIR=/data`. |
+| **State goes on a volume** | Sessions and channel state live under `.state/`, the seeded/rotated `auth.json` under `.secrets/`; a redeploy that replaces the directory wipes them otherwise. | Every generated target mounts a volume at `/data` and sets `FASTAGENT_STATE_DIR=/data/.state` + `FASTAGENT_SECRETS_DIR=/data/.secrets`. |
 
 Model auth: if your local auth is an **env key** (e.g. `OPENAI_API_KEY`), `deploy` lists it as a host secret automatically. In a runbook-only deploy, an OAuth/stored login still needs a provider API key or an `auth.json` placed on the volume. Under `--run`, FastAgent carries the local auth file as an absent-only `FASTAGENT_AUTH_SEED`, so a credential already refreshed on the volume is never overwritten.
 
@@ -41,7 +41,7 @@ Prerequisite: Docker Engine/Desktop with Docker Compose 2.3.3 or newer (`docker 
 fastagent deploy docker
 ```
 
-For a flat workspace this generates `Dockerfile`, `.dockerignore`, and `fastagent.compose.yml`. The Compose file contains one `agent` service:
+This generates `fastagent/Dockerfile`, a workspace-root `.dockerignore`, and `fastagent/fastagent.compose.yml`. The Compose file contains one `agent` service:
 
 - the generated or user-owned Dockerfile,
 - `127.0.0.1:<port>` for safe host-local access,
@@ -82,8 +82,8 @@ Generated files are defaults, not a second source of truth:
 
 - An existing `Dockerfile`, `.dockerignore`, or `fastagent.compose.yml` is kept byte-for-byte and used by `--run`.
 - Editing a generated Dockerfile or Compose file may produce a drift warning, but never an automatic rewrite. Remove its first generated-marker line to suppress that classification after taking ownership.
-- `--force` is the explicit destructive opt-in to regenerate artifacts, including hand-owned ones.
-- To regenerate only one artifact while preserving the others, delete that file and rerun without `--force`.
+- `--force` regenerates artifacts fastagent GENERATED (they carry a marker line); a file without that marker is never touched, with or without it. Delete such a file to hand the path back to deploy.
+- To regenerate only one artifact while preserving the others, delete that file and rerun (with or without `--force`).
 - `--tunnel` only shapes a newly generated/forced Compose file. If an existing authoritative file has no `tunnel` service, `--tunnel --run` gates before Docker side effects and tells you to edit, delete/regenerate, or use `--force`.
 - A custom Dockerfile owns system packages/base-image details; `config.deploy.apt` only shapes the generated Dockerfile.
 
@@ -113,7 +113,7 @@ fastagent deploy fly --run   # idempotent, resumable; carries your local env sec
 
 Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
 
-**Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised.
+**Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 
 ## Railway
 
@@ -140,15 +140,15 @@ fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries yo
 
 `--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, time triggers, or a long-connection channel; a sleeping service cannot hold an outbound connection.
 
-## Serving an existing repo (agentDir layout)
+## What deploy bakes
 
-When the workspace uses `config.agentDir` (a coding agent living in `./agent` whose cwd is the host repo — see [Configuration](configuration.md)), `deploy` generates a **repo-as-workspace** recipe instead:
+Deploy has ONE semantic — **bake the workspace as the image, WYSIWYG** (what you see is what ships: git or not, clean or dirty). Where the artifacts land follows a single prefix: the agent directory's name when it sits inside the workspace, nothing when the agent IS the workspace (you pointed deploy straight at it). The paths below show the default `fastagent/`:
 
-- **Artifacts are namespaced under the kit** — `agent/Dockerfile`, `agent/Dockerfile.dockerignore`, and `agent/fastagent.compose.yml` / `agent/fly.toml` / `agent/railway.json` — so they never collide with the host repo's own Docker/deploy files. **One root-level exception**: a `.dockerignore` is written at the repo root (context-packers read that form; it carries recursive `**/node_modules`, `**/.env`… excludes and does *not* exclude `.git`). If the host already has one it is **kept — even under `--force`** (it's the host's file), and preflight warns specifically when it excludes `.git` (kills baked write-back) or lacks `**/node_modules` (native-binary clobber). Docker Compose builds from the repo root through the namespaced file; the Fly runbook passes explicit flags (`fly deploy . --config agent/fly.toml --dockerfile agent/Dockerfile`); on Railway, point the service at `agent/railway.json` (Settings → Config-as-code — dashboard-only).
-- **The image bakes the whole repo as the agent's cwd.** Only the **kit's** dependencies (`agent/package.json`) are installed — the host repo's own deps are the agent's runtime concern (it can install them in its workspace when a task needs them).
-- **Write-back mechanics ship in the image**: `git` is baked in and the generated ignore files do **not** exclude `.git`; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
-- **The workspace is a snapshot.** The image is the repo at deploy time; un-pushed changes on the box do **not** survive a redeploy — durability lives in git, not on the machine.
-- **Status: experimental** — this layout has not been verified end-to-end yet (the preflight note says so). `--run` remains gated for Docker, Fly, and Railway; generate the artifacts without `--run` and follow/review the printed runbook.
+- **Artifacts land in the agent dir** — `fastagent/Dockerfile`, `fastagent/Dockerfile.dockerignore`, and `fastagent/fastagent.compose.yml` / `fastagent/fly.toml` / `fastagent/railway.json` — so they never collide with Docker/deploy files the workspace already owns. (Flat: the same files at the root, where they ARE the agent's own.) **One write outside the agent dir**: a `.dockerignore` at the workspace root (context-packers only read that form; it carries the machinery excludes `**/.secrets` and `**/.state`, plus `**/node_modules`, `**/.cache` and `**/.env*`, and does *not* exclude `.git`). **Ownership decides what deploy may overwrite, not `--force` and not the path.** Every generated artifact opens with a marker line: `--force` regenerates ONES WE WROTE, and a file without the marker is never touched (delete it to hand the path back). So a hand-written `Dockerfile`, a `.dockerignore` the repo already had, or a `fly.toml` you tuned all survive `--force`. For a kept `.dockerignore`, preflight then asks it about the paths that matter: if it would drop the agent dir (the context ships without the agent) or would NOT exclude `fastagent/.secrets/auth.json` (the packer bakes credentials into the image), that **gates `--run`** and warns generate-only; an unexcluded `.state`/`node_modules` warns, and a `.git` exclude gets a note (kills the agent's pull/push loop). Note that dockerignore patterns are root-anchored: a bare `.secrets` line covers only the workspace root, not the agent's own `fastagent/.secrets` — use `**/.secrets`. Docker Compose builds from the workspace root through the namespaced file; the Fly runbook passes explicit flags (`fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile`); on Railway the build entry rides the `RAILWAY_DOCKERFILE_PATH` service variable (set with the machinery variables — fully scriptable), and pointing the service at `fastagent/railway.json` (Settings → Config-as-code — dashboard-only) is an *optional* enhancement: it adds the `/health` deploy gate, while Railway's default restart policy already matches the file's `ON_FAILURE`.
+- **The image bakes the whole directory as the agent's workspace.** Only the **agent's** dependencies (`fastagent/package.json`, or the root one when the agent IS the workspace) are installed — a surrounding workspace's own deps are the agent's runtime concern (it can install them when a task needs them).
+- **Freshness and write-back run through git, driven by the agent**: when the workspace is a git repo, `git` is baked in and `.git` ships in the image, so the agent can `git pull` to freshen content and `commit`/`push` its work back; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
+- **The image is a snapshot.** Un-pushed changes on the box do **not** survive a redeploy — durability lives in git, not on the machine. A non-git workspace deploys the same way; its production edits are ephemeral by nature.
+- **Definition updates need a redeploy** (the definition is baked). Markdown definition files are live-read per turn, so an agent that pulls a new `persona.md` on the box picks it up next turn; code (tools/channels/config) needs a restart, deps a rebuild.
 
 ## Other Docker hosts
 
@@ -156,7 +156,7 @@ The generated `Dockerfile` runs the directory on any container platform; `fastag
 
 `config.deploy.apt` bakes extra apt packages into the image; a package needing a custom apt repo or a different base image means providing your own `Dockerfile` (`deploy` keeps an existing one). See [Configuration](configuration.md#config-file).
 
-If your agent runs git over its **own** history (`git log`/`git blame` on the repo it ships in), delete the `.git` line from the generated `.dockerignore` so history is included.
+`.git` ships in the image by default (the agent's pull/push loop needs it); for a smaller image with no git needs, add a `.git` line to the generated `.dockerignore`. The git **binary** is baked in exactly when the workspace ships a `.git`; a non-git workspace that still needs git declares `deploy: { apt: ["git"] }` in `fastagent.config.*`.
 
 ## Single-machine tier
 

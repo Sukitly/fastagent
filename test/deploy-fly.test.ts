@@ -1,13 +1,17 @@
+import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
 import { modelTravelIssue } from "../src/deploy/preflight.ts";
 
-const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
-const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;
+const flyToml = (p: ReturnType<typeof planFlyDeploy>) =>
+  p.artifacts.find((a) => a.path === "fastagent/fly.toml")!.content;
+const dockerfile = (p: ReturnType<typeof planFlyDeploy>) =>
+  p.artifacts.find((a) => a.path === "fastagent/Dockerfile")!.content;
 const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile, default autostop). */
 const base = {
+  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
   appName: "bot",
   port: 8787,
   hasPackageJson: true,
@@ -22,7 +26,8 @@ const base = {
 describe("deploy/fly: planFlyDeploy", () => {
   it("wires the state root to the volume and tunes autostop to suspend", () => {
     const toml = flyToml(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
-    expect(toml).toContain('FASTAGENT_STATE_DIR = "/data"');
+    expect(toml).toContain('FASTAGENT_STATE_DIR = "/data/.state"');
+    expect(toml).toContain('FASTAGENT_SECRETS_DIR = "/data/.secrets"');
     expect(toml).toContain('destination = "/data"');
     expect(toml).toContain('auto_stop_machines = "suspend"');
     expect(toml).toContain("min_machines_running = 0");
@@ -165,74 +170,94 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(docker).toContain("npm i -g @fastagent-sh/fastagent");
   });
 
-  it("kit layout (kitDir): artifacts namespaced under the kit, kit deps installed, .git shipped, explicit deploy flags", () => {
-    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], kitDir: "agent" });
-    // Artifacts never collide with the host repo's own deploy files.
+  it("artifacts namespaced under fastagent/, agent deps installed, .git shipped, explicit deploy flags", () => {
+    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [] });
+    // Artifacts never collide with the workspace's own deploy files.
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
-      ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the host has one)
-      "agent/Dockerfile",
-      "agent/Dockerfile.dockerignore",
-      "agent/fly.toml",
+      ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the workspace has one)
+      "fastagent/Dockerfile",
+      "fastagent/Dockerfile.dockerignore",
+      "fastagent/fly.toml",
     ]);
-    // Both ignore forms carry the same kit content (recursive patterns, .git not excluded).
+    // Both ignore forms carry the same content (recursive patterns, .git not excluded).
     const rootIgnore = p.artifacts.find((a) => a.path === ".dockerignore")?.content ?? "";
     expect(rootIgnore).toMatch(/^\*\*\/node_modules$/m);
     expect(rootIgnore).not.toMatch(/^\.git$/m);
-    const df = p.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
-    expect(df).toContain("COPY agent/package.json agent/package-lock.json* ./agent/"); // kit deps…
-    expect(df).toContain("cd agent && npm ci");
-    expect(df).toContain("COPY . ."); // …then the whole repo as the workspace
-    expect(df).toContain(`"./agent/node_modules/.bin/fastagent", "start", "/app"`); // runs from the kit
-    const ignore = p.artifacts.find((a) => a.path === "agent/Dockerfile.dockerignore")?.content ?? "";
+    const df = p.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
+    expect(df).toContain("COPY fastagent/package.json fastagent/package-lock.json* ./fastagent/"); // workspace deps…
+    expect(df).toContain("cd fastagent && npm ci");
+    expect(df).toContain("COPY . ."); // …then the whole workspace
+    // The npm entrypoint needs NO shell: assert the property (the binary path resolves from the image's
+    // WORKDIR) rather than transcribing the line — a `cd` here once made it resolve one level too deep.
+    const cmdBin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(df)?.[1];
+    expect(cmdBin).toBeDefined();
+    expect(posix.normalize(posix.join("/app", cmdBin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
+    expect(df).not.toContain("sh"); // exec form: PID 1 is the agent, so SIGTERM reaches it
+    const ignore = p.artifacts.find((a) => a.path === "fastagent/Dockerfile.dockerignore")?.content ?? "";
     expect(ignore).not.toMatch(/^\.git$/m); // write-back needs the repo's .git — NOT excluded
     // Recursive on purpose: dockerignore is root-anchored, and a bare `node_modules` would let the build
-    // machine's agent/node_modules (macOS binaries) clobber the image's freshly-installed linux deps.
+    // machine's deps (macOS binaries) clobber the image's freshly-installed linux deps.
     expect(ignore).toMatch(/^\*\*\/node_modules$/m);
     expect(ignore).toMatch(/^\*\*\/\.env$/m);
-    // The runbook deploys from the repo root with explicit, version-proof flags.
-    expect(runbook(p)).toContain("fly deploy . --config agent/fly.toml --dockerfile agent/Dockerfile --app bot");
-    expect(runbook(p)).toMatch(/Write-back mechanics/);
+    expect(ignore).toMatch(/^\*\*\/\.secrets$/m); // the machinery dirs never enter an image
+    expect(ignore).toMatch(/^\*\*\/\.state$/m);
+    // The runbook deploys from the workspace root with explicit, version-proof flags.
+    expect(runbook(p)).toContain(
+      "fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile --app bot",
+    );
+    expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
   });
 
-  it("kit layout: bun kit uses the bun base + cd-install + bun run; markdown-only kit uses the pinned global CLI", () => {
+  it("a bun agent uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
     const bun = planFlyDeploy({
       ...base,
       runtime: "bun",
       bunVersion: "1.3.13",
       modelAuth: undefined,
       channels: [],
-      kitDir: "agent",
     });
-    const bunDf = bun.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    const bunDf = bun.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
-    expect(bunDf).toContain("COPY agent/package.json agent/bun.lock* ./agent/");
-    expect(bunDf).toContain("cd agent && bun install --frozen-lockfile");
-    expect(bunDf).toContain(`"sh", "-c", "cd agent && bun run fastagent start /app"`);
+    expect(bunDf).toContain("COPY fastagent/package.json fastagent/bun.lock* ./fastagent/");
+    expect(bunDf).toContain("cd fastagent && bun install --frozen-lockfile");
+    // Bun DOES need a cwd (it resolves the script from the package.json beside it), so a shell — with
+    // `exec`, or sh stays PID 1 and swallows SIGTERM.
+    expect(bunDf).toContain(`CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]`);
+
+    // The agent this deploy was FOR is pinned into every image shape. The container re-resolves
+    // placement at /app, and a workspace may hold SEVERAL agents (all of which ship — the build context
+    // is the whole tree), so without this the image would pick by its own rules instead of by the
+    // deploy: the artifact would depend on the builder's environment.
+    expect(bunDf).toContain("ENV FASTAGENT_AGENT=fastagent");
 
     const md = planFlyDeploy({
       ...base,
       hasPackageJson: false,
       modelAuth: undefined,
       channels: [],
-      kitDir: "agent",
     });
-    const mdDf = md.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    const mdDf = md.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(mdDf).toContain("FROM node:22-slim");
-    expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no kit deps to install
+    expect(mdDf).toContain("ENV FASTAGENT_AGENT=fastagent");
+    expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no deps to install
     expect(mdDf).not.toContain("npm ci");
     expect(mdDf).toContain(`["fastagent", "start", "/app"]`);
   });
 
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
     expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toMatch(
-      /RUN npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
+      /cd fastagent && npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
     );
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(/RUN npm ci\n/);
+    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(
+      /cd fastagent && npm ci\n/,
+    );
   });
 
   it("code-workspace CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
     const npm = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
-    expect(npm).toContain('CMD ["./node_modules/.bin/fastagent", "start", "/app"]');
+    // The LOCAL bin, resolved from the image WORKDIR — never npx (which would fetch an unrelated package).
+    const bin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(npm)?.[1];
+    expect(posix.normalize(posix.join("/app", bin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
     expect(npm).not.toContain("npx");
   });
 
@@ -243,14 +268,25 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bun).toContain("FROM oven/bun:1.3.13");
     expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
     // The LOCAL bin, never the registry — the npm package named `fastagent` is an unrelated third party.
-    expect(bun).toContain('CMD ["bun", "run", "fastagent", "start", "/app"]');
+    expect(bun).toContain('CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]');
     expect(bun).not.toContain("node:22-slim");
     // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
     const unpinned = dockerfile(
       planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", hasLockfile: false }),
     );
     expect(unpinned).toContain("FROM oven/bun:1\n");
-    expect(unpinned).toMatch(/RUN bun install\n/); // no --frozen-lockfile without a lockfile
+    expect(unpinned).toMatch(/cd fastagent && bun install\n/); // no --frozen-lockfile without a lockfile
+  });
+
+  it("the fly.toml marker is what makes --force mean 'reset' (and a hand-written one exempt)", async () => {
+    // The ownership predicate is load-bearing twice over: writeArtifacts uses it to decide what --force
+    // may replace, and deploy.ts uses it to decide whether to round-trip `app =` and run the
+    // scale-to-zero gate. Before it existed, `fly.toml` read as the author's forever.
+    const { isGeneratedFlyToml } = await import("../src/deploy/fly/plan.ts");
+    const generated = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(isGeneratedFlyToml(generated)).toBe(true);
+    expect(isGeneratedFlyToml('app = "mine"\n')).toBe(false);
+    expect(isGeneratedFlyToml(`# my own header\n${generated}`)).toBe(false); // marker must open the file
   });
 
   it("flags a model that won't travel — config.model is the deployed box's only source", () => {

@@ -1,3 +1,5 @@
+import { type ResolvedPlacement, resolvePlacement } from "../paths.ts";
+
 /** stderr renders color: a color TTY, with Node's `hasColors()` carrying the NO_COLOR/TERM=dumb veto. */
 function stderrHasColors(): boolean {
   return process.stderr.isTTY === true && (process.stderr.hasColors?.() ?? false);
@@ -20,6 +22,29 @@ export function failStartup(error: unknown): never {
   if (error instanceof Error && error.constructor === Error) console.error(`${errorPrefix()} ${error.message}`);
   else console.error(errorPrefix(), error);
   process.exit(1);
+}
+
+/**
+ * THE placement entry point for commands: resolve `dir`, or exit 1 with the one-line refusal. Every
+ * command that needs an agent goes through this — the try/catch was hand-repeated at sixteen call
+ * sites, which is sixteen chances to forget it (`dev`'s supervisor did, and surfaced a raw stack).
+ *
+ * The catch is what makes it a function at all: placement resolves SYNCHRONOUSLY, before any promise
+ * exists, so it cannot ride the `.catch(failStartup)` every async startup chain carries — and its
+ * refusals ("not a fastagent agent", plus the two dead ends with their own exits) are user-fixable,
+ * which means a one-line `Error:` and exit 1, never a stack.
+ *
+ * Not every command calls it — and the exceptions are the useful part of this note. `init` CREATES the
+ * agent (it must run where there is none). `models` is directory-independent. `login` needs one only for
+ * the project-level credential and falls back to the global one, and `attach --url/--token` reads
+ * nothing local. Everything else needs an agent, so it comes through here.
+ */
+export function placementOrExit(dir: string): ResolvedPlacement {
+  try {
+    return resolvePlacement(dir);
+  } catch (error) {
+    failStartup(error);
+  }
 }
 
 /**

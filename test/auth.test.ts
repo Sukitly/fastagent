@@ -16,7 +16,7 @@ async function authPath(contents?: string): Promise<string> {
   return path;
 }
 
-describe("fastagentCredentialStore (read-write ~/.fastagent/auth.json; fail-visibly discipline)", () => {
+describe("fastagentCredentialStore (read-write credential file; fail-visibly discipline)", () => {
   it("missing file → undefined, no warning (normal not-configured)", async () => {
     const warn = vi.fn();
     expect(await fastagentCredentialStore("/nonexistent/auth.json", { warn }).read("anthropic")).toBeUndefined();

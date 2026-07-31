@@ -13,7 +13,7 @@ import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
-import { isGeneratedDockerfile } from "../../deploy/container.ts";
+import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../deploy/container.ts";
 import {
   composeHasTunnelService,
   dockerWebhookPaths,
@@ -23,6 +23,7 @@ import {
 } from "../../deploy/docker/plan.ts";
 import { deployDockerRun } from "../../deploy/docker/run.ts";
 import {
+  isGeneratedFlyToml,
   parseFlyAppName,
   parseFlyMinMachines,
   parseFlyRegion,
@@ -31,18 +32,19 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import { dockerfilePathVar, isGeneratedRailwayJson, planRailwayDeploy } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveModelSpec, resolveStateRoot } from "../../engines/pi/config.ts";
+import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
+import { type ResolvedPlacement, resolveStateRoot } from "../../paths.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
-import { exists } from "../../scaffold/init.ts";
+import { exists } from "../../paths.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
@@ -62,27 +64,29 @@ export interface DeployOptions {
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
-  const target = resolve(dirArg);
+  // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
+  // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
+  // from the workspace, which is the build context.
+  const placement = placementOrExit(resolve(dirArg));
+  const { agentDir, workspace } = placement;
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
-  loadDotEnv(target); // a custom provider/tool may read a key at config load
+  loadDotEnv(agentDir); // a custom provider/tool may read a key at config load
   installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
   // First-run funnel, FULL picker: the write-back lands the model in fastagent.config.* — exactly what
   // the model-travel gate below requires (--model/env don't reach the deployed box) — and an inline
   // login stores the credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the
   // rewritten file because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
-  await resolveFirstRunModel(target, { model: opts.model, authPath: opts.authPath, input: opts.input });
-  const { config } = await loadConfig(target).catch(failStartup);
-  const agentDir = resolveAgentDir(target, config);
+  await resolveFirstRunModel(agentDir, { model: opts.model, authPath: opts.authPath, input: opts.input });
+  const { config } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
   // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts +
   // their warnings) lives in deploy/preflight.ts — testable in isolation. The CLI prints its messages and
   // stops on its gate; the host branch below adds only the host-specific artifacts + runbook + run drive.
   const pre = await preflightDeploy({
-    target,
-    agentDir,
+    placement,
     config,
     modelSpec,
     run: !!opts.run,
@@ -113,7 +117,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     if (opts.intoLinked) {
       console.error(`[fastagent] warn: --into-linked is Railway-only — ignored for local Docker`);
     }
-    const projectName = toDockerProjectName(basename(target));
+    const projectName = toDockerProjectName(basename(workspace));
     const dockerPlan = (tunnel: boolean) =>
       planDockerDeploy({
         projectName,
@@ -132,20 +136,23 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     let plan = dockerPlan(requestedTunnel);
     // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk,
     // regardless of the current flag. `--force` is the explicit reset to the requested generated shape.
-    const composeFile = join(target, plan.composePath);
+    const composeFile = join(workspace, plan.composePath);
     let keptWithoutRequestedTunnel = false;
-    if (!opts.force && (await exists(composeFile))) {
-      const existingHasTunnel = composeHasTunnelService(await readFile(composeFile, "utf8"));
+    // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must
+    // describe the topology that will actually be there.
+    const composeText = await readFile(composeFile, "utf8").catch(() => undefined);
+    if (composeText !== undefined && (!opts.force || !isGeneratedCompose(composeText))) {
+      const existingHasTunnel = composeHasTunnelService(composeText);
       plan = dockerPlan(existingHasTunnel);
       keptWithoutRequestedTunnel = requestedTunnel && !existingHasTunnel;
     }
-    await writeArtifacts(target, plan.artifacts, {
+    await writeArtifacts(workspace, plan.artifacts, {
       force: !!opts.force,
-      neverForce: container.kitDir ? [".dockerignore"] : [],
     });
     if (opts.run) {
       return runDeployDocker({
-        target,
+        agentDir,
+        workspace,
         composeFile: plan.composePath,
         port,
         requireTunnel: requestedTunnel,
@@ -178,7 +185,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // Railway service names are project-scoped (not globally unique like a Fly app); slug the dir
     // basename so a name with spaces/odd chars can't break the `railway add --service <name>` command.
     const serviceName =
-      basename(target)
+      basename(workspace)
         .replace(/[^a-zA-Z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
     const plan = planRailwayDeploy({
@@ -190,13 +197,22 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       hasTimeTriggers,
       ...container,
     });
-    await writeArtifacts(target, plan.artifacts, {
+    await writeArtifacts(workspace, plan.artifacts, {
       force: !!opts.force,
-      neverForce: container.kitDir ? [".dockerignore"] : [],
     });
     if (opts.run) {
+      // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner sets
+      // (Railway's documented non-root-Dockerfile route), and Railway's default restart policy already
+      // equals the file's ON_FAILURE — the dashboard-only Config-as-code pointer only adds the /health
+      // deploy gate (boot-crash visibility), so it is an OPTIONAL note, not a gate.
+      console.error(
+        `[fastagent] note: optional — point the service at fastagent/railway.json (Service → Settings → ` +
+          `Config-as-code, dashboard-only) so the /health healthcheck marks a boot-crashing deploy as FAILED; ` +
+          `the build already uses fastagent/Dockerfile via the RAILWAY_DOCKERFILE_PATH variable`,
+      );
       return runDeployRailway({
-        target,
+        agentDir,
+        workspace,
         name: serviceName,
         modelAuth,
         authPath,
@@ -204,6 +220,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
+        dockerfilePath: dockerfilePathVar(pre.container.agentPrefix),
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -229,19 +246,25 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
   // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
   // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
-  // Kit layout: fly.toml lives under the kit (agent/fly.toml) — the host repo's own fly.toml (if any)
-  // belongs to the host's product deploy and is never read or written here.
-  const flyTomlPath = container.kitDir ? join(target, container.kitDir, "fly.toml") : join(target, "fly.toml");
-  const flyTomlExists = await exists(flyTomlPath);
-  const keptApp = flyTomlExists && !opts.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
-  const appName = keptApp ?? toFlyAppName(basename(target));
+  // fly.toml lives in the agent dir (fastagent/fly.toml) — the workspace's own
+  // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
+  const flyTomlPath = join(agentDir, "fly.toml");
+  const flyToml = await readFile(flyTomlPath, "utf8").catch(() => undefined);
+  // Every decision below turns on ONE question — will `writeArtifacts` keep this file? — and the answer is
+  // OWNERSHIP, not the flag: `--force` resets a fly.toml we generated and leaves a hand-written one alone.
+  // Keying these on `--force` alone meant a forced deploy of a hand-owned fly.toml took the app name from
+  // the directory basename (shipping that file at a DIFFERENT app than it declares) and skipped the
+  // scale-to-zero gate below (a schedules deploy that silently sleeps). Read once, decide once.
+  const flyTomlKept = flyToml !== undefined && (!opts.force || !isGeneratedFlyToml(flyToml));
+  const keptApp = flyTomlKept ? parseFlyAppName(flyToml as string) : undefined;
+  const appName = keptApp ?? toFlyAppName(basename(workspace));
   if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
-  if (flyTomlExists && opts.force) {
+  if (flyToml !== undefined && !flyTomlKept) {
     console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
   }
   // Autostop flags shape the GENERATED fly.toml only. In KEEP mode (fly.toml exists, no --force) it is
   // not rewritten, so the flags would silently do nothing — surface that instead of a confusing no-op.
-  if (flyTomlExists && !opts.force && (opts.stop || opts.scaleToZero === false)) {
+  if (flyTomlKept && (opts.stop || opts.scaleToZero === false)) {
     console.error(
       `[fastagent] warn: --stop/--no-scale-to-zero only shape a freshly generated fly.toml — yours exists and ` +
         `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
@@ -253,8 +276,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // Under `--run` this is a GATE (same discipline as the model-travel gate): a full deploy whose schedules
   // silently never fire is worse than a crash-loop — nothing fails visibly when a cron instant passes on a
   // sleeping machine, and unlike github's min=0 there is no legitimate trade to accept here.
-  if (flyTomlExists && !opts.force && (hasTimeTriggers || longConnectionChannels.length > 0)) {
-    const min = parseFlyMinMachines(await readFile(flyTomlPath, "utf8"));
+  if (flyTomlKept && (hasTimeTriggers || longConnectionChannels.length > 0)) {
+    const min = parseFlyMinMachines(flyToml as string);
     if ((min ?? 0) === 0) {
       // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a
       // hand-written fly.toml without the line scales to zero exactly like an explicit 0.
@@ -280,13 +303,14 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     autostop: opts.stop ? "stop" : "suspend",
     scaleToZero: opts.scaleToZero !== false,
   });
-  await writeArtifacts(target, plan.artifacts, {
+  await writeArtifacts(workspace, plan.artifacts, {
     force: !!opts.force,
-    neverForce: container.kitDir ? [".dockerignore"] : [],
   });
   if (opts.run) {
     return runDeployFly({
-      target,
+      agentDir,
+      workspace,
+      agentPrefix: container.agentPrefix,
       appName,
       modelAuth,
       authPath,
@@ -300,52 +324,74 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
 }
 
 /**
- * Write each generated artifact. An existing file is KEPT unless --force — deploy NEVER clobbers a file
- * without it (no silent data loss). A Dockerfile/Compose file WE generated is definition-derived, so a
- * KEPT one that no longer matches what deploy would generate now (config/channel/lockfile/version drift —
- * OR the user's own edits, which we can't distinguish) is flagged stale; --force regenerates it. A
- * hand-written Dockerfile/Compose/ignore or fly.toml's app+region state is simply kept.
+ * Write each generated artifact, under ONE ownership rule: **deploy only ever overwrites its own
+ * output.** Each generated file opens with a marker, so a file on disk is either OURS (a previous
+ * `deploy` wrote it) or the author's — and `--force` means "my generated artifact is authoritative",
+ * which never licenses clobbering a file we did not write. To hand a path back to fastagent, delete it.
+ *
+ * That single rule replaced a second mechanism (a per-host list of paths exempt from `--force`), which
+ * only described one shape: with the agent inside the workspace, the root `.dockerignore` is the
+ * WORKSPACE's file and was listed; with the agent flat, the list was empty — so `--force` would have
+ * overwritten a hand-written root `Dockerfile` in a repository `init --flat` had explicitly adopted.
+ * Ownership is a property of the file, not of where the agent sits.
+ *
+ * A KEPT file of OURS that no longer matches what deploy would generate now (config/channel/lockfile/
+ * version drift — or the author's edits, which we cannot tell apart) is flagged stale; `--force`
+ * regenerates that one.
  */
+/** Did fastagent generate the file at `path`? ONE table for all five artifact kinds: a kind missing from
+ *  it is permanently classified as the author's, which silently turns `--force` into a no-op for that
+ *  file (`fly.toml` and `railway.json` were, until the marker predicates below existed). */
+function isOurArtifact(path: string, content: string): boolean {
+  if (path.endsWith("Dockerfile")) return isGeneratedDockerfile(content);
+  if (path.endsWith(".dockerignore")) return isGeneratedDockerignore(content);
+  if (path.endsWith("fastagent.compose.yml")) return isGeneratedCompose(content);
+  if (path.endsWith("fly.toml")) return isGeneratedFlyToml(content);
+  if (path.endsWith("railway.json")) return isGeneratedRailwayJson(content);
+  return false;
+}
+
 async function writeArtifacts(
   target: string,
   artifacts: { path: string; content: string }[],
-  options: { force: boolean; neverForce?: string[] },
+  options: { force: boolean },
 ): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
-    // Host-owned paths (the root .dockerignore in the agentDir layout): --force means "MY generated
-    // artifact is authoritative", which never licenses clobbering the HOST's file — keep it always.
-    if (options.neverForce?.includes(a.path) && (await exists(abs))) {
+    const existing = (await exists(abs)) ? await readFile(abs, "utf8") : undefined;
+    const ours = existing !== undefined && isOurArtifact(a.path, existing);
+    if (existing !== undefined && !ours) {
+      // Only the `.dockerignore` has content checks in preflight — pointing at "the preflight warnings"
+      // for the other kinds would send the reader looking for output that is never printed.
       console.error(
-        `[fastagent] kept ${a.path} — the host repo's own file (never overwritten, even with --force); ` +
-          `see the preflight warnings for what it must contain`,
+        `[fastagent] kept ${a.path} — not generated by fastagent, so --force does not touch it ` +
+          `(delete it to let deploy own the path)` +
+          (a.path.endsWith(".dockerignore")
+            ? `; see the preflight warnings for what it must exclude`
+            : a.path.endsWith("Dockerfile")
+              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start /app\``
+              : ``),
       );
       continue;
     }
-    if (!options.force && (await exists(abs))) {
-      const existing = await readFile(abs, "utf8");
-      const generatedDrift =
-        (a.path.endsWith("Dockerfile") && isGeneratedDockerfile(existing)) ||
-        (a.path.endsWith("fastagent.compose.yml") && isGeneratedCompose(existing));
-      if (generatedDrift && existing !== a.content) {
-        console.error(
-          `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
-            `you edited it); pass --force to regenerate.`,
-        );
-      } else {
-        console.error(`[fastagent] kept ${a.path} (exists — pass --force to overwrite)`);
-      }
+    if (existing !== undefined && !options.force) {
+      console.error(
+        existing !== a.content
+          ? `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
+              `you edited it); pass --force to regenerate.`
+          : `[fastagent] kept ${a.path} (unchanged)`,
+      );
       continue;
     }
-    await mkdir(dirname(abs), { recursive: true }); // kit-layout artifacts live under agent/
+    await mkdir(dirname(abs), { recursive: true }); // artifacts live under fastagent/
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
 }
 
-function deployEnvironment(target: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
+function deployEnvironment(agentDir: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
   if (!channels.includes("slack")) return process.env;
-  const latest = readSlackBotAuthEnv(join(resolveStateRoot(target), "channels", "slack", "bot-auth.json"));
+  const latest = readSlackBotAuthEnv(join(resolveStateRoot(agentDir), "channels", "slack", "bot-auth.json"));
   return { ...process.env, ...latest };
 }
 
@@ -354,19 +400,21 @@ function deployEnvironment(target: string, channels: ChannelKind[]): NodeJS.Proc
  * user-owned local topology. Docker owns container/network/volume lifecycle. A Compose tunnel service,
  * when present, yields an ephemeral URL that reuses the same webhook announcer as `dev --tunnel`.
  */
-async function runDeployDocker(params: {
-  target: string;
-  composeFile: string;
-  port: number;
-  requireTunnel: boolean;
-  modelAuth: string | undefined;
-  authPath: string;
-  channels: ChannelKind[];
-  longConnectionChannels: string[];
-  extraSecrets: string[];
-}): Promise<void> {
+async function runDeployDocker(
+  params: ResolvedPlacement & {
+    composeFile: string;
+    port: number;
+    requireTunnel: boolean;
+    modelAuth: string | undefined;
+    authPath: string;
+    channels: ChannelKind[];
+    longConnectionChannels: string[];
+    extraSecrets: string[];
+  },
+): Promise<void> {
   const {
-    target,
+    agentDir,
+    workspace,
     composeFile,
     port,
     requireTunnel,
@@ -382,11 +430,11 @@ async function runDeployDocker(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: deployEnvironment(target, channels),
+    env: deployEnvironment(agentDir, channels),
   });
   const outcome = await deployDockerRun(
     { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
-    spawnRunner("docker", target),
+    spawnRunner("docker", workspace),
     (message) => console.error(`[fastagent] ${message}`),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
@@ -399,10 +447,10 @@ async function runDeployDocker(params: {
     // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
     // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
     installProxyFetch();
-    await announceWebhooks(target, outcome.tunnelUrl, {
+    await announceWebhooks(agentDir, outcome.tunnelUrl, {
       openUrl: openExternalUrl,
       routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
-      stateRoot: resolveStateRoot(target),
+      stateRoot: resolveStateRoot(agentDir),
     });
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
@@ -424,20 +472,34 @@ async function runDeployDocker(params: {
  * from the local env — the model key (env auth) or the whole auth.json as a `FASTAGENT_AUTH_SEED` seed
  * (OAuth/stored auth: the deployed box materializes it onto the /data volume on first boot, so a
  * personal deploy runs on the SAME subscription) plus channel secrets — then runs the flyctl steps
- * behind the shared {@link spawnRunner} seam (spawned `fly`, cwd = the workspace so the build context is the agent).
+ * behind the shared {@link spawnRunner} seam (spawned `fly`, cwd = the workspace so the build context is the whole workspace).
  */
-async function runDeployFly(params: {
-  target: string;
-  appName: string;
-  modelAuth: string | undefined;
-  authPath: string;
-  channels: ChannelKind[];
-  longConnectionChannels: string[];
-  flyTomlPath: string;
-  extraSecrets: string[];
-}): Promise<void> {
-  const { target, appName, modelAuth, authPath, channels, longConnectionChannels, flyTomlPath, extraSecrets } = params;
-  const fly = spawnRunner("fly", target);
+async function runDeployFly(
+  params: ResolvedPlacement & {
+    /** Where the agent's files sit relative to the build context — `"fastagent/"` or `""` (flat). */
+    agentPrefix: string;
+    appName: string;
+    modelAuth: string | undefined;
+    authPath: string;
+    channels: ChannelKind[];
+    longConnectionChannels: string[];
+    flyTomlPath: string;
+    extraSecrets: string[];
+  },
+): Promise<void> {
+  const {
+    agentDir,
+    workspace,
+    agentPrefix,
+    appName,
+    modelAuth,
+    authPath,
+    channels,
+    longConnectionChannels,
+    flyTomlPath,
+    extraSecrets,
+  } = params;
+  const fly = spawnRunner("fly", workspace);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
     failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
@@ -450,7 +512,7 @@ async function runDeployFly(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: deployEnvironment(target, channels),
+    env: deployEnvironment(agentDir, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
   // here, not through missingSecrets, so the message isn't a contradictory mash of both.
@@ -463,12 +525,21 @@ async function runDeployFly(params: {
   }
 
   const outcome = await deployFlyRun(
-    { appName, region, secrets, missingSecrets, channels, longConnectionChannels, flyConfig: "fly.toml" },
+    {
+      appName,
+      region,
+      secrets,
+      missingSecrets,
+      channels,
+      longConnectionChannels,
+      flyConfig: `${agentPrefix}fly.toml`,
+      dockerfile: `${agentPrefix}Dockerfile`,
+    },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
+    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
@@ -477,22 +548,36 @@ async function runDeployFly(params: {
 /**
  * `deploy railway --run`: drive the railway CLI to completion. Mirrors {@link runDeployFly} — same
  * credential carry (env key OR the OAuth auth.json as `FASTAGENT_AUTH_SEED`) via {@link assembleSecrets},
- * same runner seam (spawned `railway`, cwd = the workspace so `railway up`'s upload is the agent). The
+ * same runner seam (spawned `railway`, cwd = the workspace so `railway up`'s upload is the whole workspace). The
  * Railway-specific sequence (linked-check → init/add/volume when fresh → variables → up → domain →
  * webhook) lives in {@link deployRailwayRun}; see there for why Railway differs from Fly.
  */
-async function runDeployRailway(params: {
-  target: string;
-  name: string;
-  modelAuth: string | undefined;
-  authPath: string;
-  channels: ChannelKind[];
-  longConnectionChannels: string[];
-  extraSecrets: string[];
-  intoLinked: boolean;
-}): Promise<void> {
-  const { target, name, modelAuth, authPath, channels, longConnectionChannels, extraSecrets, intoLinked } = params;
-  const railway = spawnRunner("railway", target);
+async function runDeployRailway(
+  params: ResolvedPlacement & {
+    name: string;
+    modelAuth: string | undefined;
+    authPath: string;
+    channels: ChannelKind[];
+    longConnectionChannels: string[];
+    extraSecrets: string[];
+    intoLinked: boolean;
+    /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
+    dockerfilePath: string;
+  },
+): Promise<void> {
+  const {
+    agentDir,
+    workspace,
+    name,
+    modelAuth,
+    authPath,
+    channels,
+    longConnectionChannels,
+    extraSecrets,
+    intoLinked,
+    dockerfilePath,
+  } = params;
+  const railway = spawnRunner("railway", workspace);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
     failStartup(new Error(`railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`));
@@ -504,7 +589,7 @@ async function runDeployRailway(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: deployEnvironment(target, channels),
+    env: deployEnvironment(agentDir, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
   if (needsModelCredential) {
@@ -516,12 +601,12 @@ async function runDeployRailway(params: {
   }
 
   const outcome = await deployRailwayRun(
-    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked },
+    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked, dockerfilePath },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
+    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

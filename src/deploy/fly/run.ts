@@ -41,8 +41,11 @@ export interface FlyRunPlan {
   missingSecrets: string[];
   channels: ChannelKind[];
   longConnectionChannels?: string[];
-  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace dir). */
+  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace root). */
   flyConfig: string;
+  /** Dockerfile path passed explicitly (`fastagent/Dockerfile`, with the workspace as context —
+   *  flyctl would otherwise resolve it relative to the config's own directory). */
+  dockerfile: string;
 }
 
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
@@ -132,11 +135,23 @@ export async function deployFlyRun(
     }
   }
 
-  // 6. Deploy — remote builder (no local Docker), one machine.
+  // 6. Deploy — remote builder (no local Docker), one machine. Context + Dockerfile are passed
+  //    explicitly (the workspace root is the context; the Dockerfile lives under fastagent/).
   log("deploying (remote build)…");
-  if (
-    (await fly(["deploy", "-a", plan.appName, "-c", plan.flyConfig, "--remote-only", "--yes", "--ha=false"])).code !== 0
-  ) {
+  const deployArgs = [
+    "deploy",
+    ".",
+    "-a",
+    plan.appName,
+    "-c",
+    plan.flyConfig,
+    "--dockerfile",
+    plan.dockerfile,
+    "--remote-only",
+    "--yes",
+    "--ha=false",
+  ];
+  if ((await fly(deployArgs)).code !== 0) {
     return gate("`fly deploy` failed — see the flyctl output above; fix and re-run");
   }
 

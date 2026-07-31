@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,8 +77,8 @@ describe("cli kernel: spec conformance", () => {
     const carried: [string[], string][] = [
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
-      [["init"], "Never overwrites existing files"],
-      [["init"], "the kit goes into ./agent"],
+      [["init"], "never its NAME, so --agent-dir"],
+      [["init"], "the agent goes into ./fastagent/"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["fire"], "does NOT advance the schedule's fire state"],
       [["schedule", "history"], "did last night's run silently fail"],
@@ -95,7 +95,7 @@ describe("cli kernel: spec conformance", () => {
       [["deploy"], "missing CLI/daemon/login/secret"],
       [["deploy"], "Existing Compose stays authoritative"],
       [["deploy"], "routine redeploy of an already-provisioned agent"],
-      [["login"], "run from $HOME for the global ~/.fastagent/auth.json"],
+      [["login"], "outside an agent it writes the global ~/.fastagent/.secrets/auth.json"],
     ];
     const rendered = new Map<string, string>();
     for (const [path, phrase] of carried) {
@@ -308,10 +308,10 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     expect(r.err).toMatch(/Allowed choices are docker, fly, railway/);
   });
 
-  it("conflicting flags are rejected by the parser (init --flat vs --agent-dir)", async () => {
-    const r = await parse(["init", "--flat", "--agent-dir", "x"]);
+  it("an unknown flag is rejected by the parser (init --embedded is gone — nesting is the default)", async () => {
+    const r = await parse(["init", "--embedded"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/'--flat' cannot be used with option '--agent-dir/);
+    expect(r.err).toMatch(/unknown option '--embedded'/);
   });
 });
 
@@ -319,6 +319,15 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 // End-to-end through cli.ts: the delegation seam (kernel commands bypass the legacy parseArgs).
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+/** A workspace with an (empty) agent dir in it, as `init` produces the placement. */
+async function agentWorkspace(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  await mkdir(join(dir, "fastagent"));
+  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n"); // THE marker
+  return dir;
+}
 
 function run(
   args: string[],
@@ -343,7 +352,7 @@ describe("cli end to end: the thin entry", () => {
   });
 
   it("schedule list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-sched-"));
+    const dir = await agentWorkspace("fa-kernel-sched-");
     const { code, stdout, stderr } = await run(["schedule", "list", dir]);
     expect(code).toBe(0);
     expect(stdout).toBe("");
@@ -351,7 +360,7 @@ describe("cli end to end: the thin entry", () => {
   });
 
   it("schedule cancel on a missing wake-up exits 1 (runtime miss, not usage)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-cancel-"));
+    const dir = await agentWorkspace("fa-kernel-cancel-");
     const { code, stderr } = await run(["schedule", "cancel", "wake-nope", dir]);
     expect(code).toBe(1);
     expect(stderr).toMatch(/no pending wake-up wake-nope/);
@@ -364,7 +373,7 @@ describe("cli end to end: the thin entry", () => {
   });
 
   it("exit codes follow responsibility: bad --port flag → 2 (usage), bad PORT env → 1 (config)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-port-"));
+    const dir = await agentWorkspace("fa-kernel-port-");
     const flag = await run(["start", dir, "--port", "abc"]);
     expect(flag.code).toBe(2);
     expect(flag.stderr).toMatch(/invalid --port/);
@@ -373,15 +382,19 @@ describe("cli end to end: the thin entry", () => {
     expect(env.stderr).toMatch(/invalid PORT env/);
   });
 
-  it("an invalid --agent-dir VALUE is a usage error (exit 2), and nothing is written", async () => {
+  it("--flat and --agent-dir name ONE knob, so passing both is a usage error (exit 2), not a precedence", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-kernel-agentdir-"));
-    const r = await run(["init", dir, "--agent-dir", "."]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toMatch(/must be a subdirectory/);
+    const both = await run(["init", dir, "--no-install", "--flat", "--agent-dir", "bot"]);
+    expect(both.code).toBe(2);
+    expect(both.stderr).toMatch(/cannot be used with/);
+    // …and a value that is not one directory name is the same class: a rejected VALUE, not a runtime fault.
+    const path = await run(["init", dir, "--no-install", "--agent-dir", join("nested", "bot")]);
+    expect(path.code).toBe(2);
+    expect(path.stderr).toMatch(/must be a single directory name/);
   });
 
   it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-tool-"));
+    const dir = await agentWorkspace("fa-kernel-tool-");
     // "read" is a pi default tool — present in any workspace, so the failure is the JSON, not the name.
     const bad = await run(["tool", "read", "{not json", dir]);
     expect(bad.code).toBe(2);

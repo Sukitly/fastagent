@@ -12,7 +12,7 @@ It is an ingress adapter only: it verifies and routes GitHub events, then starts
 
 ## Add the channel
 
-From an agent workspace:
+From an agent directory:
 
 ```bash
 fastagent add github
@@ -45,7 +45,7 @@ export default githubChannel({
 ## Configure GitHub
 
 1. Get a webhook secret. `fastagent add github` already generated one and wrote it to the run-root
-   `.env` when `.env` is gitignored; otherwise set one yourself:
+   `.secrets/.env` (gitignored by the scaffolded `.secrets/.gitignore`); otherwise set one yourself:
 
    ```bash
    GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 24)   # then put it in .env

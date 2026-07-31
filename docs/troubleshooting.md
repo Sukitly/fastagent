@@ -40,13 +40,13 @@ Precedence:
 The selected provider has no credentials.
 
 Most common cause: you ran `fastagent login` **from a different directory**. Login is project-level —
-it writes `<cwd>/.fastagent/auth.json`, and there is no fallback to the global file. Run it inside the
-workspace, or point every project at one shared file with `FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`.
+it writes `<agent dir>/.secrets/auth.json`, and there is no fallback to the global file. Run it inside the
+agent, or point every project at one shared file with `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`.
 
 Options:
 
 ```bash
-cd <workspace> && fastagent login
+cd <agent dir> && fastagent login
 ```
 
 or set a provider API key in `.env` / environment, for example:
@@ -64,8 +64,8 @@ Symptoms include `Cannot find package`, `Cannot use import statement outside a m
 
 Check:
 
-- the workspace ran `npm install`,
-- dependencies used by tools are in the workspace `package.json`,
+- the agent ran `npm install`,
+- dependencies used by tools are in the agent's `package.json`,
 - `package.json` has `"type": "module"`,
 - the tool file default-exports `defineTool({...})`,
 - the tool file is under `tools/` and ends in `.ts`, `.js`, or `.mjs`.
@@ -93,7 +93,7 @@ For `start`, hosted environments can set `PORT`.
 
 - **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
   with no restart (and no watcher involvement).
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`) restart the
+- **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.secrets/.env`) restart the
   dev worker — a new process is the only way to drop the ESM module cache.
 
 Nothing else is watched: files the agent itself writes into the workspace (its work product) never
@@ -107,20 +107,24 @@ Use `--no-watch` to serve once without the supervisor.
 
 ## Sessions disappear after redeploy
 
-By default, all machine state (auth, sessions, channel state) lives under the workspace:
+By default, machine state (sessions, channel state, schedule state) lives under the agent's
+`.state/`, and the seeded/rotated credentials (`auth.json`) under its `.secrets/`:
 
 ```txt
-<state root>   # default <workspace>/.fastagent
+<state root>    # default <agent dir>/.state
+<secrets dir>   # default <agent dir>/.secrets
 ```
 
-A redeploy that replaces the workspace wipes it. Point the whole state root at durable storage:
+A redeploy that replaces the agent wipes both. Point each at durable storage (the generated
+deploy targets set both):
 
 ```bash
-FASTAGENT_STATE_DIR=/data/fastagent fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 Moving only sessions (`FASTAGENT_SESSIONS_DIR` / `--sessions-dir`) is not enough for channel-backed
-deployments — Telegram's durable turn state also lives under the state root.
+deployments — Telegram's durable turn state also lives under the state root. And moving only the
+state root still leaves a rotated `auth.json` in the agent dir — set `FASTAGENT_SECRETS_DIR` too.
 
 ## `session busy`
 
@@ -160,7 +164,7 @@ Check:
 - the public URL printed by FastAgent is the one configured in the provider,
 - the route path matches the channel (`/webhook` for GitHub, `/telegram` for Telegram, `/slack` for Slack, `/feishu` for Feishu, `/lark` for Lark),
 - the provider secret matches your `.env`,
-- your `.env` is loaded from the workspace directory.
+- your `.env` is loaded from the agent's `.secrets/` directory.
 
 ## GitHub webhook returns 401
 

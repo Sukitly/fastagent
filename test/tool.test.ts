@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool, loadTools, z } from "../src/index.ts";
-import { resolveWorkspaceTools } from "../src/engines/pi/create.ts";
+import { resolveAgentTools } from "../src/engines/pi/create.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -79,7 +79,7 @@ describe("loadTools (filesystem discovery)", () => {
     expect((await tools[0]!.execute("c", {})).details).toBe("pong");
   });
 
-  it("resolveWorkspaceTools discovers tools/ from agentDir, NOT from cwd (guards the agentDir/cwd param split)", async () => {
+  it("resolveAgentTools discovers tools/ from agentDir, NOT from cwd (guards the agentDir/cwd param split)", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-ws-cwd-"));
     const agentDir = join(cwd, "agent");
     const tool = `export default { description: "d", parameters: { type: "object" }, async execute() { return { content: [], details: "" }; } };`;
@@ -88,7 +88,7 @@ describe("loadTools (filesystem discovery)", () => {
     await mkdir(join(cwd, "tools"), { recursive: true });
     await writeFile(join(cwd, "tools", "hostonly.mjs"), tool); // the host repo's tool at cwd — must NOT be scanned
 
-    const { toolNames } = await resolveWorkspaceTools({}, agentDir, cwd);
+    const { toolNames } = await resolveAgentTools({}, agentDir, cwd);
     expect(toolNames).toContain("foo"); // discovered from agentDir
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });

@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDotEnv, loadEnvFile } from "../src/env.ts";
+import { dotEnvPath, loadDotEnv, loadEnvFile } from "../src/env.ts";
+
+describe("dotEnvPath (follows the resolved secrets dir)", () => {
+  it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
+    expect(dotEnvPath("/w", {} as NodeJS.ProcessEnv)).toBe(join("/w", ".secrets", ".env"));
+    expect(dotEnvPath("/w", { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
+      join("/data/.secrets", ".env"),
+    );
+  });
+});
 
 // A portable .env loader (Node has process.loadEnvFile; Bun does not — same parse must run on both).
 describe("loadEnvFile", () => {
@@ -75,7 +84,7 @@ describe("loadEnvFile", () => {
   });
 });
 
-describe("loadDotEnv (workspace <dir>/.env, missing is normal)", () => {
+describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () => {
   it("a dir with no .env is a no-op, not a throw", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-"));
     expect(() => loadDotEnv(dir)).not.toThrow(); // ENOENT swallowed
@@ -84,7 +93,50 @@ describe("loadDotEnv (workspace <dir>/.env, missing is normal)", () => {
   it("a NON-ENOENT read error propagates (a corrupt/unreadable .env fails visibly, never silently)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-bad-"));
     // A directory AT the .env path makes readFileSync throw EISDIR — a non-ENOENT error that must surface.
-    await mkdir(join(dir, ".env"));
+    await mkdir(join(dir, ".secrets", ".env"), { recursive: true });
     expect(() => loadDotEnv(dir)).toThrow(expect.objectContaining({ code: "EISDIR" }));
+  });
+});
+
+describe("env: a stray .env at the agent root is announced, not silently ignored", () => {
+  it("warns only about keys fastagent itself reads — an application's .env is not ours to lecture about", async () => {
+    const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir, homedir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadDotEnv } = await import("../src/env.ts");
+    const { log } = await import("../src/log.ts");
+
+    const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
+    await mkdir(agent);
+    await writeFile(join(agent, "fastagent.config.mjs"), "export default {};\n"); // THE marker
+    await writeFile(join(agent, ".env"), "FASTAGENT_MODEL=prov/m\n"); // NOT the file fastagent reads
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      loadDotEnv(agent);
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets FASTAGENT_MODEL/);
+      expect(process.env.FASTAGENT_MODEL).toBeUndefined(); // announced, never loaded behind the user's back
+
+      // An agent directory can be the author's repository too (`--agent-dir .` exists for that shape),
+      // where a root `.env` is their APPLICATION's and "move the values there" would break it. Nothing
+      // here can tell those apart, so the warning is scoped to keys fastagent itself reads — and stays
+      // silent about everything else, however long the agent runs without a `.secrets/.env`.
+      await writeFile(join(agent, ".env"), "DATABASE_URL=postgres://real\n");
+      warn.mockClear();
+      loadDotEnv(agent);
+      expect(warn).not.toHaveBeenCalled();
+
+      // …and the agent's own env still loads from the right place, warning or not.
+      await mkdir(join(agent, ".secrets"), { recursive: true });
+      await writeFile(join(agent, ".secrets", ".env"), "REAL=1\n");
+      loadDotEnv(agent);
+      expect(process.env.REAL).toBe("1");
+
+      // Nothing to warn about where fastagent's own machinery home lives (no root `.env` there).
+      warn.mockClear();
+      loadDotEnv(homedir());
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -7,13 +7,13 @@ status: current
 
 # Embedding
 
-Use FastAgent as a **library** — the agent is one capability inside a product you already have, living in your own route, wired to your session store, your auth, your host. For the standalone CLI path (`init` / `dev` / `start`), see [quickstart](quickstart.md); both serve the **same** assembled agent.
+Use FastAgent as a **library** — the agent is one capability inside a product you already have, living in your own route, wired to your session store, your auth, your host. For the embedded CLI path (`init` / `dev` / `start`), see [quickstart](quickstart.md); both serve the **same** assembled agent.
 
 ## Prerequisites
 
 - **Node ≥ 22.19.** Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency:** `npm i @fastagent-sh/fastagent`.
-- **Model credentials** — `fastagent login` (OAuth, writes the project-level `<cwd>/.fastagent/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#4-auth) below.
+- **Model credentials** — `fastagent login` (OAuth, writes the project-level `<agent dir>/.secrets/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#4-auth) below.
 
 ## The one mental model
 
@@ -39,13 +39,13 @@ The stream ends with exactly one `completed` / `failed`, or is cancelled by the 
 
 | You have | Use | Returns |
 |---|---|---|
-| An agent directory (`persona.md` + `skills/` + `tools/` + config) | `createPiAgentFromWorkspace(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
+| An agent directory (`persona.md` + `skills/` + `tools/` + config) | `createPiAgentFromDir(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
 | A definition directory, but you want to control the K ports | `createPiAgentFromDefinition(dir, { model, … })` | `{ agent, definition }` |
 | No directory — assemble from code | `createPiAgent({ model, instructions, tools })` | `agent` |
 
 ```ts
 // A) directory, batteries-included (the same assembly `fastagent dev` uses)
-const { agent } = await createPiAgentFromWorkspace("./agent", { model: "openai-codex/gpt-5.5" });
+const { agent } = await createPiAgentFromDir("./agent", { model: "openai-codex/gpt-5.5" });
 
 // B) no directory — Tier 1: three concrete fields
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent";
@@ -155,7 +155,7 @@ must wire those surfaces too. That adapter is future work.
 
 ## 4. Auth
 
-Auth never appears in your agent code. It resolves, in order, from a **credentials file** then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). The dir-aware rungs default it to the **project-level** `<state root>/auth.json` (the root resolves `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`): the directory opener (`createPiAgentFromWorkspace`, i.e. `dev`/`start`) and `createPiAgentFromDefinition(dir)`. The dir-less `createPiAgent` / `createPiModels` default to the global `~/.fastagent/auth.json`; all of them accept an explicit `authPath`. A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login` (which writes the project-level file by default). There is no implicit fallback between the project and global files — each owns its own OAuth refresh lifecycle.
+Auth never appears in your agent code. It resolves, in order, from a **credentials file** then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). The dir-aware rungs default it to the **project-level** `<agent dir>/.secrets/auth.json` (the dir resolves `FASTAGENT_SECRETS_DIR` > `<dir>/.secrets`): the directory opener (`createPiAgentFromDir`, i.e. `dev`/`start`) and `createPiAgentFromDefinition(dir)`. The dir-less `createPiAgent` / `createPiModels` default to the global `~/.fastagent/.secrets/auth.json`; all of them accept an explicit `authPath`. A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login` (which writes the project-level file by default). There is no implicit fallback between the project and global files — each owns its own OAuth refresh lifecycle.
 
 To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined`.
 
@@ -191,7 +191,7 @@ const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
 
 ## How embed and CLI relate
 
-`fastagent dev` / `start` wrap the pi reference implementation's `createPiAgentFromWorkspace` plus process side effects (`.env`, proxy, watch, serve). The agent the CLI serves is the **same** one `createPiAgentFromDefinition` hands you when embedding — single assembly source. What you iterate under `dev`, what `start` serves, and what you embed are identical.
+`fastagent dev` / `start` wrap the pi reference implementation's `createPiAgentFromDir` plus process side effects (`.env`, proxy, watch, serve). The agent the CLI serves is the **same** one `createPiAgentFromDefinition` hands you when embedding — single assembly source. What you iterate under `dev`, what `start` serves, and what you embed are identical.
 
 For contract-only or channel code, import `@fastagent-sh/fastagent/core`; it does not load the pi
 reference runtime. Pi-specific assembly is also available explicitly from `@fastagent-sh/fastagent/pi`.

@@ -11,6 +11,7 @@
  *   });
  */
 import { join } from "node:path";
+import { assertInsideAgentDir } from "../../paths.ts";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
@@ -150,6 +151,9 @@ export interface ToolCollision {
 export async function loadTools(
   dir: string,
 ): Promise<{ tools: AgentTool[]; collisions: ToolCollision[]; failures: ModuleLoadFailure[] }> {
+  // The same containment guard channels/schedules/skills get — and `tools/` is the one that gets
+  // IMPORTED AND EXECUTED, so a symlink escaping the agent dir is exactly what it must refuse.
+  await assertInsideAgentDir(dir, "tools");
   const { modules, failures } = await loadModuleDir(join(dir, "tools"));
   const byName = new Map<string, AgentTool>();
   const collisions: ToolCollision[] = [];

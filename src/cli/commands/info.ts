@@ -5,19 +5,18 @@ import { discoverChannelFiles } from "../../engines/pi/channel.ts";
 import {
   defaultSessionsDir,
   loadConfig,
-  resolveAgentDir,
   resolveAuthPath,
   resolveModelSpec,
   resolveSessionsDirOverride,
-  resolveStateRoot,
 } from "../../engines/pi/config.ts";
-import { resolveWorkspaceTools } from "../../engines/pi/create.ts";
+import { resolveStateRoot, workspaceHint } from "../../paths.ts";
+import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -28,17 +27,18 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const dir = resolve(dirArg);
-  loadDotEnv(dir); // skills/tools may read env at load time
-  const { config, path: configPath } = await loadConfig(dir).catch(failStartup);
+  const { agentDir, workspace } = placementOrExit(dir);
+  loadDotEnv(agentDir); // skills/tools may read env at load time
+  const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
-  // dir = the run root (cwd, whose AGENTS.md is ② context); the agent's own surface lives in agentDir.
-  const agentDir = resolveAgentDir(dir, config);
-  const definition = await loadAgentDefinition(agentDir, { cwd: dir }).catch(failStartup);
+  // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON
+  // (its cwd, whose AGENTS.md ancestors are ② context).
+  const definition = await loadAgentDefinition(agentDir, { cwd: workspace }).catch(failStartup);
   // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a
   // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
   // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
   // tools/ dir), not a single bad file.
-  const tools = await resolveWorkspaceTools(config, agentDir, dir)
+  const tools = await resolveAgentTools(config, agentDir, workspace)
     .then((r) => ({
       names: r.toolNames,
       deferred: r.deferredToolNames,
@@ -66,16 +66,16 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }));
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
-  const stateRoot = resolveStateRoot(dir);
+  const stateRoot = resolveStateRoot(agentDir);
   const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
-  const authPath = resolveAuthPath(dir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
+  const authPath = resolveAuthPath(agentDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
 
   if (opts.json) {
     console.log(
       JSON.stringify(
         {
-          dir,
           agentDir,
+          workspace,
           configPath: configPath ?? null,
           model: modelSpec ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
@@ -103,22 +103,27 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     );
     return;
   }
-  console.log(`dir:      ${dir}`);
-  if (agentDir !== dir) console.log(`agent:    ${agentDir}`);
-  console.log(`config:   ${configPath ?? "(none)"}`);
-  console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
-  if (config.thinkingLevel) console.log(`thinking: ${config.thinkingLevel}`);
-  console.log(`context:  ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
-  console.log(`persona:  ${definition.persona ? "persona.md" : "(none)"}`);
-  console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
-  console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
-  if (tools.deferred.length > 0) console.log(`deferred: ${tools.deferred.join(", ")} (activated via search_tools)`);
-  console.log(`channels: ${channels.join(", ") || "(none)"}`);
-  console.log(`schedules: ${schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)"}`);
-  console.log(`selfSchedule: ${config.selfSchedule ? "on (mounts the wake tool when serving)" : "off"}`);
-  console.log(`state:    ${stateRoot}`);
-  console.log(`sessions: ${sessionsDir}`);
-  console.log(`auth:     ${authPath}`);
+  // One padded label writer: hand-spaced labels drifted out of alignment the moment a longer one
+  // (agent/workspace/selfSchedule) joined the report.
+  const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
+  line("agent", agentDir);
+  line("workspace", workspace);
+  const hint = workspaceHint({ agentDir, workspace });
+  if (hint) line("hint", hint);
+  line("config", configPath ?? "(none)");
+  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
+  if (config.thinkingLevel) line("thinking", config.thinkingLevel);
+  line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
+  line("persona", definition.persona ? "persona.md" : "(none)");
+  line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");
+  line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
+  if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
+  line("channels", channels.join(", ") || "(none)");
+  line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");
+  line("selfSchedule", config.selfSchedule ? "on (mounts the wake tool when serving)" : "off");
+  line("state", stateRoot);
+  line("sessions", sessionsDir);
+  line("auth", authPath);
   reportToolCollisions(tools.collisions);
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);

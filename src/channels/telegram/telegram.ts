@@ -174,7 +174,7 @@ export function telegramChannel({
       throw new Error(`telegramChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", "telegram");
-    ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
+    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const buffer = createContextBuffer(join(stateHome, "buffers.json"));
     // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash
     // leaves it for replay on the next start. See turn-store.ts for the at-least-once semantics.

@@ -13,13 +13,13 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
-import { resolveStateRoot } from "../../engines/pi/config.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
 import type { SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface AttachOptions {
   /** Override the control endpoint (skip control.json discovery) — for a remote serve. */
@@ -115,8 +115,6 @@ async function drainEvents(iterator: AsyncIterator<SessionEvent>, io: AttachIo):
 
 export async function runAttach(sessionArg: string, dirArg: string | undefined, opts: AttachOptions): Promise<void> {
   setLogLevel("info");
-  const dir = resolve(dirArg ?? ".");
-  loadDotEnv(dir);
   // --url and --token travel together, and BOTH must be non-empty: a lone --url (or an empty
   // token) silently falling back to the LOCAL control.json would attach (and steer!) a same-named
   // local session while the user believes they are remote. One predicate decides — the guard and
@@ -125,6 +123,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   if (remote && !(opts.url && opts.token)) {
     failStartup(new Error("--url and --token must be given together and non-empty"));
   }
+  // A REMOTE attach reads nothing under `dir` — no control.json to discover, no agent to assemble —
+  // so requiring one would refuse the command's whole point (a laptop attaching to a deployed box).
+  // Placement is resolved only for the local-discovery path, which genuinely needs an agent.
+  const dir = remote ? resolve(dirArg ?? ".") : placementOrExit(resolve(dirArg ?? ".")).agentDir;
+  if (!remote) loadDotEnv(dir);
   // For a discovered endpoint the FIRST read joins the startup budget below: the dev-watch
   // restart window has two halves — control.json unlinked (not yet rewritten) and port not yet
   // bound — and dying instantly on the first half would contradict the grace the second half gets.

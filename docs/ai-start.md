@@ -16,36 +16,36 @@ Inspect the project first, preserve anything that already exists, and make the s
 
 Decide which job this is before touching anything:
 
-1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory), then flesh out `persona.md`, skills, and tools from what the user wants.
-2. **An existing directory becomes the agent.** The directory holds what the agent works on or with: `AGENTS.md`, markdown context, skills, tools — or just the projects the agent should manage (a parent directory of repos counts; it needs no agent-shaped files yet). Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
-3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses `./agent` with `config.agentDir` automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
+1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory) — the agent lands in `./fastagent/` and the directory around it becomes its workspace — then flesh out `persona.md`, skills, and tools from what the user wants.
+2. **An agent for an existing directory.** The directory holds what the agent works on or with: `AGENTS.md`, markdown context, a codebase — or just the projects the agent should manage (a parent directory of repos counts). Do not restructure it: run `fastagent init` in place; the whole agent nests into `./fastagent/` and the surrounding tree gets zero writes; an existing `AGENTS.md` is read as project context.
+3. **Embed an agent into an existing application (library path).** The project is an app that should serve the agent from its own route: initialize the same way, then mount the agent with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
 
 All three paths continue with the same steps below: inspect, authenticate, initialize once, test, then connect channels or deploy.
 
 ## Mental model
 
-- The directory is the agent: optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, markdown context, and `AGENTS.md` for project context.
-- An `AGENTS.md` does not make a directory a FastAgent workspace. A `fastagent.config.*` file does.
+- Two nouns, and they are never the same directory: the **agent** is `./fastagent/` — optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, config, machinery — and its **workspace** is the directory around it: what the agent works ON, its cwd, whose `AGENTS.md` is project context.
+- An `AGENTS.md` does not make a directory a FastAgent agent. A `fastagent.config.*` file does.
 - FastAgent can run the directory locally, embed it in an app, connect it to GitHub, Telegram, or Slack, expose it over HTTP, or put it behind a custom channel.
 - Do not invent a new project layout unless the user asks. Prefer the existing directory.
 
 ## Inspect before changing anything
 
-1. Check whether `fastagent.config.*` exists. If it does, the directory is already a workspace; read its `agentDir` when present.
-2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the root and under any configured `agentDir`.
-3. If code tools are present, check whether `package.json` sets `"type": "module"`.
-4. Ask before choosing a model provider, adding credentials, or changing the existing layout.
+1. Check whether `fastagent.config.*` exists at the directory root or under `./fastagent/`. If it does, the directory is already an agent.
+2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` in the agent dir (`./fastagent/`).
+3. If code tools are present, check whether the agent's `package.json` sets `"type": "module"`.
+4. Ask before choosing a model provider, adding credentials, or moving an existing agent.
 
 ## Handle authentication and models explicitly
 
 You are non-interactive, so do not rely on prompts you cannot answer.
 
 - A model must be explicit. Without one, `dev`, `start`, `invoke`, `fire`, and `chat` open a picker on a TTY and fail in a non-TTY with `missing model`. `deploy` also opens the picker on a TTY, but non-interactively it does NOT say `missing model`: plan mode warns, and `--run` stops at the model-travel gate ("no model in fastagent.config.ts").
-- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the workspace; it writes project-level `.fastagent/auth.json`, and credentials written in another directory are not visible here.
-- Alternatively, ask the user for a provider API key and put it in `.env` only with permission.
+- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the agent dir; it writes the project-level `.secrets/auth.json`, and credentials written in another directory are not visible here.
+- Alternatively, ask the user for a provider API key and put it in the agent's `.secrets/.env` only with permission (never a root `.env` — that file is not read).
 - List available specifications with `fastagent models`.
 - Always pass `--model provider/id`, set `FASTAGENT_MODEL`, or write `model` in `fastagent.config.*`.
-- Never commit `.env`, credentials, sessions, or `.fastagent/` machine state.
+- Never commit secrets or machine state — `.secrets/` carries its own `.gitignore` and the agent one excludes `.state/`; do not undo that.
 
 ## Know which commands exit
 
@@ -68,21 +68,17 @@ Run:
 fastagent init <dir>
 ```
 
-Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory, project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. If a subdirectory layout is needed, init at the root and let init choose `./agent` + `config.agentDir` itself.
+Run `init` **in the directory the agent must see and act on** — that directory becomes its workspace: the agent's cwd, its project context, and what deploy bakes into the image. Do not create a fresh subdirectory and init inside it just to keep things tidy: that scopes the agent to an empty folder, cut off from the projects around it. `init` already nests the agent into `./fastagent/`; the surrounding directory stays the workspace, untouched.
+
+(The one time a subdirectory IS right: a SECOND agent for the same project. `fastagent/` is a fixed name, so one directory holds one agent — `fastagent init reviewer` gives an independent agent whose workspace is `reviewer/`. See [Configuration](configuration.md#more-than-one-agent).)
 
 The default directory is the current directory. `init`:
 
-- scaffolds `persona.md`, an example skill and tool, and config;
-- never overwrites existing files;
+- scaffolds `persona.md`, an example skill and tool, and config — all inside `./fastagent/` (nothing is written outside it; there is no detection and no prompt);
 - keeps an existing `AGENTS.md` as project context;
-- refuses a directory that already has `fastagent.config.*`.
+- refuses when `./fastagent/` already holds a `fastagent.config.*` (already an agent) or any other content.
 
-FastAgent chooses the layout on the first run:
-
-- flat by default;
-- `./agent` with `config.agentDir` when an existing toolchain or deployment already claims the root, including framework config, `tsconfig`, `go.mod`, `pyproject.toml`, `Cargo.toml`, Docker/Fly/Railway config, or occupied `tools/`, `channels/`, or `skills/` directories.
-
-Override only on the first run with `--flat` or `--agent-dir <name>`. To change it later, move the files and update or remove `config.agentDir`.
+`--agent-dir <name>` names the agent directory anything (a `fastagent.config.*` is the only marker of what IS an agent, so there is no zero-config agent; the name matters only as the tie-break when a workspace holds several agents and `FASTAGENT_AGENT` is unset). `--agent-dir .` (spelled `--flat`) puts the agent in the directory itself instead (a standalone agent repo, a monorepo package), where existing files are kept and the agent's tools operate on its own definition. What a served agent's WORKSPACE is — its cwd, deploy's build context — is whatever directory you point fastagent at: the project, or the agent dir itself (all a deployed box may hold).
 
 Then run:
 
@@ -155,7 +151,7 @@ fastagent add feishu   # Feishu (open.feishu.cn)
 fastagent add lark     # Lark international (open.larksuite.com)
 ```
 
-`add feishu` creates and configures the platform app (a scan-to-confirm flow in the Feishu app) and writes credentials to `.env`; one manual version-publish click remains in the console. `add lark` opens the international developer console and guides App ID/Secret setup. Both are interactive — ask the user to run them in a terminal. Use `fastagent dev --tunnel` for local webhook testing.
+`add feishu` creates and configures the platform app (a scan-to-confirm flow in the Feishu app) and writes credentials to the agent's `.secrets/.env`; one manual version-publish click remains in the console. `add lark` opens the international developer console and guides App ID/Secret setup. Both are interactive — ask the user to run them in a terminal. Use `fastagent dev --tunnel` for local webhook testing.
 
 ## Add schedules
 
@@ -194,7 +190,7 @@ Schedules and self-scheduling require one always-running machine. Do not scale t
 
 ## Embed in an application
 
-Use `createPiAgentFromDefinition` or `createPiAgentFromWorkspace`, then mount `createInvokeHandler(agent)` in the application's route.
+Use `createPiAgentFromDefinition` or `createPiAgentFromDir`, then mount `createInvokeHandler(agent)` in the application's route.
 
 Keep authentication, users, database, session ownership, and policy in the host application.
 
@@ -212,7 +208,7 @@ fastagent deploy railway
 
 Add `--run` to drive Docker Compose or the host CLI to completion.
 
-The model must be in `fastagent.config.*`. A builder-local `--model`, `FASTAGENT_MODEL`, or `.env` value does not reach the deployed machine and otherwise causes a `missing model` crash loop.
+The model must be in `fastagent.config.*`. A builder-local `--model`, `FASTAGENT_MODEL`, or `.secrets/.env` value does not reach the deployed machine and otherwise causes a `missing model` crash loop.
 
 Declare additional host secrets in `config.deploy.secrets`, then register channel webhooks at the live URL.
 
@@ -227,7 +223,7 @@ Declare additional host secrets in `config.deploy.secrets`, then register channe
    ```
 
 4. Do not leave `dev` or `start` running in the foreground.
-5. Do not commit `.env`, credentials, sessions, or `.fastagent/` state.
+5. Do not commit secrets or machine state — `.secrets/` carries its own `.gitignore` and the agent one excludes `.state/`; do not undo that.
 6. If a command fails, read [Troubleshooting](troubleshooting.md) before guessing.
 
 ## References

@@ -1,5 +1,5 @@
 /**
- * The shared definition-aware session builder: open a workspace's assembled agent as a resident pi
+ * The shared definition-aware session builder: open a directory's assembled agent as a resident pi
  * `AgentSessionRuntime`. Extracted from chat.ts (session-control Phase 0) as the proof of the
  * assembly seam — independently instantiable, running the SAME agent that `dev`/`start` serve. The
  * TUI (chat.ts) is its one consumer: the session control plane (Phases 1–3) was built on the invoke
@@ -16,8 +16,8 @@
  *   - models  → a ModelRuntime with builtins only (`modelsPath: null`, no availability network), so
  *               the model surface equals serving's `createPiModels()` — pi's machine-global
  *               models.json does not leak in.
- *   - auth    → fastagent's credential store at the workspace auth path (same resolution as the
- *               serving opener: `--auth-path`/`FASTAGENT_AUTH_PATH`, else `<stateRoot>/auth.json`).
+ *   - auth    → fastagent's credential store at the AGENT's auth path (same resolution as the
+ *               serving opener: `--auth-path`/`FASTAGENT_AUTH_PATH`, else `<root>/.secrets/auth.json`).
  *               pi's TUI `/login` writes through the injected store into the SAME file, so `fastagent
  *               login` and chat share one credential lifecycle. pi's `~/.pi` auth is not consulted.
  *
@@ -49,7 +49,7 @@ import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
-import { resolveWorkspaceAssembly } from "./workspace.ts";
+import { resolveAgentAssembly } from "./open.ts";
 
 /** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
 function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
@@ -70,7 +70,7 @@ export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /** Credentials file override (the CLI --auth-path flag). Precedence: this > FASTAGENT_AUTH_PATH >
-   *  the workspace default `<stateRoot>/auth.json`. */
+   *  the agent's default `<agentDir>/.secrets/auth.json`. */
   authPath?: string;
 }
 
@@ -79,7 +79,7 @@ export interface BuildSessionRuntimeOptions {
  * skills, and auth resolved exactly as the serving opener does). Split from the TUI launcher so the
  * assembly — the fidelity-critical part — is inspectable and reusable without launching a TUI.
  */
-export async function buildWorkspaceSessionRuntime(
+export async function buildAgentSessionRuntime(
   dir: string,
   options: BuildSessionRuntimeOptions = {},
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
@@ -118,8 +118,8 @@ export async function buildWorkspaceSessionRuntime(
   }
 
   async function resolveAssembly(cwd: string) {
-    // The shared front half — the SAME config/model-spec/agentDir/tool/auth resolution the serving
-    // opener uses (workspace.ts); those inputs cannot drift between the two consumption shapes.
+    // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving
+    // opener uses (open.ts); those inputs cannot drift between the two consumption shapes.
     // (Definition→prompt assembly is NOT shared: serving re-reads live per invoke, this runtime is a
     // startup snapshot and pi appends skills/env itself — see the header.) `tools` arrives with
     // search_tools applied; deferral is EMULATED below like serving
@@ -128,14 +128,14 @@ export async function buildWorkspaceSessionRuntime(
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of fastagent's harness.
     const { config, modelSpec, agentDir, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
-      await resolveWorkspaceAssembly(cwd, options);
+      await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth — the ModelRuntime-shaped sibling of
     // serving's createPiModels; see models.ts.
     const modelRuntime = await createPiModelRuntime({ authPath });
     // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth;
-    // it now reads the workspace credential file like every other command. Probe the RESOLVED
+    // it now reads the agent's credential file like every other command. Probe the RESOLVED
     // model's provider through the normal resolution path (stored credential OR env var — an
     // env-authed user is fine and must not be warned): only when that provider has no usable auth
     // AND pi's old file exists does the bare provider error get its cause named.
@@ -145,7 +145,7 @@ export async function buildWorkspaceSessionRuntime(
     ) {
       log.warn(
         `[fastagent] no credentials for ${modelSpec} in ${authPath} — this runtime no longer reads ` +
-          `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this workspace`,
+          `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this agent`,
       );
     }
     const model = resolveModel(modelRuntime, modelSpec);
@@ -189,7 +189,7 @@ export async function buildWorkspaceSessionRuntime(
     return {
       model,
       modelRuntime,
-      // Serving honors config.thinkingLevel (workspace → L2); the resident session must too (fidelity).
+      // Serving honors config.thinkingLevel (config → L2); the resident session must too (fidelity).
       thinkingLevel: config.thinkingLevel,
       definition,
       defaultNames,

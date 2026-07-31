@@ -1,6 +1,6 @@
 /**
  * The `fastagent dev` process supervisor: re-spawn the CLI as a worker (`FASTAGENT_DEV_WORKER=1`) and
- * restart it on debounced edits to the workspace's CODE inputs. Each restart is a fresh process
+ * restart it on debounced edits to the agent's CODE inputs. Each restart is a fresh process
  * (always-latest, no stale module cache). The supervisor never exits on a bad edit — the worker fails
  * loudly and it waits for the next save.
  *
@@ -13,62 +13,62 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { type FastagentConfig, loadConfig, resolveAgentDir, resolveStateRoot } from "./engines/pi/config.ts";
+import { AGENT_CONFIG_NAMES, type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
+import { isUnderDir } from "./engines/pi/definition.ts";
+import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
-/** What the dev watcher restarts on (workspace-relative): the process-bound code inputs only. */
-const WATCHED_HINT = "tools/, channels/, package.json (agent dir), fastagent.config.*, .env (run root)";
+/** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
+const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.config.*, .secrets/.env";
 
 /**
- * chokidar `ignored` matcher for the narrow watch scope (true = ignore). Ignoring a directory prunes
- * the whole subtree, so everything outside the allowlist — .fastagent state, node_modules, .git, and
- * any file/dir the agent writes as work product — costs no watchers and triggers no restarts.
- * Helper code imported from OUTSIDE tools//channels/ is out of scope by design (keep it under
- * tools/, or restart manually) — the startup log names the watched set.
+ * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. When
+ * the agent sits INSIDE the workspace that means the surrounding tree never triggers a restart at all;
+ * when the agent IS the workspace the root is that tree, and the allowlist below is what keeps the
+ * author's own files out of scope. Ignoring a directory prunes the whole subtree, so everything outside it —
+ * `.state/` machine state, node_modules, .git, and any file/dir the agent writes as work product —
+ * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
+ * out of scope by design (keep it under tools/, or restart manually) — the startup log names the set.
  */
-export function devWatchIgnored(dir: string, agentDir: string): (path: string) => boolean {
+export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
+  // The `.env` is allow-listed by its RESOLVED path, not by the `.secrets` name: FASTAGENT_SECRETS_DIR
+  // can put it in an in-agent directory called anything, and a name-based rule would prune the very
+  // file the worker loads (a credential edit would then silently never restart it).
+  const envRel = relative(root, envFile).split(sep);
   return (path: string): boolean => {
-    if (path === dir || path === agentDir) return false; // the roots themselves must not be pruned
-    // Never prune a directory on the path from the watch root down to agentDir, so chokidar can descend
-    // into `agentDir/tools` even when agentDir is a subdir (config.agentDir = "./agent").
-    if (agentDir.startsWith(path + sep)) return false;
-    const rel = relative(dir, path);
-    // Run-root (cwd) inputs: .env + fastagent.config.* live where config lives, not in agentDir.
-    if (rel === ".env") return false;
-    if (/^fastagent\.config\.[cm]?[jt]s$/.test(rel)) return false;
-    // Agent code inputs live in agentDir: tools/, channels/, schedules/ (loaded once per worker — a
-    // restart is their only re-read), package.json (its own deps). Everything else under agentDir
-    // (skills/, persona.md, AGENTS.md) is live-read — pruned, no restart.
-    const relAgent = relative(agentDir, path);
-    if (!relAgent.startsWith("..")) {
-      const [head] = relAgent.split(sep);
-      if (head === "tools" || head === "channels" || head === "schedules") return false;
-      if (relAgent === "package.json") return false;
-    }
+    if (path === root) return false; // the root itself must not be pruned
+    const rel = relative(root, path);
+    // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker
+    // (a restart is their only re-read). Everything else (skills/, persona.md, AGENTS.md) is
+    // live-read — pruned, no restart.
+    // The config NAMES come from paths.ts, not a regex spelled here: adding a name there must not
+    // silently stop `dev` restarting on edits to it.
+    if ((AGENT_CONFIG_NAMES as readonly string[]).includes(rel)) return false;
+    if (rel === "package.json") return false;
+    const segments = rel.split(sep);
+    if (segments[0] === "tools" || segments[0] === "channels" || segments[0] === "schedules") return false;
+    // The `.env` restarts too (credentials are process-bound). Keep it AND its ancestor directories
+    // un-pruned so chokidar can descend to it; every sibling inside them (auth.json, .env.example)
+    // prunes normally. An out-of-agent `.env` yields a `..`-prefixed envRel that matches nothing here
+    // — the supervisor warns about that case instead of pretending to watch it.
+    if (segments.length <= envRel.length && segments.every((seg, i) => seg === envRel[i])) return false;
     return true;
   };
 }
 
-/** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
-export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
-  // The watch root is `dir` (cwd); tools/channels the restart-watch cares about live in agentDir. On a
-  // config error, default agentDir=dir and let the spawned worker surface the real error (fail-visibly).
-  // agentDir is assumed STATIC for the dev session: the supervisor computes it once here and each spawned
-  // worker recomputes its own from the same config — config validation guarantees it stays under `dir`
-  // (so the watch scope is always right); a config edit that changes agentDir mid-session (rare) is out
-  // of scope for watch-scope re-sync (it triggers a worker restart regardless).
-  // A genuine config error (not just a missing agentDir key) — debug-log it here so the silence is not
-  // total before the spawned worker crash-loops and surfaces the real message; default agentDir=dir.
-  const config = await loadConfig(dir)
-    .then((r) => r.config)
-    .catch((err: unknown) => {
-      log.debug(`[fastagent] dev: config load failed while resolving agentDir (worker will report): ${String(err)}`);
-      return {} as FastagentConfig;
-    });
-  const agentDir = resolveAgentDir(dir, config);
+/** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
+export async function runDevSupervisor(
+  placement: ResolvedPlacement,
+  options: { tunnel?: boolean } = {},
+): Promise<void> {
+  // The placement arrives RESOLVED from the command (which already routed its refusal through
+  // failStartup): re-resolving here would duplicate the rule and surface the same user-fixable
+  // refusal as a raw stack. The watch root is the AGENT DIR — every restart-relevant code input lives
+  // under it, so the surrounding workspace costs no watchers at all. Placement is assumed STATIC for
+  // the session (creating/removing `fastagent/` mid-session is out of scope for watch re-sync).
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
@@ -96,10 +96,10 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(dir, t.url, {
+            void announceWebhooks(placement.agentDir, t.url, {
               openUrl: openExternalUrl,
               routeChannels: m.routeChannels,
-              stateRoot: resolveStateRoot(dir),
+              stateRoot: resolveStateRoot(placement.agentDir),
             });
           }
         });
@@ -135,9 +135,9 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
 
   // chokidar gives reliable cross-platform recursion + structural ignore that native fs.watch
   // cannot; devWatchIgnored (above) narrows the scope to the process-bound code inputs.
-  const watcher = watchTree(dir, {
+  const watcher = watchTree(placement.agentDir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(dir, agentDir),
+    ignored: devWatchIgnored(placement.agentDir, dotEnvPath(placement.agentDir)),
   });
   watcher.on("all", () => {
     clearTimeout(timer);
@@ -149,6 +149,14 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
   log.info(
     `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
   );
+  // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely; the watcher follows it
+  // anywhere inside (the resolved path is allow-listed above), but outside the watch root the worker
+  // would load a file no watcher sees. Say so once instead of leaving the hint above lying.
+  if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {
+    log.warn(
+      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(placement.agentDir)}) — it is NOT watched; restart dev after editing it`,
+    );
+  }
 
   const shutdown = (): never => {
     worker?.kill("SIGTERM");

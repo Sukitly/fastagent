@@ -53,7 +53,7 @@ The command then:
 3. enables Slack's irreversible `agent_view`, native Agent streaming, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
 4. opens [Slack OAuth v2](https://docs.slack.dev/authentication/installing-with-oauth/), validates its `state`, exchanges the code, and installs into one workspace;
 5. writes the Signing Secret plus the rotating bot access/refresh token, expiry, OAuth client ID, and
-   client secret to the gitignored run-root `.env`.
+   client secret to the workspace `.secrets/.env`.
 
 App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
 re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:
@@ -198,7 +198,7 @@ The next answered turn in that place receives a bounded sender-prefixed block. C
 4. retain it on failure/crash, and retain messages that arrive while the turn is running.
 
 This mode deliberately lets the app read messages in channels where it is installed. Use `mentions` when
-that permission or retention boundary is inappropriate. State is local to the deployment and self-ignored
+that permission or retention boundary is inappropriate. State is local to the deployment and gitignored
 from git, but operators still own retention/privacy policy.
 
 ## Inbound files

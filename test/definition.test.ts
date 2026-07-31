@@ -4,8 +4,7 @@ import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -17,36 +16,21 @@ import {
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
-import { ensureStateRootSelfIgnored, isUnderDir } from "../src/engines/pi/definition.ts";
+import { isUnderDir } from "../src/engines/pi/definition.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 
 describe("definition: isUnderDir (the leak-guard predicate — does the state root land in the tree?)", () => {
   const dir = "/work";
-  it("is true for the dir itself and any path inside it (default `.fastagent` OR a custom in-tree root)", () => {
+  it("is true for the dir itself and any path inside it (default `fastagent` OR a custom in-tree root)", () => {
     expect(isUnderDir(dir, dir)).toBe(true); // same dir
-    expect(isUnderDir(join(dir, ".fastagent"), dir)).toBe(true); // default root
+    expect(isUnderDir(join(dir, "fastagent"), dir)).toBe(true); // default root
     expect(isUnderDir(join(dir, "data"), dir)).toBe(true); // custom in-tree FASTAGENT_STATE_DIR
-    expect(isUnderDir(join(dir, ".fastagent", "sessions"), dir)).toBe(true); // nested
+    expect(isUnderDir(join(dir, "fastagent", "sessions"), dir)).toBe(true); // nested
   });
   it("is false for external paths (a mounted volume) and sibling dirs sharing a prefix", () => {
     expect(isUnderDir("/mnt/vol", dir)).toBe(false); // operator's volume
     expect(isUnderDir("/work-old", dir)).toBe(false); // prefix sibling, not inside
-  });
-});
-
-describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () => {
-  it("self-ignores a CUSTOM in-tree state root, not just `.fastagent` (the FASTAGENT_STATE_DIR leak)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const root = join(dir, "data"); // FASTAGENT_STATE_DIR=data → in-tree, not under .fastagent
-    await ensureStateRootSelfIgnored(dir, root);
-    expect(await readFile(join(root, ".gitignore"), "utf8")).toBe("*\n");
-  });
-  it("leaves an external-volume root alone (never writes a .gitignore outside the tree)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
-    const ext = await mkdtemp(join(tmpdir(), "fa-vol-"));
-    await ensureStateRootSelfIgnored(dir, ext);
-    expect(existsSync(join(ext, ".gitignore"))).toBe(false);
   });
 });
 
@@ -466,5 +450,20 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     env.deny = false; // the next good edit heals it — same agent, no restart
     const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
     expect(text).toBe("recovered");
+  });
+});
+
+describe("definition: skills/ gets the same containment guard as tools/channels/schedules", () => {
+  it("refuses a skills/ symlink that escapes the agent dir instead of loading through it", async () => {
+    // The three sibling surfaces already refuse this at DISCOVERY, and vendor-skill refuses it when
+    // WRITING; loading through it was the one way out of the definition directory.
+    const { symlink } = await import("node:fs/promises");
+    const outside = await mkdtemp(join(tmpdir(), "fa-outside-"));
+    await mkdir(join(outside, "sneaky"), { recursive: true });
+    await writeFile(join(outside, "sneaky", "SKILL.md"), "---\nname: sneaky\ndescription: d\n---\nx\n");
+    const agent = join(await mkdtemp(join(tmpdir(), "fa-skills-escape-")), "fastagent");
+    await mkdir(agent);
+    await symlink(outside, join(agent, "skills"));
+    await expect(loadAgentDefinition(agent)).rejects.toThrow(/resolves outside the agent dir/);
   });
 });
