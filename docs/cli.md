@@ -300,11 +300,19 @@ Port precedence:
 Session directory precedence:
 
 ```txt
-FASTAGENT_AGENT          > the agent named `fastagent`  (which agent, when a workspace holds several)
 FASTAGENT_STATE_DIR      > <agent dir>/.state       (mutable machine state)
 FASTAGENT_SECRETS_DIR    > <agent dir>/.secrets        (.env + auth.json)
 --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions
 ```
+
+**`FASTAGENT_AGENT` — which agent, when a workspace holds several.** Not a path knob: it is an input to
+every command, because several agents can share one workspace (an engineer's, a PM's and a content
+owner's agent all driving the same repository). It ASSERTS the agent by directory name — a directory
+without one by that name refuses rather than serving a different agent — and with nothing set, the
+agent named `fastagent` (the `init` default) answers. Scope it per repository (an `.envrc`) or per
+command (`FASTAGENT_AGENT=pm fastagent dev`); `deploy` bakes the selected agent into the image, so the
+container never re-picks. Selection lives in your environment on purpose: it is per-person, and a file
+committed to the shared workspace could not express "mine".
 
 For deployments, point the state root (sessions, channel state) and the secrets dir (the
 seeded/rotated `auth.json`) at durable storage:

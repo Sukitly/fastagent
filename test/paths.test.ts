@@ -60,7 +60,7 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     // Nothing selects: refuse and name them — never serve an arbitrary one.
     expect(() => pick()).toThrow(/holds 2 agents \(content, pm\) and none of them is named "fastagent"/);
     // Naming a missing one is a different mistake: echo the value back rather than restate the rule.
-    expect(() => pick("nope")).toThrow(/FASTAGENT_AGENT names "nope", which is not one of them/);
+    expect(() => pick("nope")).toThrow(/FASTAGENT_AGENT asserts "nope", which is not one of them/);
 
     // The default name is the tie-break, so adding an agent to a working `<ws>/fastagent/` setup does
     // not break the command everyone already types. It decides only WHICH — never what IS an agent.
@@ -72,12 +72,21 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     expect(resolvePlacement(join(dir, "pm"))).toEqual({ agentDir: join(dir, "pm"), workspace: join(dir, "pm") });
   });
 
-  it("the env SELECTS among candidates — with only one there is nothing to select", async () => {
-    // A FASTAGENT_AGENT exported in a shell profile travels into every directory. Refusing there would
-    // break every single-agent repository it is carried into, and the value resolves no ambiguity.
+  it("FASTAGENT_AGENT ASSERTS — a directory without that agent resolves to nothing, even holding one", async () => {
+    // Serving a DIFFERENT agent than the one asked for is the silent wrong-target refused everywhere
+    // else here, so the rule does not change meaning with the sibling count. The cost is stated in the
+    // message: a value exported in a shell profile travels, and the way out is to scope it per-repo.
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-one-"));
     await config(join(dir, "only"));
-    expect(resolvePlacement(dir, { FASTAGENT_AGENT: "something-else" }).agentDir).toBe(join(dir, "only"));
+    expect(resolvePlacement(dir, {}).agentDir).toBe(join(dir, "only"));
+    expect(() => resolvePlacement(dir, { FASTAGENT_AGENT: "other" })).toThrow(
+      /holds 1 agent \(only\), and FASTAGENT_AGENT asserts "other".*\.envrc/s,
+    );
+    // An empty value is not an assertion (an unset-looking export must not refuse everything).
+    expect(resolvePlacement(dir, { FASTAGENT_AGENT: "" }).agentDir).toBe(join(dir, "only"));
+    // Where there is no agent at all, the env is not to blame — the generic refusal stands.
+    const bare = await mkdtemp(join(tmpdir(), "fa-ws-bare-"));
+    expect(() => resolvePlacement(bare, { FASTAGENT_AGENT: "x" })).toThrow(/is not a fastagent agent/);
   });
 
   it("the scan is ONE level: a grandchild agent is its own workspace, not this one's agent", async () => {

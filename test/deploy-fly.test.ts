@@ -224,6 +224,12 @@ describe("deploy/fly: planFlyDeploy", () => {
     // `exec`, or sh stays PID 1 and swallows SIGTERM.
     expect(bunDf).toContain(`CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]`);
 
+    // The agent this deploy was FOR is pinned into every image shape. The container re-resolves
+    // placement at /app, and a workspace may hold SEVERAL agents (all of which ship — the build context
+    // is the whole tree), so without this the image would pick by its own rules instead of by the
+    // deploy: the artifact would depend on the builder's environment.
+    expect(bunDf).toContain("ENV FASTAGENT_AGENT=fastagent");
+
     const md = planFlyDeploy({
       ...base,
       hasPackageJson: false,
@@ -232,6 +238,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     });
     const mdDf = md.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(mdDf).toContain("FROM node:22-slim");
+    expect(mdDf).toContain("ENV FASTAGENT_AGENT=fastagent");
     expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no deps to install
     expect(mdDf).not.toContain("npm ci");
     expect(mdDf).toContain(`["fastagent", "start", "/app"]`);

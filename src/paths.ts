@@ -112,27 +112,26 @@ export function agentsAt(dir: string): string[] {
 }
 
 /**
- * WHICH of several agents at one level is meant: `FASTAGENT_AGENT` names one, else the one carrying the
- * {@link DEFAULT_AGENT_DIRNAME} wins. Undefined leaves the caller to refuse ({@link placementDeadEnd}
- * tells the two apart). Several agents on ONE workspace is the point — different roles (an engineer's,
- * a PM's, a content owner's) driving the same repository — so they must be selectable, not refused.
+ * WHICH agent is meant, when a directory holds several: an engineer's, a PM's and a content owner's
+ * agent can each drive the same repository, so they must be selectable rather than refused.
  *
- * Two properties worth stating, because both are choices:
+ * `FASTAGENT_AGENT` is an ASSERTION, not a preference: it names the agent, and a directory without one
+ * by that name resolves to nothing — even when exactly one agent is sitting there. Serving a DIFFERENT
+ * agent than the one asked for is the silent-wrong-target this codebase refuses everywhere else, and the
+ * uniform rule ("it names the agent") beats one that changes meaning with the sibling count. The stated
+ * cost: a `FASTAGENT_AGENT` exported in a shell PROFILE refuses in every unrelated directory it travels
+ * into. Scope it per-repo (an `.envrc`) or pass it per-command; the refusal names the way out.
  *
- * - The env SELECTS among candidates and does nothing when there is only one. Selection is per-person
- *   (that is the whole scenario), so it belongs in the environment rather than a committed file — and a
- *   `FASTAGENT_AGENT` exported in a shell profile must not then refuse every single-agent directory it
- *   is carried into. With one candidate there is no ambiguity for it to resolve.
- * - The default NAME breaks the tie. It is the one place a directory name carries weight, and it is
- *   deliberately not an identity rule (the config alone says what is an agent): it only decides which
- *   already-identified agent answers when nothing else does. What it buys is that adding a second agent
- *   to a working `<workspace>/fastagent/` setup does not break the command everyone already types.
+ * With nothing asserted, the {@link DEFAULT_AGENT_DIRNAME} breaks the tie. That is the one place a
+ * directory NAME carries weight, and deliberately not an identity rule — the config alone says what IS
+ * an agent; the name only decides which already-identified one answers. What it buys: adding a second
+ * agent to a working `<workspace>/fastagent/` setup does not break the command everyone already types.
  */
 function selectAgent(agents: string[], env: NodeJS.ProcessEnv): string | undefined {
-  const [only, ...rest] = agents;
-  if (only === undefined || rest.length === 0) return only;
   const wanted = env.FASTAGENT_AGENT;
-  return agents.find((a) => basename(a) === (wanted ?? DEFAULT_AGENT_DIRNAME));
+  if (wanted) return agents.find((a) => basename(a) === wanted);
+  const [only, ...rest] = agents;
+  return rest.length === 0 ? only : agents.find((a) => basename(a) === DEFAULT_AGENT_DIRNAME);
 }
 
 /**
@@ -222,14 +221,21 @@ export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.e
     return `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`;
   }
   const agents = agentsAt(base).map((a) => basename(a));
+  const listed = `${base} holds ${agents.length} agent${agents.length === 1 ? "" : "s"} (${agents.join(", ")})`;
+  // Asserting a name that is not here is a different mistake from asserting none, and it is worth its own
+  // message at ANY count: the value sits in the environment (often a shell profile carried in from
+  // somewhere else), so echo it back with what is actually here instead of restating the general rule.
+  if (env.FASTAGENT_AGENT && agents.length > 0) {
+    return (
+      `${listed}, and FASTAGENT_AGENT asserts "${env.FASTAGENT_AGENT}", which is not one of them — set it ` +
+      `to one of those, unset it, or scope it to the repository that needs it (an .envrc)`
+    );
+  }
   if (agents.length > 1) {
-    const listed = `${base} holds ${agents.length} agents (${agents.join(", ")})`;
-    // Naming a missing agent is a different mistake from naming none: the value is right there in the
-    // environment, so echo it back rather than describing the general rule at someone who tried.
-    return env.FASTAGENT_AGENT !== undefined
-      ? `${listed}, and FASTAGENT_AGENT names "${env.FASTAGENT_AGENT}", which is not one of them — set it to one of those, or unset it`
-      : `${listed} and none of them is named "${DEFAULT_AGENT_DIRNAME}" (the default) — pick one with ` +
-          `FASTAGENT_AGENT=<name>, or point fastagent at the one you want (it then works on ITSELF)`;
+    return (
+      `${listed} and none of them is named "${DEFAULT_AGENT_DIRNAME}" (the default) — pick one with ` +
+      `FASTAGENT_AGENT=<name>, or point fastagent at the one you want (it then works on ITSELF)`
+    );
   }
   return undefined;
 }

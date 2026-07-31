@@ -152,10 +152,15 @@ Two properties of that, both choices:
   already answers "which agents are here", so a list could only drift from it — and it would centralize
   what the scan decentralizes (adding an agent means creating a directory, not editing a file three
   teams share).
-- **The env selects AMONG candidates and does nothing when there is only one.** A `FASTAGENT_AGENT`
-  exported in a shell profile travels everywhere; refusing on it would break every single-agent
-  directory it is carried into, and with one candidate there is no ambiguity for it to resolve. Naming
-  an agent that is not among several, however, refuses — that value is a mistake worth surfacing.
+- **It ASSERTS, at any count.** A directory holding no agent by that name resolves to nothing, even
+  when exactly one agent is sitting there: serving a DIFFERENT agent than the one asked for is the
+  silent wrong-target refused everywhere else here, and a rule that changed meaning with the sibling
+  count would be worse than the cost it avoids. Stated cost: a value exported in a shell PROFILE
+  refuses in every unrelated directory it travels into — scope it per-repo, which the refusal says.
+- **`deploy` bakes it.** The container re-resolves placement at `/app`, and a workspace holding several
+  agents ships all of them (the build context is the whole tree), so the generated Dockerfile pins
+  `ENV FASTAGENT_AGENT=<name>`. Without it the image would pick by its own rules rather than by the
+  deploy — the artifact depending on the builder's environment, which is what it must never do.
 - **The default NAME breaking the tie is the one place a directory name carries weight**, and it is
   deliberately not an identity rule: the config alone says what IS an agent, the name only decides which
   already-identified one answers. It buys that adding a second agent to a working `<workspace>/fastagent/`
