@@ -214,7 +214,6 @@ function buildPiAgent(opts: {
   const lease = opts.lease ?? inProcessLease();
   const harnessFactory = piHarnessFactory({
     sessions: opts.sessions ?? inMemorySessionStore(),
-    env,
     models,
     model: resolveModel(models, opts.model),
     thinkingLevel: opts.thinkingLevel,
@@ -287,8 +286,10 @@ export interface CreatePiAgentOptions {
   authPath?: string;
   /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
   sessions?: PiSessionStore;
-  /** Harness filesystem/process environment. Defaults to local NodeExecutionEnv (cwd). This is not yet
-   *  a sandbox boundary for pi's cwd-bound coding tools; a sandbox adapter must wire those tools too. */
+  /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`. At THIS
+   *  rung it supplies the agent's cwd and nothing else — pi 0.83 removed the harness's own env, and the
+   *  default coding tools are cwd-bound and local. So injecting it is not a sandbox boundary; a sandbox
+   *  adapter must wire those tools too (pi-agent-core now ships env-backed ones — see create.ts §tools). */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
@@ -309,7 +310,6 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
     tools: options.tools ? withSearchTool(options.tools) : options.tools,
     skills: options.skills,
     sessions: options.sessions,
-    env: options.env,
     lease: options.lease,
     observer: options.observer,
   });
@@ -346,8 +346,9 @@ export interface CreatePiAgentFromDefinitionOptions {
    */
   authPath?: string;
   sessions?: PiSessionStore;
-  /** Harness environment; see {@link CreatePiAgentOptions.env}. The default coding tools and project-
-   *  context loader remain local today, so injecting this alone does not sandbox a directory agent. */
+  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
+   *  than carry the cwd: the DEFINITION is read through it (persona.md, skills/, AGENTS.md). The coding
+   *  tools stay local and cwd-bound, so injecting it alone still does not sandbox a directory agent. */
   env?: ExecutionEnv;
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
