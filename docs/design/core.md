@@ -275,10 +275,18 @@ initial active set at build, and the same builtin loader activates through a ses
 ToolActivation bridge (`sessionToolActivation`) riding the same turn context, so the author debugs
 exactly what serves.
 
-`ExecutionEnv` is a harness assembly seam, not a complete sandbox boundary today. Pi's cwd-bound coding
-tools and `loadProjectContextFiles` still use the local process/filesystem. A future sandbox adapter must
-wire those surfaces as well as provide an `ExecutionEnv`; injecting `env` alone does not isolate a
-directory agent.
+**`ExecutionEnv` is where the default tools reach the machine.** `read`/`bash`/`edit`/`write` come from
+pi-agent-core and take the env as the turn's tool context (pi 0.83), rather than from pi-coding-agent,
+whose identical four are wired to `node:fs` directly — the model-facing surface is asserted equal in
+test/tools-parity.test.ts, so the choice is about WHERE they touch the machine, not what the agent sees.
+Injecting a custom `env` therefore governs the tools that actually do the touching, which is what makes
+it a seam worth having.
+
+It is still not a complete sandbox, and the gaps are specific: `loadProjectContextFiles` reads ② context
+through node fs DIRECTLY rather than the env (definition.ts states this as a known break), fastagent's
+OWN tools (`tools/`) are author code that can import anything, and `deploy`/channel machinery runs
+outside it entirely. A sandbox adapter provides an `ExecutionEnv` AND constrains the process it runs in;
+`env` alone narrows the blast radius rather than closing it.
 
 ## 6. Sessions and concurrency
 
