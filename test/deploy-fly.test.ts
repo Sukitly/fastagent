@@ -199,7 +199,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     // machine's deps (macOS binaries) clobber the image's freshly-installed linux deps.
     expect(ignore).toMatch(/^\*\*\/node_modules$/m);
     expect(ignore).toMatch(/^\*\*\/\.env$/m);
-    expect(ignore).toMatch(/^\*\*\/\.secrets$/m); // the machinery dirs never enter an image
+    expect(ignore).toMatch(/^\*\*\/\.secrets\/\*\*$/m); // credentials stay out; tracked scaffolds travel
     expect(ignore).toMatch(/^\*\*\/\.state$/m);
     // The runbook deploys from the workspace root with explicit, version-proof flags.
     expect(runbook(p)).toContain(
