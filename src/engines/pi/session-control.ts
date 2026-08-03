@@ -8,7 +8,7 @@
  * stays in the session repository (read via {@link PiSessionReader}), live truth in the events the
  * data plane emits, modulation in the controls the data plane registers.
  *
- * Boundary mutations (Phase 2b: compact/set_model/set_thinking) take the same lease as runs;
+ * Boundary mutations (Phase 2b: compact/set_model/set_thinking/navigate) take the same lease as runs;
  * without boundary wiring they are rejected before acceptance with `unsupported_capability` — a
  * client gating on `capabilities()` never sends them.
  */
@@ -39,7 +39,7 @@ import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
 import { type AnyModel, SUMMARIZATION_RETRY_POLICY, type PiHarnessFactory, harnessSession } from "./harness.ts";
 import { THINKING_LEVELS, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
-import type { PiSessionReader } from "./sessions.ts";
+import { type PiSessionReader, activePathEntries } from "./sessions.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -93,6 +93,17 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
     return { ...base, kind: `message:${(m as { role: string }).role}`, data: {} };
   }
   return { ...base, kind: entry.type, data: {} };
+}
+
+/**
+ * THE invariant the client's rule rests on: everything `entries()` publishes is a legal `navigate`
+ * target. pi's `leaf` records are the exception — they journal a MOVE rather than mark a position
+ * (their parentId is the OLD leaf, nothing is ever chained onto them), so navigating to one would
+ * put the branch head off every conversation path. Withheld from the published plane and refused as
+ * a target THROUGH THIS ONE PREDICATE, so a second exclusion cannot make the two disagree.
+ */
+function isNavigable(entry: SessionTreeEntry): boolean {
+  return entry.type !== "leaf";
 }
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
@@ -163,7 +174,7 @@ class Subscriber {
 
 // ── The hub ──────────────────────────────────────────────────────────────────
 
-/** What boundary mutations (compact / set_model / set_thinking) need — the SAME instances the
+/** What boundary mutations (compact / set_model / set_thinking / navigate) need — the SAME instances the
  *  agent assembly uses: the lease (mutations must not race a run), the model registry (validation +
  *  allowedModels), and the harness factory (compaction is a model call). Writes go through the
  *  session the hub's reader opened — after an existence check, so the control plane never creates
@@ -262,6 +273,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // Servable or not. WHICH levels is a property of the session's model, so it rides
         // `state().availableThinkingLevels` — a list here could only answer for one model.
         thinkingLevel: !!b,
+        // Gated on the boundary wiring for its LEASE, not its models: moving the leaf is a write,
+        // and a write that races a run would hang the next turn off a stale branch.
+        navigate: !!b,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
@@ -273,15 +287,24 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
       // What will RUN, not the raw record: a client steering a session needs the pair that executes.
       // Without a boundary there is no model to resolve against, and the fields are absent.
+      // OBSERVATION IS TOTAL: an unreadable entry chain leaves the pair absent too (the same shape a
+      // control-less deployment answers with) rather than rejecting a read that has no error-code
+      // channel to explain itself. The fault is not swallowed — it surfaces where codes exist: the
+      // next invoke fails (the harness build walks the same chain) and a boundary dispatch answers
+      // `boundary_command_failed`. Here it is a server-side warn.
       const b = boundary?.();
-      const settings =
-        opened && b
-          ? resolveSessionSettings(
-              (await opened.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
-              b.models,
-              b.defaults,
-            )
-          : undefined;
+      let settings: ReturnType<typeof resolveSessionSettings> | undefined;
+      if (opened && b) {
+        try {
+          settings = resolveSessionSettings(
+            (await activePathEntries(opened)) as Parameters<typeof resolveSessionSettings>[0],
+            b.models,
+            b.defaults,
+          );
+        } catch (error) {
+          log.warn(`[fastagent] session ${session}: settings unreadable (entry chain): ${String(error)}`);
+        }
+      }
       return {
         status: run ? "running" : compacting.has(session) ? "compacting" : "idle",
         ...(run ? { activeRunId: run.runId } : {}),
@@ -300,8 +323,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async entries(session, opts): Promise<SessionEntries> {
       const opened = await sessions.openIfExists(session);
       if (!opened) return { entries: [] };
-      const all = (await opened.getEntries()).map(toSessionEntry);
+      // LEAF FIRST, then the journal: `getEntries()` hands back a SNAPSHOT, so reading it first
+      // would race any concurrent append into a leaf the snapshot cannot contain — a live turn
+      // reading as a dangling head. This order makes the journal a superset of the leaf's chain,
+      // which is what lets the published head be trusted as one of the published entries.
       const leafEntryId = (await opened.getLeafId()) ?? undefined;
+      const all = (await opened.getEntries()).filter(isNavigable).map(toSessionEntry);
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);
@@ -424,7 +451,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         }
         case "compact":
         case "set_model":
-        case "set_thinking": {
+        case "set_thinking":
+        case "navigate": {
           const b = boundary?.();
           if (!b) {
             // No boundary wiring: rejected before acceptance; a capability-gating client never
@@ -439,7 +467,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           }
           // Payload validation BEFORE the lease — an invalid value must not briefly block a run.
-          /** The entry-append for set_model/set_thinking — undefined for compact (harness path). */
+          /** The durable write for set_model/set_thinking/navigate — undefined for compact (harness
+           *  path). Answers the event to emit. */
           let apply: ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent>) | undefined;
           if (command.type === "set_model") {
             const slash = command.model.indexOf("/");
@@ -460,7 +489,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // Both halves: a new model can change which level executes. Nothing is re-recorded to
               // make that true — the resolve reports it, so the preference survives a round trip.
               const settings = resolveSessionSettings(
-                (await s.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+                (await activePathEntries(s)) as Parameters<typeof resolveSessionSettings>[0],
                 b.models,
                 b.defaults,
               );
@@ -488,6 +517,50 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               await s.appendThinkingLevelChange(command.level);
               return { type: "state_changed", timestamp: Date.now(), data: { thinkingLevel: command.level } };
             };
+          } else if (command.type === "navigate") {
+            apply = async (s) => {
+              // A move to where the leaf already is writes nothing: pi journals a move as a `leaf`
+              // record, so an idempotent re-dispatch (a client retry, a UI firing on every
+              // selection) would otherwise grow the session by a record no plane publishes. The
+              // EVENT is emitted either way — it reports the resulting position, not the fact that
+              // a record was written, and a client that dispatched must not have to poll for it.
+              if ((await s.getLeafId()) !== command.targetId) await s.moveTo(command.targetId);
+              // moveTo's postcondition IS "targetId is the leaf" (it validates, then sets); a
+              // failure throws and travels as boundary_command_failed, so a read-back could only
+              // re-report what this line already knows. The SETTINGS ride along because a move can
+              // change them — an override recorded on the branch just left stops applying, and a
+              // client tracking model/level from the event stream would otherwise show what the
+              // next turn will not use.
+              // The move is already durable here, so a settings read that throws (the new path is
+              // above a gap) must NOT turn into "nothing took effect": report the position without
+              // the settings and let `state()`'s rejection be where the broken chain surfaces.
+              let settings: ReturnType<typeof resolveSessionSettings> | undefined;
+              try {
+                settings = resolveSessionSettings(
+                  (await activePathEntries(s)) as Parameters<typeof resolveSessionSettings>[0],
+                  b.models,
+                  b.defaults,
+                );
+              } catch (error) {
+                // Absent rather than stale: the session cannot RUN with an unreadable chain either
+                // (the harness build walks the same path), so the next invoke fails visibly — this
+                // event does not need to carry a second signal for it.
+                log.warn(`[fastagent] session ${session}: leaf moved, settings unreadable: ${String(error)}`);
+              }
+              return {
+                type: "state_changed",
+                timestamp: Date.now(),
+                data: {
+                  leafEntryId: command.targetId,
+                  ...(settings
+                    ? {
+                        model: `${settings.model.provider}/${settings.model.id}`,
+                        thinkingLevel: settings.thinkingLevel,
+                      }
+                    : {}),
+                },
+              };
+            };
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
           // not minted into a ghost record. (Existence check before the lease — read-only; the
@@ -503,14 +576,43 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               },
             };
           }
+          if (command.type === "navigate") {
+            // A target that cannot BE a leaf is a permanent payload error, not a session error — the
+            // same disposition as an unknown model spec. Same predicate `entries()` publishes by, so
+            // "everything published is navigable" holds by construction rather than by two literals
+            // agreeing.
+            const entry = await existing.getEntry(command.targetId);
+            if (!entry || !isNavigable(entry)) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: entry
+                    ? `entry "${command.targetId}" is a leaf-move record — entries() does not publish those, and they are not positions; navigate to the entry it points at`
+                    : `entry "${command.targetId}" does not exist in session "${session}" — entries() lists the navigable ids`,
+                  retryable: false,
+                },
+              };
+            }
+          }
           if (command.type === "set_thinking") {
             // The same set `state()` showed the client. Reject here rather than record a level the
-            // run would not use.
-            const { model, availableThinkingLevels } = resolveSessionSettings(
-              (await existing.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
-              b.models,
-              b.defaults,
-            );
+            // run would not use. The read is guarded because `dispatch` must never REJECT — the
+            // transport promises a SessionResult, so an unreadable chain has to arrive as a code.
+            let resolved: ReturnType<typeof resolveSessionSettings>;
+            try {
+              resolved = resolveSessionSettings(
+                (await activePathEntries(existing)) as Parameters<typeof resolveSessionSettings>[0],
+                b.models,
+                b.defaults,
+              );
+            } catch (error) {
+              return {
+                ok: false,
+                error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              };
+            }
+            const { model, availableThinkingLevels } = resolved;
             if (!availableThinkingLevels.includes(command.level)) {
               return {
                 ok: false,
@@ -671,8 +773,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 },
               };
             }
-            // Unreachable by construction: only set_model/set_thinking reach this branch, and
-            // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
+            // Unreachable by construction: only set_model/set_thinking/navigate reach this branch,
+            // and all three assign `apply` in validation. Throw rather than silently skip (fail visibly).
             if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
             emitOwn(session, await apply(fresh));
           } catch (error) {
