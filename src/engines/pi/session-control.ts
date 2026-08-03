@@ -13,7 +13,7 @@
  * client gating on `capabilities()` never sends them.
  */
 import { DEFAULT_COMPACTION_SETTINGS, compact, prepareCompaction } from "@earendil-works/pi-agent-core";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { SessionTreeEntry, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
@@ -36,13 +36,8 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
-import {
-  SUMMARIZATION_RETRY_POLICY,
-  type PiHarnessFactory,
-  THINKING_LEVELS,
-  harnessSession,
-  lastOverrideEntries,
-} from "./harness.ts";
+import { type AnyModel, SUMMARIZATION_RETRY_POLICY, type PiHarnessFactory, harnessSession } from "./harness.ts";
+import { THINKING_LEVELS, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
@@ -177,6 +172,11 @@ export interface PiBoundaryWiring {
   lease: Lease;
   models: Models;
   harnessFactory: PiHarnessFactory;
+  /** The assembly's configured PAIR — what a session with no overrides runs on. One field because
+   *  model and thinking level are one setting: which levels exist is a property of the model, so a
+   *  wiring that could carry them apart could carry a pair no run uses. Must be what
+   *  {@link harnessFactory} was built with. */
+  defaults: { model: AnyModel; thinkingLevel: ThinkingLevel };
 }
 
 export interface CreatePiSessionControlOptions {
@@ -259,7 +259,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         followUp: true,
         manualCompaction: !!b,
         modelSelection: b ? { allowedModels: listModels(b.models) } : false,
-        thinkingLevel: b ? { allowedLevels: [...THINKING_LEVELS] as string[] } : false,
+        // Servable or not. WHICH levels is a property of the session's model, so it rides
+        // `state().availableThinkingLevels` — a list here could only answer for one model.
+        thinkingLevel: !!b,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
@@ -269,23 +271,27 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
-      // The durable overrides (set_model / set_thinking), via the SAME walk the harness resolve
-      // uses (lastOverrideEntries) — one physical implementation, so the reporting surface and the
-      // execution surface can never disagree on which record is "the" override. Reported as
-      // recorded, even if the current registry lacks the model (state reports session truth; the
-      // harness resolve owns the execution fallback).
-      let model: string | undefined;
-      let thinkingLevel: string | undefined;
-      if (opened) {
-        const recorded = lastOverrideEntries((await opened.getEntries()) as Parameters<typeof lastOverrideEntries>[0]);
-        if (recorded.model) model = `${recorded.model.provider}/${recorded.model.modelId}`;
-        thinkingLevel = recorded.thinkingLevel;
-      }
+      // What will RUN, not the raw record: a client steering a session needs the pair that executes.
+      // Without a boundary there is no model to resolve against, and the fields are absent.
+      const b = boundary?.();
+      const settings =
+        opened && b
+          ? resolveSessionSettings(
+              (await opened.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+              b.models,
+              b.defaults,
+            )
+          : undefined;
       return {
         status: run ? "running" : compacting.has(session) ? "compacting" : "idle",
         ...(run ? { activeRunId: run.runId } : {}),
-        ...(model !== undefined ? { model } : {}),
-        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+        ...(settings
+          ? {
+              model: `${settings.model.provider}/${settings.model.id}`,
+              thinkingLevel: settings.thinkingLevel,
+              availableThinkingLevels: settings.availableThinkingLevels,
+            }
+          : {}),
         pending: run ? { ...run.pending } : { steering: 0, followUp: 0 },
         ...(leafEntryId ? { leafEntryId } : {}),
       };
@@ -451,17 +457,29 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             }
             apply = async (s) => {
               await s.appendModelChange(model.provider, model.id);
-              // The CANONICAL spec, same string the durable entry and state() report — the event
-              // must not echo a client alias the other two surfaces would disagree with.
-              return { type: "state_changed", timestamp: Date.now(), data: { model: `${model.provider}/${model.id}` } };
+              // Both halves: a new model can change which level executes. Nothing is re-recorded to
+              // make that true — the resolve reports it, so the preference survives a round trip.
+              const settings = resolveSessionSettings(
+                (await s.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+                b.models,
+                b.defaults,
+              );
+              return {
+                type: "state_changed",
+                timestamp: Date.now(),
+                // The CANONICAL spec, same string the durable entry and state() report — the event
+                // must not echo a client alias the other two surfaces would disagree with.
+                data: { model: `${model.provider}/${model.id}`, thinkingLevel: settings.thinkingLevel },
+              };
             };
           } else if (command.type === "set_thinking") {
+            // A payload that is not a level at all — invalid before any session question.
             if (!(THINKING_LEVELS as ReadonlySet<string>).has(command.level)) {
               return {
                 ok: false,
                 error: {
                   code: INVALID_COMMAND_CODE,
-                  message: `unknown thinking level "${command.level}" — capabilities().thinkingLevel lists the allowed values`,
+                  message: `unknown thinking level "${command.level}" — state().availableThinkingLevels lists what this session accepts`,
                   retryable: false,
                 },
               };
@@ -474,7 +492,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
           // not minted into a ghost record. (Existence check before the lease — read-only; the
           // WRITE handle is re-opened under the lease below, this one is discarded.)
-          if (!(await sessions.openIfExists(session))) {
+          const existing = await sessions.openIfExists(session);
+          if (!existing) {
             return {
               ok: false,
               error: {
@@ -483,6 +502,25 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 retryable: false,
               },
             };
+          }
+          if (command.type === "set_thinking") {
+            // The same set `state()` showed the client. Reject here rather than record a level the
+            // run would not use.
+            const { model, availableThinkingLevels } = resolveSessionSettings(
+              (await existing.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+              b.models,
+              b.defaults,
+            );
+            if (!availableThinkingLevels.includes(command.level)) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: `thinking level "${command.level}" is not supported by ${model.provider}/${model.id} (allowed: ${availableThinkingLevels.join(", ")})`,
+                  retryable: false,
+                },
+              };
+            }
           }
           // Boundary mutations are the control plane's only writers: same lease as every run — a
           // mutation must never race one (design §9).
