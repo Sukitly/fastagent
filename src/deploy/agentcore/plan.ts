@@ -640,6 +640,16 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `              - Effect: Allow # mint the presigned URLs the container uses for its state snapshot`,
       `                Action: [s3:GetObject, s3:PutObject]`,
       `                Resource: !Sub arn:aws:s3:::\${StateBucket}/${STATE_KEY}`,
+      `              # Without s3:ListBucket, S3 folds "key absent" into 403 (anti-enumeration), which is`,
+      `              # indistinguishable from a broken signature — so the container's restore contract`,
+      `              # (agentcore-state.ts: ONLY 404 means first deploy) would dead-end every first deploy.`,
+      `              # Scoped to the snapshot prefix: this grants "may know whether the snapshot exists",`,
+      `              # not a listing of the whole deployment bucket.`,
+      `              - Effect: Allow`,
+      `                Action: s3:ListBucket`,
+      `                Resource: !Sub arn:aws:s3:::\${StateBucket}`,
+      `                Condition:`,
+      `                  StringLike: { s3:prefix: state/* }`,
       ...(input.selfSchedule
         ? [
             `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,

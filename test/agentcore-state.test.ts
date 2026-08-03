@@ -175,6 +175,21 @@ describe("agentcore state snapshot", () => {
       expect(calls.map((c) => c.method)).toEqual(["GET", "PUT"]);
     });
 
+    it("a 403 is NOT first boot — it rejects with the ListBucket/expiry diagnosis instead of serving empty", async () => {
+      // S3 answers 403 for a missing key when the signer lacks s3:ListBucket — indistinguishable from
+      // a revoked permission, under which the snapshot may well EXIST. Treating it as "absent" would
+      // boot an empty agent and overwrite the real snapshot; the error must say what to check instead.
+      const local = await stateRoot();
+      const { impl, calls } = fakeFetch(() => new Response("AccessDenied", { status: 403 }));
+      const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+      sync.use(urls);
+
+      await expect(sync.ready()).rejects.toThrow(/GET failed: 403.*s3:ListBucket/);
+      sync.save();
+      await sync.flush();
+      expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+    });
+
     it("a FAILED restore rejects and blocks saving — never overwrite good state with an empty root", async () => {
       const local = await stateRoot();
       const { impl, calls } = fakeFetch(() => new Response("boom", { status: 500 }));
