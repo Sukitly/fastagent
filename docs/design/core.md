@@ -594,6 +594,12 @@ into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn. All ing
 fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
 until the runtime is deleted.
 
+The two process boundaries remain two explicit log sources: Runtime application stdout/stderr and the
+forwarder Lambda's ingress log. `fastagent logs agentcore` derives the stack from the same workspace name,
+discovers the Runtime endpoint log group from its `RuntimeArn`, and selects only `[runtime-logs]` streams
+(the group may also contain OTEL/spans); `--source forwarder` selects the Lambda group. It changes neither
+log content nor `FASTAGENT_LOG_LEVEL` — it is discovery plus `aws logs tail`, not another logger.
+
 **State durability is an S3 snapshot, not the mount.** The platform's SessionStorage (`/mnt/state`) is
 reset on every runtime VERSION UPDATE — i.e. on every deploy — and after 14 idle days, so it is a local
 disk, not the source of truth (a real deployment proved this: the truncation point in a live chat matched

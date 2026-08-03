@@ -13,6 +13,7 @@ import {
   IDLE_TIMEOUT_SECONDS,
   MAX_LIFETIME_SECONDS,
   STATE_KEY,
+  agentcoreName,
   cfnParamName,
   forwarderSource,
   isGeneratedAgentcoreTemplate,
@@ -41,6 +42,11 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
 });
 
 describe("deploy agentcore: name/id helpers", () => {
+  it("agentcoreName is the stable workspace-basename → stack-name mapping", () => {
+    expect(agentcoreName("My Agent!!")).toBe("my-agent");
+    expect(agentcoreName("---")).toBe("agent");
+  });
+
   it("toRuntimeName produces [a-zA-Z][a-zA-Z0-9_]{0,47}", () => {
     expect(toRuntimeName("my-agent")).toBe("my_agent");
     expect(toRuntimeName("123 weird!!name")).toBe("agent_123_weird_name");
@@ -133,6 +139,8 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(plan.untranslatableSchedules).toEqual([]);
     expect(plan.runbook.join("\n")).not.toContain("stop-runtime-session"); // no forwarder → no ingress session
+    expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --follow");
+    expect(plan.runbook.join("\n")).not.toContain("--source forwarder");
   });
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
@@ -159,6 +167,7 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("setWebhook");
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
+    expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --source forwarder --follow");
     // The shipped artifact IS the forwarder source (it becomes the Lambda package verbatim).
     const forwarder = plan.artifacts.find((a) => a.path === FORWARDER_FILE)!;
     expect(forwarder.content).toBe(forwarderSource());

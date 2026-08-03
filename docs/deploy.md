@@ -152,6 +152,20 @@ fastagent deploy agentcore
 
 Generates `agentcore.template.yaml` (one CloudFormation stack = the whole topology), `lambda/forwarder.js`, `Dockerfile`, `.dockerignore`, then prints the runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a **unique tag per deploy**, `aws cloudformation deploy` with the secret parameters, read the stack outputs, register webhooks. `--run` drives all of it (aws + docker CLIs) and carries your local model credential.
 
+After deployment, read the agent process logs without hunting through CloudWatch:
+
+```bash
+fastagent logs agentcore --follow
+```
+
+The command resolves the same workspace-derived CloudFormation stack, reads its `RuntimeArn`, discovers the actual per-endpoint log group, and tails only its `[runtime-logs]` streams. AgentCore stores OTEL/spans in that log group too; excluding those streams keeps the output to the same FastAgent stdout/stderr messages emitted locally. It does not change logging behavior or `FASTAGENT_LOG_LEVEL` (`start` remains `info`; set the existing environment knob to `debug` when the detailed turn trace is needed). The public ingress is a separate Lambda and therefore a separate source:
+
+```bash
+fastagent logs agentcore --source forwarder --follow
+```
+
+AWS creates each log group on first use. Before the first Runtime invocation or forwarder event, the command says which trigger is missing instead of sending `aws logs tail` to a nonexistent group. Pass the same `[dir]` used for deploy when running from somewhere else.
+
 AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed 3 minutes after the agent goes idle). The stack therefore carries:
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
