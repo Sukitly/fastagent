@@ -570,7 +570,7 @@ const logs: CommandSpec = {
     "stack name. It never changes FASTAGENT_LOG_LEVEL: AgentCore keeps start's production default, and " +
     "setting that environment knob to debug exposes the existing detailed turn trace when needed.",
   run: async (args, f) =>
-    (await import("./commands/logs.ts")).runAgentcoreLogs(args[1] as string, {
+    (await import("./commands/logs.ts")).runLogs(args[0] as string, args[1] as string, {
       source: f.source as string | undefined,
       since: f.since as string | undefined,
       follow: f.follow === true,

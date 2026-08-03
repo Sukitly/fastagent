@@ -77,12 +77,10 @@ export async function tailAgentcoreLogs(
     }
     prefix = `/aws/bedrock-agentcore/runtimes/${runtimeId}-`;
   } else {
-    if (!outputs.ForwarderUrl) {
-      return {
-        ok: false,
-        gate: `stack ${stack} has no forwarder — this invoke-only deployment has Runtime logs only`,
-      };
-    }
+    // `ForwarderUrl` is the stack's INGRESS URL, NOT proof that a forwarder Lambda exists: plan.ts
+    // keeps needsForwarder and needsFunctionUrl as two variables on purpose (a schedules-only topology
+    // may keep the forwarder and drop the public URL). So DISCOVERY decides existence below, and the
+    // URL output only picks which not-found sentence is true.
     exact = `/aws/lambda/fastagent-${plan.name}-forwarder`;
     prefix = exact;
   }
@@ -109,6 +107,15 @@ export async function tailAgentcoreLogs(
   }
   const matches = groups.filter((group) => (exact ? group === exact : group.startsWith(prefix))).sort();
   if (matches.length === 0) {
+    // Absent group = never used, EXCEPT when the stack has no forwarder at all — an invoke-only
+    // deployment would otherwise be told to deliver a webhook it can never receive. Both facts agree
+    // there (no ingress URL output either), so the message can name the topology instead of a trigger.
+    if (plan.source === "forwarder" && !outputs.ForwarderUrl) {
+      return {
+        ok: false,
+        gate: `stack ${stack} has neither a forwarder log group nor an ingress URL — this looks like an invoke-only deployment, which has Runtime logs only`,
+      };
+    }
     const trigger = plan.source === "runtime" ? "invoke the Runtime once" : "deliver one webhook or schedule fire";
     return {
       ok: false,
@@ -120,7 +127,10 @@ export async function tailAgentcoreLogs(
   if (matches.length > 1) {
     return {
       ok: false,
-      gate: `several Runtime log groups match this stack: ${matches.join(", ")} — tail the intended group with aws logs tail`,
+      gate:
+        `several Runtime log groups match this stack: ${matches.join(", ")} — tail the intended one with the ` +
+        `same stream filter this command applies: aws logs tail <group> --log-stream-name-prefix '[runtime-logs]' ` +
+        `(quote the prefix — [...] is a shell glob)`,
     };
   }
 

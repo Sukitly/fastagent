@@ -73,12 +73,45 @@ describe("agentcore logs", () => {
   });
 
   it("refuses forwarder logs for an invoke-only deployment", async () => {
-    const aws = fakeAws((args) => (args[0] === "cloudformation" ? { stdout: outputs(false) } : {}));
+    const aws = fakeAws((args) => {
+      if (args[0] === "cloudformation") return { stdout: outputs(false) };
+      if (args[1] === "describe-log-groups") return { stdout: "[]" };
+      return {};
+    });
 
     const result = await tailAgentcoreLogs({ name: "my-agent", source: "forwarder", follow: false }, aws.cli);
 
+    // Both facts agree (no ingress URL output AND no log group) — no tail attempt, no wrong trigger advice.
     expect(result).toMatchObject({ ok: false, gate: expect.stringMatching(/invoke-only deployment/) });
-    expect(aws.commands()).toHaveLength(1);
+    expect(aws.commands().some((command) => command.startsWith("logs tail"))).toBe(false);
+  });
+
+  it("tails a forwarder that exists without an ingress URL output", async () => {
+    // ForwarderUrl is the INGRESS URL, not the forwarder's existence: a topology keeping the Lambda
+    // while dropping the public URL (schedules-only) still has forwarder logs, and must get them.
+    const group = "/aws/lambda/fastagent-my-agent-forwarder";
+    const aws = fakeAws((args) => {
+      if (args[0] === "cloudformation") return { stdout: outputs(false) };
+      if (args[1] === "describe-log-groups") return { stdout: JSON.stringify([group]) };
+      return {};
+    });
+
+    const result = await tailAgentcoreLogs({ name: "my-agent", source: "forwarder", follow: true }, aws.cli);
+
+    expect(result).toEqual({ ok: true, logGroup: group });
+    expect(aws.commands().at(-1)).toBe(`logs tail ${group} --format short --follow`);
+  });
+
+  it("names the missing trigger when a real forwarder has not run yet", async () => {
+    const aws = fakeAws((args) => {
+      if (args[0] === "cloudformation") return { stdout: outputs(true) };
+      if (args[1] === "describe-log-groups") return { stdout: "[]" };
+      return {};
+    });
+
+    const result = await tailAgentcoreLogs({ name: "my-agent", source: "forwarder", follow: false }, aws.cli);
+
+    expect(result).toMatchObject({ ok: false, gate: expect.stringMatching(/deliver one webhook or schedule fire/) });
   });
 
   it("never guesses when an edited stack has several matching Runtime endpoints", async () => {
@@ -95,6 +128,9 @@ describe("agentcore logs", () => {
     const result = await tailAgentcoreLogs({ name: "my-agent", source: "runtime", follow: false }, aws.cli);
 
     expect(result).toMatchObject({ ok: false, gate: expect.stringContaining(groups[0] as string) });
+    // The handoff must carry the POLICY too, not just discovery: a bare `aws logs tail` would mix in
+    // otel-rt-logs/spans — the exact thing this command exists to exclude.
+    expect(result).toMatchObject({ ok: false, gate: expect.stringContaining("--log-stream-name-prefix") });
     expect(aws.commands().some((command) => command.startsWith("logs tail"))).toBe(false);
   });
 });
