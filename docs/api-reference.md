@@ -484,10 +484,21 @@ await control.dispatch("s1", { type: "compact", instructions: "keep the decision
 ```
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
-serving path, channels included. Boundary mutations require an EXISTING session (`no_such_session`
+serving path, channels included. One exception: a recorded thinking level the session's CURRENT
+model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. `set_model`
+re-records the clamped level at the boundary, so `state()` and the execution agree and the client gets
+it in the same `state_changed`; the resolve keeps clamping as a BACKSTOP for what the boundary cannot
+see (a deployment whose CONFIGURED model changed between restarts), and there it warns server-side
+while `state()` reports the recorded level. Note the clamp's direction: it takes the lowest supported
+level at or above the recorded one and only falls back downward if nothing above exists — a gap
+resolves upward, which costs more, not less. Boundary mutations require an EXISTING session (`no_such_session`
 otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
 `invalid_command` before acceptance;
-`capabilities()` lists `allowedModels`/`allowedLevels`. Boundary commands require the wiring the
+`capabilities()` lists `allowedModels` (the deployment's registry — a static fact) and reports
+`thinkingLevel` as a plain boolean: WHICH levels exist depends on the model a session is running, so
+they ride `state().availableThinkingLevels`. `set_thinking` validates against that same set and
+rejects anything outside it with `invalid_command`
+rather than recording an override the run would ignore. Boundary commands require the wiring the
 agent opener provides (`sessionControl: true`); a hub without it reports them off and rejects
 with `unsupported_capability`.
 

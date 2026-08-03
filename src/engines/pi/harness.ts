@@ -12,6 +12,7 @@ import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
+import { type OverrideEntryLike, resolveSessionSettings } from "./session-settings.ts";
 
 /**
  * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
@@ -114,7 +115,7 @@ export const SUMMARIZATION_RETRY_POLICY = { enabled: true, maxRetries: 3, baseDe
  * here means an upstream default change in either place cannot silently alter deployments. Models
  * that don't support a level are clamped by pi per model.
  */
-const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 /**
  * Resolve the active-tool set for a fresh harness — the ONE place both fallbacks live. pi's harness
@@ -140,67 +141,11 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  */
 const warnedRestores = new Set<string>();
 
-/** pi's ThinkingLevel scale as a checkable set — THE single source for fastagent (session entries
- *  store plain strings; session-control's dispatch validation and capabilities derive from this).
- *  The `satisfies Record<ThinkingLevel, …>` anchor makes it EXHAUSTIVE against pi's union: pi
- *  adding a level turns this into a type error instead of a silent drift where `set_thinking`
- *  rejects a value pi supports. */
-const ALL_THINKING_LEVELS = {
-  off: true,
-  minimal: true,
-  low: true,
-  medium: true,
-  high: true,
-  xhigh: true,
-  max: true,
-} satisfies Record<ThinkingLevel, true>;
-export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
-
-/** The shape both override consumers walk — a session entry, structurally. */
-export interface OverrideEntryLike {
-  type: string;
-  provider?: string;
-  modelId?: string;
-  thinkingLevel?: string;
-}
-
 /**
- * The session's durable override FACTS — the ONE walk both surfaces consume (`state()` reports the
- * recorded truth; `resolveHarnessOverrides` below applies registry/scale fallbacks on top). The
- * LAST entry of each kind wins, and a malformed record reads as ABSENT for that kind — never
- * skipped over to an earlier record: the reporting surface and the execution surface must agree on
- * which record is "the" override.
- */
-export function lastOverrideEntries(entries: OverrideEntryLike[]): {
-  model?: { provider: string; modelId: string };
-  thinkingLevel?: string;
-} {
-  let model: { provider: string; modelId: string } | undefined;
-  let modelSeen = false;
-  let thinkingLevel: string | undefined;
-  let thinkingSeen = false;
-  for (let i = entries.length - 1; i >= 0 && !(modelSeen && thinkingSeen); i--) {
-    const e = entries[i];
-    if (!modelSeen && e?.type === "model_change") {
-      modelSeen = true;
-      if (e.provider !== undefined && e.modelId !== undefined) model = { provider: e.provider, modelId: e.modelId };
-    }
-    if (!thinkingSeen && e?.type === "thinking_level_change") {
-      thinkingSeen = true;
-      if (e.thinkingLevel !== undefined) thinkingLevel = e.thinkingLevel;
-    }
-  }
-  return { model, thinkingLevel };
-}
-
-/**
- * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the
- * active-tools resolve above: pi writes `model_change`/`thinking_level_change` entries on explicit
- * setModel/setThinkingLevel (the control plane's `set_model`/`set_thinking` append them directly)
- * but a fresh harness never reads them back. Override facts come from {@link lastOverrideEntries};
- * this adds the EXECUTION fallbacks: a recorded model no longer in this deployment's registry falls
- * back to the default with a deduped warn (fail visibly without bricking the session — the
- * conversation must survive a registry change across deploys); an unknown thinking level likewise.
+ * {@link resolveSessionSettings} plus the warn only the execution path owes: a recorded pair can stop
+ * being executable with no control-plane command involved (pi appends these entries itself; a
+ * deployment's configured model can change between restarts). Deduped per session+cause — it would
+ * otherwise repeat every turn.
  */
 export function resolveHarnessOverrides(
   entries: OverrideEntryLike[],
@@ -208,36 +153,31 @@ export function resolveHarnessOverrides(
   defaults: { model: AnyModel; thinkingLevel: ThinkingLevel },
   sessionId: string,
 ): { model: AnyModel; thinkingLevel: ThinkingLevel } {
-  let model = defaults.model;
-  let thinkingLevel = defaults.thinkingLevel;
+  const settings = resolveSessionSettings(entries, models, defaults);
   const warnOnce = (key: string, message: string) => {
     const emit = warnedRestores.has(key) ? log.debug : log.warn;
     warnedRestores.add(key);
     emit(message);
   };
-  const recorded = lastOverrideEntries(entries);
-  if (recorded.model) {
-    const found = models.getModel(recorded.model.provider, recorded.model.modelId);
-    if (found) model = found as AnyModel;
-    else {
-      warnOnce(
-        `${sessionId}\u0000model\u0000${recorded.model.provider}/${recorded.model.modelId}`,
-        `[fastagent] session ${sessionId}: recorded model override ${recorded.model.provider}/${recorded.model.modelId} is not in this deployment's registry — using the configured default`,
-      );
-    }
+  const dropped = settings.dropped;
+  if (dropped?.model) {
+    warnOnce(
+      `${sessionId}\u0000model\u0000${dropped.model}`,
+      `[fastagent] session ${sessionId}: recorded model override ${dropped.model} is not in this deployment's registry — using the configured default`,
+    );
   }
-  if (recorded.thinkingLevel !== undefined) {
-    if (THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {
-      thinkingLevel = recorded.thinkingLevel as ThinkingLevel;
-    } else {
-      warnOnce(
-        `${sessionId}\u0000thinking\u0000${recorded.thinkingLevel}`,
-        `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is unknown — using the configured default`,
-      );
-    }
+  if (dropped?.thinkingLevel) {
+    const { recorded, running, known } = dropped.thinkingLevel;
+    warnOnce(
+      `${sessionId}\u0000thinking\u0000${settings.model.provider}/${settings.model.id}\u0000${recorded}`,
+      known
+        ? `[fastagent] session ${sessionId}: recorded thinking level "${recorded}" is not supported by ${settings.model.provider}/${settings.model.id} — running at "${running}"`
+        : `[fastagent] session ${sessionId}: recorded thinking level "${recorded}" is unknown — using the configured default`,
+    );
   }
-  return { model, thinkingLevel };
+  return { model: settings.model, thinkingLevel: settings.thinkingLevel };
 }
+
 export function resolveHarnessActiveToolNames(
   recorded: string[] | null,
   tools: MountedTool[],
