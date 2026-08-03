@@ -357,10 +357,21 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain(`STATE_KEY: ${STATE_KEY}`);
   });
 
+  it("grants s3:ListBucket on the snapshot prefix — without it a MISSING first-deploy snapshot reads 403, not 404", () => {
+    // S3 folds "key absent" into 403 unless the caller may list (anti-enumeration), and the restore
+    // contract accepts ONLY 404 as first deploy — dropping this statement deadlocks every first boot.
+    const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
+      .artifacts[0]!.content;
+    expect(template).toContain("Action: s3:ListBucket");
+    expect(template).toContain(`Resource: !Sub arn:aws:s3:::\${StateBucket}\n`); // the BUCKET arn, not an object
+    expect(template).toContain("StringLike: { s3:prefix: state/* }"); // scoped: existence of the snapshot, not a full listing
+  });
+
   it("an invoke-only deployment (no forwarder) carries no bucket wiring at all", () => {
     const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
     expect(template).not.toContain("StateBucket");
     expect(template).not.toContain("s3:GetObject");
+    expect(template).not.toContain("s3:ListBucket");
   });
 
   it("holds an idle session for 3 minutes — within the platform's 60–28800 range, and only after work settles", () => {

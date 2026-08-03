@@ -185,16 +185,26 @@ export function createStateSync(options: StateSyncOptions): StateSync {
 
   const runRestore = async (urls: StateUrls): Promise<void> => {
     const res = await doFetch(urls.getUrl, { method: "GET" });
-    // ONLY a proven 404 is "first deploy". The signer holds s3:GetObject on exactly this key, so a
-    // missing object answers NoSuchKey/404; a 403 means an expired or malformed signature, or a
-    // revoked permission — i.e. the snapshot may well exist. Reading 403 as "absent" would serve an
-    // empty agent and then overwrite the real snapshot with that emptiness.
+    // ONLY a proven 404 is "first deploy". A missing key answers 404 only because the generated
+    // template grants the signer s3:ListBucket on the snapshot prefix — without it S3 folds "absent"
+    // into 403 (anti-enumeration). A 403 therefore means an expired or malformed signature, a
+    // revoked permission, or a template from before that grant — i.e. the snapshot may well exist.
+    // Reading 403 as "absent" would serve an empty agent and then overwrite the real snapshot with
+    // that emptiness.
     if (res.status === 404) {
       log.info("[agentcore] no state snapshot yet — starting from an empty state root (first deploy)");
       restored = true;
       return;
     }
-    if (!res.ok) throw new Error(`state snapshot GET failed: ${res.status}`);
+    if (!res.ok) {
+      const hint =
+        res.status === 403
+          ? " (an expired presigned URL, a revoked permission, or a template generated before the " +
+            "ForwarderRole granted s3:ListBucket — S3 answers 403 even for a MISSING first-deploy " +
+            "snapshot without it; regenerate with `fastagent deploy agentcore --force` and redeploy)"
+          : "";
+      throw new Error(`state snapshot GET failed: ${res.status}${hint}`);
+    }
     const written = await unpackIntoStateRoot(stateRoot, Buffer.from(await res.arrayBuffer()));
     log.info(`[agentcore] restored ${written} state file(s) from the snapshot`);
     restored = true;
