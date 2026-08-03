@@ -13,12 +13,14 @@ import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";
+import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
+import { assertTunnelBindable, maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
+import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface DevOptions {
   port?: string;
+  bind?: string;
   model?: string;
   authPath?: string;
   /** false ⇔ `--no-watch`. */
@@ -46,13 +48,17 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
     await serveOnce(dir, opts);
     return;
   }
-  parsePort(opts.port, "--port", "flag"); // flag-shape check before spawning
+  parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
+  // The --bind/--tunnel conflict is decidable from flags alone: refuse it HERE, before a worker and a
+  // tunnel exist. The worker repeats the check because `http.host` can supply the address instead.
+  assertTunnelBindable(parseBind(opts.bind), opts.tunnel ?? false, "flag");
   await runDevSupervisor(placement, { tunnel: opts.tunnel ?? false });
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
 async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
+  const bindFlag = parseBind(opts.bind);
   loadDotEnv(placementOrExit(dir).agentDir);
   installProxyFetch();
 
@@ -72,12 +78,18 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
   const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl).catch(failStartup);
+  // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
+  // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
+  const configured = a.config.http?.host;
+  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
+  assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent
+    host,
   });
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
-  serve({ ...routed, routes: withControl.routes }, portFlag ?? a.config.http?.port ?? 8787, (p) => {
+  serve({ ...routed, routes: withControl.routes }, { port: portFlag ?? a.config.http?.port ?? 8787, host }, (p) => {
     withControl.announce(p);
     maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
   });
