@@ -678,7 +678,6 @@ describe("session control over HTTP (Phase 3)", () => {
       leafEntryId: "e3",
     };
     const quietEvents = (): AsyncIterable<never> => ({
-      // biome-ignore lint/correctness/useYield: an intentionally empty stream
       [Symbol.asyncIterator]: async function* () {},
     });
     const fake = {
