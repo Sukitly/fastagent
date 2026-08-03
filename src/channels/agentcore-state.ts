@@ -47,6 +47,13 @@ const PUT_TIMEOUT_MS = 60_000;
  * file from the builder machine, but the box's own copy is the one that has been REFRESHED, and this
  * snapshot is its volume: the same rule every other host states ("a credential already refreshed on
  * the volume is never overwritten"). The seed is bootstrap for a snapshot that has none.
+ *
+ * That sentence is only true because the generated template points FASTAGENT_SECRETS_DIR INSIDE the
+ * state root (deploy/agentcore/plan.ts `SECRETS_DIR`) — nothing here special-cases credentials, the
+ * walk below simply reaches them. Moving the secrets dir back out (e.g. to the sibling layout the
+ * volume-backed hosts use) silently un-does it: the file stops being copied, the platform wipes it
+ * with the microVM, and a single-use OAuth refresh token dies with it. `restores VERBATIM` is a
+ * statement about where that directory is, not a property this module can enforce on its own.
  */
 const EXCLUDED = new Set(["control.json"]);
 

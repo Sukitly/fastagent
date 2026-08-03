@@ -52,7 +52,7 @@ const urls = { getUrl: "https://s3/get", putUrl: "https://s3/put" };
 describe("agentcore state snapshot", () => {
   it("round-trips the whole state root, nested paths included", async () => {
     const source = await stateRoot({
-      "auth.json": '{"token":"t"}',
+      ".secrets/auth.json": '{"token":"t"}',
       "sessions/8335403535.jsonl": '{"role":"user"}\n{"role":"assistant"}\n',
       "schedule/wakeups.json": '{"pending":[{"id":"a"}]}',
     });
@@ -69,13 +69,32 @@ describe("agentcore state snapshot", () => {
   it("the snapshot's auth.json WINS over the deploy seed — the box's copy is the refreshed one", async () => {
     // Same rule as every other host's volume: "a credential already refreshed is never overwritten".
     // The seed is bootstrap for a snapshot that has none, not an authority over one that does.
-    const source = await stateRoot({ "auth.json": "REFRESHED-ON-THE-BOX", "sessions/s.jsonl": "keep" });
-    const target = await stateRoot({ "auth.json": "SEEDED-BY-THIS-DEPLOY" });
+    //
+    // At the REAL path: the generated template sets FASTAGENT_SECRETS_DIR to `<state root>/.secrets`
+    // (deploy/agentcore/plan.ts SECRETS_DIR), which is the whole reason this file is reachable here.
+    // Asserting it at the state root instead would keep passing even if the secrets dir were moved
+    // outside the snapshot — the exact regression that costs the deployment its model access.
+    const source = await stateRoot({ ".secrets/auth.json": "REFRESHED-ON-THE-BOX", "sessions/s.jsonl": "keep" });
+    const target = await stateRoot({ ".secrets/auth.json": "SEEDED-BY-THIS-DEPLOY" });
 
     await unpackIntoStateRoot(target, await packStateRoot(source));
 
-    expect(await readFile(join(target, "auth.json"), "utf8")).toBe("REFRESHED-ON-THE-BOX");
+    expect(await readFile(join(target, ".secrets/auth.json"), "utf8")).toBe("REFRESHED-ON-THE-BOX");
     expect(await readFile(join(target, "sessions/s.jsonl"), "utf8")).toBe("keep");
+  });
+
+  it("a rotated credential survives the FULL microVM cycle — seed, rotate, snapshot, wipe, restore", async () => {
+    // The failure this locks out is a slow one: an OAuth refresh token is single-use, so a box that
+    // loses its rotated copy re-seeds a token the provider already invalidated and eventually cannot
+    // authenticate at all — with a redeploy as the only cure.
+    const box1 = await stateRoot({ ".secrets/auth.json": "R0-SEEDED" });
+    await writeFile(join(box1, ".secrets/auth.json"), "R1-ROTATED"); // a turn refreshes the token
+    const snapshot = await packStateRoot(box1); // …and the settle pushes it to S3
+
+    const box2 = await stateRoot({ ".secrets/auth.json": "R0-SEEDED" }); // the mount was wiped; boot re-seeds
+    await unpackIntoStateRoot(box2, snapshot); // the first envelope restores before any model call
+
+    expect(await readFile(join(box2, ".secrets/auth.json"), "utf8")).toBe("R1-ROTATED");
   });
 
   it("never carries control.json — it is this boot's URL+token, worthless (and misleading) to the next", async () => {
