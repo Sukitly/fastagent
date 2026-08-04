@@ -60,10 +60,11 @@ export default defineTool({
     "channel is carrying — a scheduled or self-scheduled (wake) turn, whose plain reply goes " +
     "nowhere — or to reach a chat OTHER than the one you are answering. In a normal chat turn the " +
     "channel streams and delivers your reply itself, so do NOT call this to answer the current " +
-    "chat: it would post the message twice, outside the conversation thread. `chatId` (oc_…) comes " +
-    "from the [feishu: chat …] context line in a chat turn; a scheduled/woken turn has no context " +
-    "line, so the destination must be named in your instructions. Pass exactly ONE of `text` " +
-    "(plain) or `markdown` (rendered as a card: headings, bold, code blocks, links).",
+    "chat: it would post the message twice, outside the conversation thread. `chatId` (oc_…) names " +
+    "the DESTINATION and must come from your instructions (the asking message, the schedule prompt, " +
+    "or memory); the [feishu: chat …] context line only identifies the chat you are answering — the " +
+    "one chat this tool must not target in a chat turn. Pass exactly ONE of `text` (plain) or " +
+    "`markdown` (rendered as a card: headings, bold, code blocks, links).",
   input: z.object({
     chatId: z.string().describe("target chat id (oc_…)"),
     text: z.string().optional().describe("plain text message to send"),

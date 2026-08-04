@@ -38,6 +38,12 @@ describe("canonical scaffold feishu-send: text-or-markdown mode switch", () => {
   it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
     expect(description).toMatch(/do not call this to answer/i);
     expect(description).toMatch(/post the message twice/i);
+    // The tool's role is stated up front, and the addressing rule cannot point at the forbidden
+    // target: the destination comes from instructions — the context line only IDENTIFIES the
+    // current chat (the one chat a chat turn must not target).
+    expect(description).toMatch(/OUTSIDE the normal reply path/);
+    expect(description).toMatch(/must come from your instructions/i);
+    expect(description).toMatch(/only identifies the chat you are answering/i);
   });
 
   afterEach(() => {
