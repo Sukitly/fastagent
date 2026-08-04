@@ -142,9 +142,10 @@ The agent carries two fastagent-managed machinery dirs, split by deploy lifecycl
   schedule state. Precious, single-process, must survive a redeploy → a container points it at a
   volume.
 - `<agent dir>/.secrets/` — **secrets**: the agent's `.env` and the project-level `auth.json`.
-  Never committed (the scaffolded `.secrets/.gitignore` excludes it; only `.env.example` travels), never baked into an image —
-  a deployed box gets values through the host's secret store, and its seeded (possibly rotated)
-  `auth.json` also lives on the volume so refresh survives restarts.
+  The scaffolded `.secrets/.gitignore` keeps credential contents uncommitted. Deploy excludes those
+  contents while shipping the tracked `.env.example` and `.gitignore` scaffolds, so no credential is
+  baked into an image. A deployed box gets values through the host's secret store, and its seeded
+  (possibly rotated) `auth.json` also lives on the volume so refresh survives restarts.
 
 For deployments, point both at durable storage:
 

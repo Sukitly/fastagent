@@ -46,7 +46,7 @@ There is ONE agent shape and ONE marker. The shape:
 ├── schedules/
 ├── fastagent.config.mjs    # THE marker
 ├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .state, a stray .env
-├── .secrets/               # secrets: .env + auth.json, behind their own .gitignore (only .env.example travels)
+├── .secrets/               # secrets: .env + auth.json; only tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
@@ -109,9 +109,9 @@ there is an unfinished agent or something unrelated, and landing persona.md besi
 mix), while `--agent-dir .` is a directory being adopted — content is expected, so every existing file is
 KEPT (reported, never overwritten, never verified).
 
-The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret
-store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
-point both at it in a container).
+The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
+store (never an image; only the tracked `.env.example` + `.gitignore` scaffolds travel), `.state/` through
+a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a container).
 
 **Git is the author's, not fastagent's — with one stated exception.** `init` scaffolds two ignore files:
 the agent's own (`node_modules`, `.state`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the

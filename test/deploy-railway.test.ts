@@ -72,7 +72,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
     // into the image.
     expect(dockerignore).toMatch(/^\*\*\/node_modules$/m);
     expect(dockerignore).toMatch(/^\*\*\/\.env$/m);
-    expect(dockerignore).toMatch(/^\*\*\/\.secrets$/m);
+    expect(dockerignore).toMatch(/^\*\*\/\.secrets\/\*\*$/m);
     expect(dockerignore).toMatch(/^\*\*\/\.state$/m);
     expect(dockerignore).not.toMatch(/^\*\*\/\.git$/m);
   });
