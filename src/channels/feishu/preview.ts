@@ -1,8 +1,10 @@
 /**
  * Canonical Feishu live-preview rendering (also reused by Lark compatibility). The preview is ONE
- * streaming CARD (create entity → mount it with a reply/send → stream full-text snapshots at its
- * markdown element with a strictly increasing `sequence`; the client renders the typewriter effect);
- * on completion the same card is settled in place with the final answer (streaming off). Streaming
+ * streaming CARD of TWO elements — the volatile `process` block and the append-only `answer` (see
+ * card.ts for why the split is the prefix-stability fix) — (create entity → mount it with a
+ * reply/send → stream full-text snapshots per element with a strictly increasing `sequence`; the
+ * client renders the typewriter effect); on completion the same card is settled in place with the
+ * final answer alone (streaming off). Streaming
  * updates ride the cardkit quota (50 QPS per app, 10 QPS per card entity, no edit ceiling) — NOT the
  * 5 QPS per-chat message quota or
  * the 20-edit cap on text messages, which is why the preview is a card and not an edited text message.
@@ -25,6 +27,7 @@ import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
   CARD_MARKDOWN_MAX_BYTES,
+  PROCESS_ELEMENT_ID,
   cardEntityContent,
   finalCardJson,
   streamingCardJson,
@@ -43,7 +46,7 @@ import {
   thinkingLine,
   toolLines,
 } from "../preview-kit.ts";
-import { truncateUtf8 } from "../text.ts";
+import { truncateCodePointPrefix, truncateUtf8 } from "../text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type FeishuFailure = ChannelFailure;
@@ -58,11 +61,39 @@ const STREAM_THROTTLE_MS = 1000;
 /** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
 const THINKING_PREVIEW = 280;
 
-/** Cap a live view to the card budget, PREFIX-STABLE: the streaming client animates only when the old
- *  text is a prefix of the new, so an over-budget view freezes at its head rather than sliding a tail
- *  window (which would redraw the whole card every frame). The full answer still lands at settle. */
+/** Cap (code points) on the whole process block — thinking tail + tool lines + retry notice. It
+ *  redraws wholly on change anyway (it is volatile by nature), so over budget the newest COMPLETE
+ *  lines win (see tailLines). ≤1000 points is ≤4 KB UTF-8, which together with the answer's byte cap
+ *  stays inside the 30 KB entity budget. */
+const PROCESS_MAX_POINTS = 1000;
+
+/** Cap the live answer to the card budget, PREFIX-STABLE: the streaming client animates only when the
+ *  old text is a prefix of the new, so an over-budget answer freezes at its head rather than sliding a
+ *  tail window (which would re-type the element every frame). The full answer still lands at settle. */
 function capBytes(s: string, maxBytes: number): string {
   return truncateUtf8(s, maxBytes);
+}
+
+/** Tail-select COMPLETE lines within a code-point budget — the process block's cap. The block's
+ *  lines are semantic units (a `🔧` tool call, the `💭` peek, the `⏳` notice): cutting mid-line
+ *  would orphan a marker or tear a label, so elision happens only at line boundaries, newest lines
+ *  kept, with a leading `…` line marking what was dropped. The in-line guard cannot trigger with the
+ *  bounded renderers (a thinking tail ≤ ~283 points, a tool line ≤ ~135) — it exists so a future
+ *  unbounded line degrades to a head-preserving cut instead of an empty block. */
+function tailLines(text: string, maxPoints: number): string {
+  if (Array.from(text).length <= maxPoints) return text;
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let used = 2; // the leading "…\n" elision marker
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] ?? "";
+    const cost = Array.from(line).length + (kept.length > 0 ? 1 : 0); // +1 joining newline
+    if (used + cost > maxPoints) break;
+    used += cost;
+    kept.unshift(line);
+  }
+  if (kept.length === 0) return truncateCodePointPrefix(lines.at(-1) ?? "", maxPoints);
+  return `…\n${kept.join("\n")}`;
 }
 
 /** A visible preview mounted into the chat. Exported only for the channel wiring: a queued turn mounts
@@ -127,9 +158,10 @@ async function finalize(
 }
 
 /**
- * Mount one preview message: preferably a streaming card entity, with a static text message as the
- * visible fallback. Queue feedback and ordinary turn startup share this constructor so a queued card
- * has exactly the same shape the stream pump expects to take over later.
+ * Mount one preview message: preferably a streaming card entity (`initial` seeds the process element;
+ * the answer element starts empty), with a static text message as the visible fallback. Queue feedback
+ * and ordinary turn startup share this constructor so a queued card has exactly the same shape the
+ * stream pump expects to take over later.
  */
 export async function mountFeishuPreview(
   api: FeishuApi,
@@ -206,17 +238,26 @@ export async function streamFeishuReply(
   label = "[feishu]",
 ): Promise<void> {
   // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
-  // policy, the card-budget cap, and delivery below.
+  // policy, the card-budget caps, and delivery below. The card is TWO elements (card.ts): the process
+  // block's head changes every frame (sliding thinking tail, `…`→`✓` flips), so it must never share
+  // an element with the answer — the client would re-type the whole card from the divergence point
+  // once a second. Each view feeds its own element; only the changed one is written.
   const turn = createTurnView();
-  const view = (): string => {
+  const processView = (): string => {
     const v = composeTurnBody([
       thinkingLine(turn, THINKING_PREVIEW),
       toolLines(turn),
       turn.retrying ? RETRY_NOTICE : "",
-      revealedAnswer(turn, STREAM_THROTTLE_MS),
     ]);
-    return capBytes(v === "" ? THINKING_PLACEHOLDER : v, CARD_MARKDOWN_MAX_BYTES);
+    if (v !== "") return tailLines(v, PROCESS_MAX_POINTS);
+    // No process content: the placeholder covers only the silence BEFORE the answer reveals — once
+    // the answer is streaming, an empty block goes (stays) empty; "Thinking…" pinned above a live
+    // answer would misstate the phase. The empty frame is a real write: it clears a mounted
+    // placeholder. (The block cannot otherwise flicker: thinking and tools only grow — only the
+    // retry notice toggles, and its empty state resolves through this same rule.)
+    return revealedAnswer(turn, STREAM_THROTTLE_MS).trim() === "" ? THINKING_PLACEHOLDER : "";
   };
+  const answerView = (): string => capBytes(revealedAnswer(turn, STREAM_THROTTLE_MS), CARD_MARKDOWN_MAX_BYTES);
 
   // The live preview is ONE message: either the queue card/text handed in by the wiring, or a preview
   // mounted lazily on this turn's first flush. `sequence` must increase strictly per card — the single-
@@ -228,21 +269,34 @@ export async function streamFeishuReply(
   const nextSeq = (): number => ++sequence;
   let streamDead = false; // the platform closed streaming (idle timeout) — freeze the live view
   let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
-  let lastSent = "";
+  let lastProcess = "";
+  let lastAnswer = "";
 
   const flushPreview = async (): Promise<void> => {
-    const text = view();
+    const process = processView();
     if (!setupAttempted) {
       setupAttempted = true;
-      preview = await mountFeishuPreview(api, target, text, label);
-      lastSent = text;
+      // The mount seeds the process element with the current view; the answer element starts empty
+      // (card.ts), so the first answer snapshot is a clean prefix extension.
+      preview = await mountFeishuPreview(api, target, process, label);
+      lastProcess = process;
       return;
     }
     if (preview.kind !== "card" || streamDead) return; // text tier / dead stream: frozen until the terminal write
-    if (text === lastSent) return; // skip an unchanged snapshot
-    lastSent = text;
     try {
-      await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, text, nextSeq());
+      // `last*` advances BEFORE each write: a frame that fails for a non-streaming reason is logged
+      // once (the pump's onError) and not re-sent until its content actually changes. An EMPTY
+      // process frame is written like any other — it is the placeholder being cleared (processView).
+      if (process !== lastProcess) {
+        lastProcess = process;
+        await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq());
+      }
+      const answer = answerView();
+      // Never write an empty answer snapshot — the element is born empty and the answer only grows.
+      if (answer !== "" && answer !== lastAnswer) {
+        lastAnswer = answer;
+        await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq());
+      }
     } catch (e) {
       if (isCardStreamingClosed(e)) {
         // The platform closed streaming (idle timeout). Freeze the live view; the settle write replaces
