@@ -138,6 +138,16 @@ export function isGeneratedAgentcoreTemplate(content: string): boolean {
   return content.startsWith(GENERATED_TEMPLATE_MARKER);
 }
 
+/** Deployment base name from the workspace basename — the ONE mapping used to find its stack later. */
+export function agentcoreName(workspaceBasename: string): string {
+  return (
+    workspaceBasename
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "agent"
+  );
+}
+
 /** Runtime name (`[a-zA-Z][a-zA-Z0-9_]{0,47}`) from a dir basename. */
 export function toRuntimeName(basename: string): string {
   const slug = basename.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -965,6 +975,16 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       ? []
       : [`#    sends to it, so no Function URL is created and the agent is reachable only via SigV4).`]),
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
+    ``,
+    `# 5. Tail the Runtime's application stdout/stderr (same fastagent messages + log level as locally).`,
+    `#    Discovery filters to [runtime-logs], excluding OTEL/spans AWS stores in the same log group:`,
+    `fastagent logs agentcore --follow`,
+    ...(needsForwarder
+      ? [
+          `# The ingress transport is a separate Lambda and therefore a separate log source:`,
+          `fastagent logs agentcore --source forwarder --follow`,
+        ]
+      : []),
   );
 
   // Model-auth guidance mirrors the other hosts: an env key became a parameter above; OAuth/stored

@@ -548,6 +548,35 @@ const schedule: CommandSpec = {
   ],
 };
 
+const logs: CommandSpec = {
+  name: "logs",
+  summary: "find and tail a deployed host's application logs",
+  description:
+    "Find the CloudWatch log group for the AgentCore stack derived from dir, then run aws logs tail. " +
+    "The default Runtime source selects only [runtime-logs], so application stdout/stderr is not mixed " +
+    "with OTEL/spans in the same AWS log group; the forwarder source shows Lambda ingress transport logs.",
+  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, DIR_ARG],
+  flags: [
+    { flags: "--source <source>", description: "agentcore log source: runtime (default) or forwarder" },
+    { flags: "--since <duration>", description: "history window accepted by AWS CLI (for example 30m or 2h)" },
+    { flags: "--follow", description: "keep polling for new log events until interrupted" },
+  ],
+  examples: [
+    { cmd: "fastagent logs agentcore --follow", note: "the agent process" },
+    { cmd: "fastagent logs agentcore --source forwarder --follow", note: "Lambda ingress" },
+  ],
+  notes:
+    "Read-only. Run it against the same workspace passed to deploy so it derives the same CloudFormation " +
+    "stack name. It never changes FASTAGENT_LOG_LEVEL: AgentCore keeps start's production default, and " +
+    "setting that environment knob to debug exposes the existing detailed turn trace when needed.",
+  run: async (args, f) =>
+    (await import("./commands/logs.ts")).runLogs(args[0] as string, args[1] as string, {
+      source: f.source as string | undefined,
+      since: f.since as string | undefined,
+      follow: f.follow === true,
+    }),
+};
+
 const login: CommandSpec = {
   name: "login",
   summary: "authenticate a model provider (subscription/OAuth or API key)",
@@ -584,6 +613,7 @@ export const specs: readonly CommandSpec[] = [
   start,
   add,
   deploy,
+  logs,
   login,
 ];
 

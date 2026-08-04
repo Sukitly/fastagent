@@ -18,6 +18,7 @@ import { registerTelegramWebhook } from "../../channels/telegram/register-webhoo
 import {
   FORWARDER_FILE,
   TEMPLATE_FILE,
+  agentcoreName,
   isGeneratedAgentcoreTemplate,
   planAgentcoreDeploy,
 } from "../../deploy/agentcore/plan.ts";
@@ -71,6 +72,11 @@ export interface DeployOptions {
   authPath?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
+}
+
+/** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
+function shellArg(value: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
@@ -273,11 +279,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         ),
       );
     }
-    const acName =
-      basename(workspace)
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "agent";
+    const acName = agentcoreName(basename(workspace));
     // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name
     // (`fastagent-<name>-forwarder` ≤ 64 chars). Gate the base instead of silently truncating —
     // truncation would break the redeploy identity (a renamed stack starts blank state).
@@ -771,6 +773,11 @@ async function runDeployAgentcore(
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);
     if (outcome.url) console.error(`[fastagent] webhook ingress → ${outcome.url}`);
+    const logsDir = shellArg(workspace);
+    console.error(`[fastagent] runtime logs → fastagent logs agentcore ${logsDir} --follow`);
+    if (params.needsForwarder) {
+      console.error(`[fastagent] forwarder logs → fastagent logs agentcore ${logsDir} --source forwarder --follow`);
+    }
     console.error(
       `[fastagent] invoke: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
         `  --runtime-session-id "my-conversation-000000000000000000" \\\n` +
