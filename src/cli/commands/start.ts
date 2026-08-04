@@ -18,7 +18,7 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
-import type { Routes } from "../../host/node.ts";
+import { type Routes, parseRouteKey } from "../../host/node.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
   assertTunnelBindable,
@@ -188,6 +188,17 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         throw new Error(
           `long-connection channel(s) ${surface.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
             `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
+        );
+      }
+      // mountSessionControl's PATH-level collision rule, re-asserted here: with no channels at boot
+      // its own check ran against an empty base, and a spread merge would silently let control win —
+      // but a channel on /control/* is the same configuration error it is on every other host.
+      const controlPaths = new Set(Object.keys(withControl.routes).map((key) => parseRouteKey(key).path));
+      const collisions = Object.keys(surface.routes).filter((key) => controlPaths.has(parseRouteKey(key).path));
+      if (collisions.length > 0) {
+        throw new Error(
+          `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control ` +
+            `plane — rename the channel route or disable sessionControl in fastagent.config`,
         );
       }
       return { ...surface.routes, ...withControl.routes };
