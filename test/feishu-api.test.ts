@@ -166,6 +166,19 @@ describe("message methods", () => {
     expect(sentText.join("\n")).toBe(long); // lossless across the split
   });
 
+  it("onMessageSent reports EVERY minted id — sendText continuation chunks included", async () => {
+    // The own-send observation lives at the transport because this is the only place all sends pass:
+    // a facade wrapper above the api would see only sendText's FIRST id, and a thread opened on a
+    // continuation chunk would silently fall back to the mention bootstrap.
+    let n = 0;
+    stubFetch(() => okData({ message_id: `om_${++n}` }));
+    const ids: string[] = [];
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s", onMessageSent: (id) => ids.push(id) });
+    const long = `${"a".repeat(90 * 1024)}\n${"b".repeat(60 * 1024)}`; // two chunks
+    await api.sendText({ chatId: "oc_1", replyTo: "om_ask" }, long);
+    expect(ids).toEqual(["om_1", "om_2"]); // both chunks reported, not just the returned first id
+  });
+
   it("sendText keeps every chunk inside a topic", async () => {
     const bodies: { url: string; body: Record<string, unknown> }[] = [];
     stubFetch((url, init) => {

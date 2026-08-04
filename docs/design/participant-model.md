@@ -151,10 +151,11 @@ Two consequences worth naming rather than discovering:
   named, under-counting makes it speak into a crowd.
 
 **Participation** is required so the agent does not barge into a human thread it was never part of.
-The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
-ordinary social move: mention it once inside the thread, and it stops needing to be named. (A thread's
-root message lives in the main timeline, not in the thread, so the root is not what establishes
-participation.)
+The agent is a participant of a thread once it has answered in it — or once the thread grew from a
+message the agent itself wrote, where a channel can know that from its own sends (§11): a thread
+opened on the agent's answer is a follow-up TO the agent, and since the answer predates the thread,
+"answered in it" alone can never cover that case. Everywhere else, bootstrapping is the ordinary
+social move: mention it once inside the thread, and it stops needing to be named.
 
 **Mentioning only other people is not addressing the agent.** Such a message is discussion; it is
 buffered, never answered.
@@ -340,12 +341,14 @@ Two consequences worth stating rather than papering over:
   the most natural follow-up gesture in the platform hit the mention bootstrap. The channel therefore
   keeps a bounded durable ring of its own sent message ids (`sent.json`, the delivery ring's shape) and
   treats a group-thread message whose `root_id`/`parent_id` is one of them as proof the agent takes
-  part in that thread — merged as `agentSpoke`, so the second-human rule is untouched. Observation
-  stays the epistemic boundary: the channel records what it SAID as well as what it heard, and still
-  never reads the platform back. A quote-reply to the agent at the group's main timeline remains
-  buffered rather than answered (the room stays mention-only); the ring only widens what counts as the
-  agent's own thread. Its loss modes are the §3 kind — an id evicted or predating the ring costs one
-  mention bootstrap in that thread, visible and self-healing in one message.
+  part in that thread — merged as `agentParticipates`, so the second-human rule is untouched.
+  Observation stays the epistemic boundary: the channel records what it SAID as well as what it heard,
+  and still never reads the platform back. A quote-reply to the agent at the group's main timeline
+  remains buffered rather than answered (the room stays mention-only); the ring only widens what
+  counts as the agent's own thread. Its loss modes are the §3 kind — an id evicted or predating the
+  ring, or a message sent OUTSIDE the channel's own client (the scaffold send tool speaks the Open API
+  directly and its ids are not recorded), costs one mention bootstrap in that thread, visible and
+  self-healing in one message.
 
 ## 12. Migration
 

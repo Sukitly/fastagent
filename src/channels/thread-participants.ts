@@ -12,7 +12,8 @@
  *   deployment, so dropping it would key participation to a session that is not the one that answered.
  * - **Write both halves under one condition**, and gate that condition on STRUCTURAL facts only (is
  *   this a group? a thread? a human speaking?) — never on configuration, which changes while records
- *   outlive the change.
+ *   outlive the change. The own-authorship source of participation (a thread rooted on the agent's
+ *   message) shares the same gate: it is only ever merged for a group-thread message a human sent.
  * - **Observations only accumulate.** Nothing here sheds: no platform signals that someone stopped
  *   taking part, and the error directions are not symmetric — over-counting humans makes the agent ask
  *   to be named, under-counting makes it speak into a crowd.
@@ -47,8 +48,12 @@ const MAX_HUMANS = 2;
 interface ThreadParticipation {
   /** Distinct humans heard in this thread (capped, see {@link MAX_HUMANS}). */
   humans: string[];
-  /** Whether the agent has answered here — what makes it a participant rather than a bystander. */
-  agentSpoke: boolean;
+  /** Whether the agent TAKES PART here — what makes it a participant rather than a bystander. Two
+   *  ways it becomes true: the agent answered a turn in this thread, or the thread grew from a
+   *  message the agent itself wrote (a channel that records its own sends can know this — see
+   *  feishu's sent ring). "Answered here" alone is NOT the definition: the second source is
+   *  established before any turn ever ran in the thread. */
+  agentParticipates: boolean;
 }
 
 export interface ThreadParticipants {
@@ -60,21 +65,31 @@ export interface ThreadParticipants {
    */
   admitsBareMessage(key: string): boolean;
   /**
-   * Merge in what was just heard. Idempotent; a failed write is a warning, never a failed delivery.
+   * Merge in what was just heard (or said — participation includes the agent's own authorship).
+   * Idempotent; a failed write is a warning, never a failed delivery.
    *
-   * The parameter only admits values the store can honour: observations accumulate, so `agentSpoke`
-   * can be set but never cleared and `humans` unions. Passing `false` would compile and do nothing,
-   * so the type refuses it — "never shed" is an invariant, not a convention.
+   * The parameter only admits values the store can honour: observations accumulate, so
+   * `agentParticipates` can be set but never cleared and `humans` unions. Passing `false` would
+   * compile and do nothing, so the type refuses it — "never shed" is an invariant, not a convention.
    */
-  merge(key: string, heard: { humans?: string[]; agentSpoke?: true }): void;
+  merge(key: string, heard: { humans?: string[]; agentParticipates?: true }): void;
 }
 
-function isStoredParticipation(value: unknown): value is ThreadParticipation {
-  const record = value as ThreadParticipation;
+/** The on-disk shape, including the legacy key: records written before the participation rename
+ *  carry `agentSpoke` — read as the same fact (answering was then the only source), migrated to the
+ *  new key on the next full-map write. Read-compat is permanent; it costs one nullish coalesce. */
+interface StoredParticipation {
+  humans: string[];
+  agentParticipates?: boolean;
+  agentSpoke?: boolean;
+}
+
+function isStoredParticipation(value: unknown): value is StoredParticipation {
+  const record = value as StoredParticipation;
   return (
     Array.isArray(record?.humans) &&
     record.humans.every((human) => typeof human === "string") &&
-    typeof record.agentSpoke === "boolean"
+    (typeof record.agentParticipates === "boolean" || typeof record.agentSpoke === "boolean")
   );
 }
 
@@ -88,8 +103,11 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
       !Array.isArray(raw) &&
       Object.values(raw).every(isStoredParticipation)
     ) {
-      for (const [key, record] of Object.entries(raw as Record<string, ThreadParticipation>)) {
-        records.set(key, { humans: record.humans, agentSpoke: record.agentSpoke });
+      for (const [key, record] of Object.entries(raw as Record<string, StoredParticipation>)) {
+        records.set(key, {
+          humans: record.humans,
+          agentParticipates: record.agentParticipates ?? record.agentSpoke ?? false,
+        });
       }
     } else {
       log.warn(`${label} unexpected shape in ${path} — starting with no thread participation`);
@@ -99,7 +117,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   return {
     admitsBareMessage(key) {
       const heard = records.get(key);
-      return heard?.agentSpoke === true && heard.humans.length <= 1;
+      return heard?.agentParticipates === true && heard.humans.length <= 1;
     },
     merge(key, heard) {
       const previous = records.get(key);
@@ -110,12 +128,12 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
       }
       const next: ThreadParticipation = {
         humans: [...humans],
-        agentSpoke: (previous?.agentSpoke ?? false) || (heard.agentSpoke ?? false),
+        agentParticipates: (previous?.agentParticipates ?? false) || (heard.agentParticipates ?? false),
       };
       // `humans` starts from `previous` and only grows, so equal size IS set equality here.
       const unchanged =
         previous !== undefined &&
-        previous.agentSpoke === next.agentSpoke &&
+        previous.agentParticipates === next.agentParticipates &&
         previous.humans.length === next.humans.length;
       // Re-insert so insertion order is "least recently TOUCHED first" — including when nothing
       // changed. A thread in its steady state (the agent answers, the same person keeps talking) stops
@@ -139,7 +157,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         let evict: string | undefined;
         for (const [candidate, record] of records) {
           if (candidate === key) continue;
-          if (!record.agentSpoke) {
+          if (!record.agentParticipates) {
             evict = candidate;
             break;
           }

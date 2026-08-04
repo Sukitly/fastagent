@@ -120,6 +120,12 @@ export interface FeishuApiOptions {
   baseUrl: string;
   appId: string;
   appSecret: string;
+  /** Called with the platform-minted `message_id` of EVERY message this client sends — reported at
+   *  the transport because that is the only place all sends pass (sendText's chunking rides
+   *  sendMessage/replyMessage internally, so a facade wrapper would miss continuation chunks). The
+   *  channel feeds its own-thread recognition from it (feishu.ts sent ring); the transport itself
+   *  only reports the fact. */
+  onMessageSent?: (messageId: string) => void;
 }
 
 interface ApiBody {
@@ -230,7 +236,7 @@ export function chunkFeishuText(text: string, maxBytes: number = FEISHU_MAX_TEXT
 }
 
 export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
-  const { kind = "feishu", baseUrl, appId, appSecret } = opts;
+  const { kind = "feishu", baseUrl, appId, appSecret, onMessageSent } = opts;
   let cached: { token: string; expiresAt: number } | undefined;
 
   /** Fetch (or reuse) the tenant_access_token — the one call that carries no Authorization header. */
@@ -348,7 +354,9 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         "/open-apis/im/v1/messages?receive_id_type=chat_id",
         { receive_id: chatId, msg_type: msgType, content },
       );
-      return data.data?.message_id;
+      const id = data.data?.message_id;
+      if (id !== undefined) onMessageSent?.(id);
+      return id;
     },
     async replyMessage(messageId, msgType, content, opts2) {
       const data = await call<ApiBody & { data?: { message_id?: string } }>(
@@ -357,7 +365,9 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`,
         { msg_type: msgType, content, ...(opts2?.replyInThread ? { reply_in_thread: true } : {}) },
       );
-      return data.data?.message_id;
+      const id = data.data?.message_id;
+      if (id !== undefined) onMessageSent?.(id);
+      return id;
     },
     async sendText(target, text) {
       const chunks = chunkFeishuText(text);

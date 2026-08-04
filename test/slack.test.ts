@@ -451,7 +451,7 @@ describe("Slack sessions, context, and thread participation", () => {
     // `mentions` (a bare channel message is not, which is why the posture's under-count is documented
     // as accepted in §3 rather than defended against here). Nothing reads participation in this
     // posture, but the posture is configuration and this record outlives a change to it: skipping the
-    // write would leave `agentSpoke` on disk with U2 missing, and after a switch back to `context` the
+    // write would leave `agentParticipates` on disk with U2 missing, and after a switch back to `context` the
     // agent would barge into a thread it believes is two-party.
     await handler(
       signedRequest(message("30.2", { user: "U2", type: "app_mention", text: "<@UBOT> and also", thread_ts: "30.0" })),

@@ -209,8 +209,8 @@ its branded `defaultLarkRoute` compatibility alias:
 
 - **p2p chats always answer**,
 - **an explicit group @mention always answers** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
-- in an **Agent-created group thread**, a bare user continuation answers without another @mention; a message that explicitly mentions only other people is instead buffered, while `@bot + @others` still answers,
-- in a main group chat or a thread the Agent did not create, human messages without `@bot` are buffered and folded into the next explicit `@bot` turn in that same place,
+- in a **group thread the Agent takes part in** — it has answered there, or the thread was opened on one of its own messages — a bare user continuation answers without another @mention; a message that explicitly mentions only other people is instead buffered, while `@bot + @others` still answers,
+- in a main group chat or a thread the Agent does not take part in, human messages without `@bot` are buffered and folded into the next explicit `@bot` turn in that same place,
 - all non-user senders are ignored, preventing two bots from answering each other forever.
 
 Override `route(event)` to customise; it returns:
@@ -254,15 +254,19 @@ place rather than the individual ask ([design note](design/participant-model.md)
 There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
 can follow up on someone else's question; a thread is a separate place with its own.
 
-**Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
-messages and creating a topic). It answers there, which makes it a participant, and every later bare
-message in that thread reaches it. When a second person speaks in the thread, addressing becomes
-ambiguous again and the Agent goes back to requiring a mention — while still listening, so the
-discussion is folded into its next answered turn there.
+**Starting a thread.** Open a topic on one of the Agent's own messages and just talk — the Agent
+wrote the message the thread grew from, so it already takes part and answers bare messages there.
+In any other thread, mention it once inside the thread; it answers, which makes it a participant,
+and every later bare message reaches it. Either way, when a second person speaks in the thread,
+addressing becomes ambiguous again and the Agent goes back to requiring a mention — while still
+listening, so the discussion is folded into its next answered turn there.
 
-Both halves are what the Agent HEARD, not a claim about who is really in the thread: nothing is read
-back from the platform, so a thread it joined before this deployment — or before a lost
-`thread-participants.json` — takes one mention to re-enter. Observations accumulate and are never
+Both halves are what the Agent itself observed — what it heard, and what it sent (own-message
+recognition reads `sent.json`, the channel's record of its own deliveries) — never a platform
+read-back. So a thread it joined before this deployment, or before a lost
+`thread-participants.json`, takes one mention to re-enter; the same applies to a thread opened on a
+message that outlived the bounded sent record, or one the Agent pushed through the scaffold `send`
+tool (which speaks the Open API directly and is not recorded). Observations accumulate and are never
 shed, so a thread in which two people have spoken keeps requiring a mention. A consequence worth
 knowing: a thread where several people are present but only one has spoken *while the Agent was
 listening* counts as two-party.
@@ -324,6 +328,7 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
+- `sent.json` — the most recent 2,000 `message_id`s the channel itself sent; a group-thread message whose root or parent is one of them proves the thread grew from the Agent's own message, which establishes participation (bare replies answered) without a mention bootstrap,
 - `thread-participants.json` — a bounded record of what the Agent HEARD in each thread, written for every group thread the channel can see, in every posture — including ones where the summon rule cannot read it, because the posture is configuration and a record outlives a change to it: the humans it saw speak (capped at two, since the rule only asks whether a second one exists) and whether it has answered there. Nothing is read back from the platform, so losing the file costs one mention per thread to re-enter it,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.

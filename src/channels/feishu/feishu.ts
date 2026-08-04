@@ -13,7 +13,7 @@ import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
-import { createSeenRing } from "../seen.ts";
+import { createIdRing, createSeenRing } from "../seen.ts";
 import { createTaskTracker } from "../tasks.ts";
 import { ensureStateHome, removeRetiredStateFile } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
@@ -217,32 +217,22 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
-    const transport: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
     // Every message id the platform mints for OUR sends feeds the sent ring (bound below, once the
     // state home exists): a thread later opened on one of those messages is a place the agent takes
     // part in (participant model §3/§11). Telegram gets this fact embedded in its updates
     // (`reply_to_message.from`); this platform's events carry bare ids only, so the channel remembers
-    // its own voice instead of reading messages back. sendText records its FIRST chunk's id —
-    // continuation chunks are unrecorded (a thread rooted on one costs the ordinary mention bootstrap).
-    let recordSentId: (id: string | undefined) => void = () => {};
-    const api: FeishuApi = {
-      ...transport,
-      async sendMessage(chatId, msgType, content) {
-        const id = await transport.sendMessage(chatId, msgType, content);
-        recordSentId(id);
-        return id;
-      },
-      async replyMessage(messageId, msgType, content, replyOpts) {
-        const id = await transport.replyMessage(messageId, msgType, content, replyOpts);
-        recordSentId(id);
-        return id;
-      },
-      async sendText(target, msgText) {
-        const id = await transport.sendText(target, msgText);
-        recordSentId(id);
-        return id;
-      },
-    };
+    // its own voice instead of reading messages back. Reported by the TRANSPORT (the one place all
+    // sends pass — sendText's continuation chunks included); messages sent outside this client (the
+    // scaffold send tool's own fetch) are not recorded — a thread on one costs the ordinary mention
+    // bootstrap (docs/feishu.md).
+    let recordSentId: (id: string) => void = () => {};
+    const api: FeishuApi = createFeishuApi({
+      kind,
+      baseUrl,
+      appId,
+      appSecret,
+      onMessageSent: (id) => recordSentId(id),
+    });
 
     // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
     // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. A
@@ -315,12 +305,15 @@ function createFeishuRuntimeFactory(
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     // Messages this channel sent, by platform id — the input to the own-thread participation rule in
-    // acceptEvent. Bounded + durable like the delivery ring; losing an id costs one mention bootstrap
-    // in a thread opened on an old message — the same self-healing cost as a lost participation record.
-    const sent = createSeenRing(join(stateHome, "sent.json"), label);
-    recordSentId = (id) => {
-      if (id !== undefined) sent.add(id);
-    };
+    // acceptEvent. Same budget as the delivery ring (2000 ids ≈ tens of KB); evicting an old id costs
+    // that message's thread one mention bootstrap — the §3 self-healing kind. Deliberately NOT
+    // createSeenRing: same shape, different responsibility, so the write-failure diagnostic must name
+    // what actually degrades here.
+    const sent = createIdRing(join(stateHome, "sent.json"), label, {
+      cap: 2000,
+      degradedNote: "own-thread recognition is in-memory until restart — threads on these messages may need a mention",
+    });
+    recordSentId = (id) => sent.add(id);
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker();
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
@@ -491,7 +484,7 @@ function createFeishuRuntimeFactory(
     /**
      * What this delivery contributes to thread participation, or undefined when it contributes nothing.
      *
-     * ONE gate for BOTH writes (the humans observation on the way in, and the `agentSpoke` merge once
+     * ONE gate for BOTH writes (the humans observation on the way in, and the `agentParticipates` merge once
      * the turn is durable), and one definition of the synthetic speaker id — hand-written conditions in
      * two places is the drift that has already bitten this branch once. Structural facts only; see
      * thread-participants.ts for why configuration must not appear here.
@@ -547,7 +540,7 @@ function createFeishuRuntimeFactory(
       // A thread rooted on (or replying to) one of the AGENT'S OWN messages is a place the agent
       // takes part in — it wrote the entry the thread grew from — so the participant axiom's first
       // condition holds before any turn ever ran here (§3). Known from the channel's own sends
-      // (sent.json), never from a platform read-back. Merging `agentSpoke` rather than
+      // (sent.json), never from a platform read-back. Merging `agentParticipates` rather than
       // short-circuiting keeps the summon rule in ONE place: a second human heard in the thread
       // still restores the mention requirement.
       if (
@@ -555,7 +548,7 @@ function createFeishuRuntimeFactory(
         m.thread_id !== undefined &&
         ((m.root_id !== undefined && sent.has(m.root_id)) || (m.parent_id !== undefined && sent.has(m.parent_id)))
       ) {
-        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentSpoke: true });
+        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentParticipates: true });
       }
 
       if (
@@ -675,7 +668,7 @@ function createFeishuRuntimeFactory(
       // is keyed by THREAD while the memory it stands in for is keyed by SESSION, and those agree only
       // when the session is derived from the place. A route supplying its own (the scaffold's
       // `session: user:<open_id>` example) can put two people's turns in one thread into different
-      // sessions — recording `agentSpoke` from one of them would tell the summon rule the agent took
+      // sessions — recording `agentParticipates` from one of them would tell the summon rule the agent took
       // part in a conversation it cannot remember. So the flag records "the agent answered into THIS
       // THREAD'S session". Such a thread keeps a bystander record and needs the ordinary mention to
       // bootstrap if the route is later dropped. `group` matches the observation above so the record is
@@ -691,7 +684,7 @@ function createFeishuRuntimeFactory(
       if (heard && replyInThread === true && sameTarget && r.session === undefined) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
         // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
-        threadParticipants.merge(heard.key, { agentSpoke: true, humans: [heard.speaker] });
+        threadParticipants.merge(heard.key, { agentParticipates: true, humans: [heard.speaker] });
       }
     };
 

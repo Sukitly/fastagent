@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 /** The store's state IS the file, so assertions read it rather than a getter no channel calls. */
-function stored(path: string): Record<string, { humans: string[]; agentSpoke: boolean }> {
+function stored(path: string): Record<string, { humans: string[]; agentParticipates: boolean }> {
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
 }
 
@@ -33,12 +33,12 @@ describe("thread participation (shared)", () => {
     store.merge("c:listening", { humans: ["u1"] });
     expect(store.admitsBareMessage("c:listening")).toBe(false); // a bystander is not a participant
 
-    store.merge("c:two-party", { humans: ["u1"], agentSpoke: true });
+    store.merge("c:two-party", { humans: ["u1"], agentParticipates: true });
     expect(store.admitsBareMessage("c:two-party")).toBe(true);
 
     // Zero humans heard is admitted on purpose: ambiguity comes from a SECOND person talking, not from
     // the absence of a first.
-    store.merge("c:no-humans", { agentSpoke: true });
+    store.merge("c:no-humans", { agentParticipates: true });
     expect(store.admitsBareMessage("c:no-humans")).toBe(true);
 
     // A second speaker restores the mention requirement, and nothing sheds it afterwards.
@@ -53,10 +53,10 @@ describe("thread participation (shared)", () => {
     const first = createThreadParticipants(path, "[lark]");
 
     first.merge("oc_1:omt_a", { humans: ["ou_alex"] });
-    first.merge("oc_1:omt_a", { agentSpoke: true });
+    first.merge("oc_1:omt_a", { agentParticipates: true });
     first.merge("oc_1:omt_a", { humans: ["ou_alex"] }); // already heard — no change
 
-    expect(stored(path)).toEqual({ "oc_1:omt_a": { humans: ["ou_alex"], agentSpoke: true } });
+    expect(stored(path)).toEqual({ "oc_1:omt_a": { humans: ["ou_alex"], agentParticipates: true } });
 
     // A fresh process reads it back and the rule still fires — and only for that exact place.
     const restarted = createThreadParticipants(path, "[lark]");
@@ -69,7 +69,7 @@ describe("thread participation (shared)", () => {
     const path = join(stateDir(), "p.json");
     const store = createThreadParticipants(path, "[feishu]");
 
-    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentParticipates: true });
     expect(stored(path)["oc_1:omt_a"]?.humans).toEqual(["ou_alex"]);
 
     store.merge("oc_1:omt_a", { humans: ["ou_bob"] });
@@ -79,13 +79,13 @@ describe("thread participation (shared)", () => {
   it("never sheds: an observation cannot be cleared, only added to", () => {
     const path = join(stateDir(), "p.json");
     const store = createThreadParticipants(path, "[feishu]");
-    store.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], agentParticipates: true });
 
     // The absence of a signal is not evidence that someone left, and under-counting is the error
     // direction that makes the agent speak into a crowd — so nothing here can subtract.
     store.merge("oc_1:omt_a", { humans: ["ou_alex"] });
 
-    expect(stored(path)["oc_1:omt_a"]).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true });
+    expect(stored(path)["oc_1:omt_a"]).toEqual({ humans: ["ou_alex", "ou_bob"], agentParticipates: true });
   });
 
   it("stops accumulating humans once a second is known — the rule never asks for more", () => {
@@ -100,27 +100,27 @@ describe("thread participation (shared)", () => {
     const path = join(stateDir(), "p.json");
     const store = createThreadParticipants(path, "[feishu]");
     // Oldest of all, but the agent takes part in it — this is the record that costs a mention to lose.
-    store.merge("c:served", { humans: ["u1"], agentSpoke: true });
+    store.merge("c:served", { humans: ["u1"], agentParticipates: true });
     // Threads it merely listens to are written on the same path and vastly outnumber the rest.
     for (let i = 0; i < 1000; i++) store.merge(`c:bystander_${i}`, { humans: [`u_${i}`] });
 
-    expect(stored(path)["c:served"]).toEqual({ humans: ["u1"], agentSpoke: true });
+    expect(stored(path)["c:served"]).toEqual({ humans: ["u1"], agentParticipates: true });
     expect(stored(path)["c:bystander_0"]).toBeUndefined();
   });
 
   it("a thread in steady state keeps its place — repeat traffic refreshes recency without writing", () => {
     const path = join(stateDir(), "p.json");
     const store = createThreadParticipants(path, "[feishu]");
-    store.merge("c:served", { humans: ["u1"], agentSpoke: true });
+    store.merge("c:served", { humans: ["u1"], agentParticipates: true });
     // Fill with OTHER participant threads, so bystander-first eviction cannot save it.
-    for (let i = 0; i < 999; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentSpoke: true });
+    for (let i = 0; i < 999; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentParticipates: true });
 
     // The served thread carries no NEW information (same human, already answered), which is exactly
     // why it would otherwise sit at the head of the eviction order while being actively served.
-    store.merge("c:served", { humans: ["u1"], agentSpoke: true });
-    store.merge("c:newest", { humans: ["u_new"], agentSpoke: true });
+    store.merge("c:served", { humans: ["u1"], agentParticipates: true });
+    store.merge("c:newest", { humans: ["u_new"], agentParticipates: true });
 
-    expect(stored(path)["c:served"]).toEqual({ humans: ["u1"], agentSpoke: true });
+    expect(stored(path)["c:served"]).toEqual({ humans: ["u1"], agentParticipates: true });
     expect(stored(path)["c:other_0"]).toBeUndefined();
   });
 
@@ -129,14 +129,14 @@ describe("thread participation (shared)", () => {
     const store = createThreadParticipants(path, "[feishu]");
     // A full map of PARTICIPANT threads: bystander-first eviction has nothing cheap to shed, and the
     // new thread is itself the only bystander — the shape the channels actually produce.
-    for (let i = 0; i < 1000; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentSpoke: true });
+    for (let i = 0; i < 1000; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentParticipates: true });
 
     store.merge("c:new", { humans: ["asker"] }); // heard, not yet answered
-    store.merge("c:new", { agentSpoke: true }); // the answer, a separate merge
+    store.merge("c:new", { agentParticipates: true }); // the answer, a separate merge
 
-    // Evicting the key under the pen would leave { humans: [], agentSpoke: true }, which admits bare
+    // Evicting the key under the pen would leave { humans: [], agentParticipates: true }, which admits bare
     // messages from anyone, forever — the under-count the model exists to prevent.
-    expect(stored(path)["c:new"]).toEqual({ humans: ["asker"], agentSpoke: true });
+    expect(stored(path)["c:new"]).toEqual({ humans: ["asker"], agentParticipates: true });
     expect(store.admitsBareMessage("c:new")).toBe(true);
     store.merge("c:new", { humans: ["second"] });
     expect(store.admitsBareMessage("c:new")).toBe(false);
@@ -149,7 +149,7 @@ describe("thread participation (shared)", () => {
     for (let i = 0; i <= 1000; i++) store.merge(`oc_1:omt_${i}`, { humans: [`ou_${i}`] });
 
     expect(stored(path)["oc_1:omt_0"]).toBeUndefined();
-    expect(stored(path)["oc_1:omt_1000"]).toEqual({ humans: ["ou_1000"], agentSpoke: false });
+    expect(stored(path)["oc_1:omt_1000"]).toEqual({ humans: ["ou_1000"], agentParticipates: false });
   });
 
   it("persists only NEW observations — a repeat message writes nothing", () => {
@@ -179,15 +179,26 @@ describe("thread participation (shared)", () => {
     const store = createThreadParticipants(path, "[feishu]");
     // Two messages whose sender carries no usable id: they may be one person or two, and the model's
     // asymmetry says to assume the ambiguous case. Two speakers means the thread asks to be named.
-    store.merge("c:t", { humans: ["unidentified:om_1"], agentSpoke: true });
+    store.merge("c:t", { humans: ["unidentified:om_1"], agentParticipates: true });
     store.merge("c:t", { humans: ["unidentified:om_2"] });
 
     expect(stored(path)["c:t"]?.humans).toHaveLength(2);
   });
 
+  it("reads the legacy agentSpoke shape as participation, and migrates it on the next write", () => {
+    const path = join(stateDir(), "p.json");
+    // A record written before the participation rename: answering was then the only source, so the
+    // legacy key carries the same fact under the old name — it must keep admitting bare messages.
+    writeFileSync(path, JSON.stringify({ "oc_1:omt_old": { humans: ["ou_alex"], agentSpoke: true } }));
+    const store = createThreadParticipants(path, "[feishu]");
+    expect(store.admitsBareMessage("oc_1:omt_old")).toBe(true);
+    store.merge("oc_1:omt_new", { humans: ["ou_bob"] }); // any persisting write rewrites the whole map…
+    expect(stored(path)["oc_1:omt_old"]).toEqual({ humans: ["ou_alex"], agentParticipates: true }); // …migrated
+  });
+
   it("warns and starts empty when valid JSON has the wrong shape", () => {
     const path = join(stateDir(), "p.json");
-    writeFileSync(path, JSON.stringify({ "oc_1:omt_a": { humans: "nope", agentSpoke: true } }));
+    writeFileSync(path, JSON.stringify({ "oc_1:omt_a": { humans: "nope", agentParticipates: true } }));
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
 
@@ -207,7 +218,7 @@ describe("thread participation (shared)", () => {
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
 
-    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentParticipates: true });
 
     // Nothing reached disk, but this process still answers correctly — the file is a cache.
     expect(store.admitsBareMessage("oc_1:omt_a")).toBe(true);

@@ -576,7 +576,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         // and a stranger's first bare reply would read as a two-party exchange. `event.user` is
         // guaranteed here (isSlackHumanMessage). Idempotent when the ask was already in the thread.
         threadParticipants.merge(threadKey(teamId, event.channel, threadTs), {
-          agentSpoke: true,
+          agentParticipates: true,
           humans: [event.user],
         });
       }

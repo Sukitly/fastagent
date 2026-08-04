@@ -1709,10 +1709,10 @@ describe("turn flow", () => {
 
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
-      { agentSpoke: boolean; humans: string[] }
+      { agentParticipates: boolean; humans: string[] }
     >;
     const heard = participants["feishu:oc_1:omt_anon"];
-    expect(heard?.agentSpoke).toBe(true);
+    expect(heard?.agentParticipates).toBe(true);
     expect(heard?.humans).toHaveLength(2); // per MESSAGE, not per thread
     expect(new Set(heard?.humans).size).toBe(2);
 
@@ -1733,14 +1733,14 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.scope.session).toBe("user:ou_alice");
 
-    // `agentSpoke` would claim the thread's own session remembers this turn. It does not — the answer
+    // `agentParticipates` would claim the thread's own session remembers this turn. It does not — the answer
     // went to a per-user session — so the summon rule must not see it here. The human is still
     // recorded: what was heard is heard.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
-      { agentSpoke: boolean; humans: string[] }
+      { agentParticipates: boolean; humans: string[] }
     >;
-    expect(participants["feishu:oc_1:omt_rs"]).toEqual({ agentSpoke: false, humans: ["ou_alice"] });
+    expect(participants["feishu:oc_1:omt_rs"]).toEqual({ agentParticipates: false, humans: ["ou_alice"] });
   });
 
   it("a custom route still records a COMPLETE participation record, since a deployment can drop the route", async () => {
@@ -1758,12 +1758,12 @@ describe("turn flow", () => {
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
     // Both halves are recorded regardless. Nothing reads this record while the route is installed, but
     // a route is configuration and the record outlives a change to it — gating on it would leave
-    // `agentSpoke` on disk with the intervening humans missing (see thread-participants.ts).
+    // `agentParticipates` on disk with the intervening humans missing (see thread-participants.ts).
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
-      { agentSpoke: boolean; humans: string[] }
+      { agentParticipates: boolean; humans: string[] }
     >;
-    expect(participants["feishu:oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: ["ou_alice"] });
+    expect(participants["feishu:oc_1:omt_custom"]).toEqual({ agentParticipates: true, humans: ["ou_alice"] });
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {

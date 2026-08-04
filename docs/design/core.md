@@ -478,9 +478,10 @@ a stable hand-authored surface. What is platform-different:
   degrades to a marker in the prompt rather than failing the turn.
 - **Thread participation is what the channel HEARD, not a claim about the thread's membership.** Two
   decisions:
-  - *Predicate.* The agent speaks unprompted in a thread only where it has answered before and has
-    heard at most one human. Both facts come from the messages the channel observes; nothing is read
-    back from the platform. That is a deliberate weakening: a thread joined before this deployment (or
+  - *Predicate.* The agent speaks unprompted in a thread only where it takes part — it has answered
+    there, or the thread grew from a message it wrote (recognised against its own sent-message ring,
+    `sent.json`) — and has heard at most one human. Both facts come from what the channel observes
+    (its own sends included); nothing is read back from the platform. That is a deliberate weakening: a thread joined before this deployment (or
     before a lost state file) reads as unheard and takes one mention to re-enter — the same bootstrap
     every thread starts with, self-healing in one message and visible to the user. The alternative was
     built and removed: a pre-ACK `listThreadSenders` bought a membership claim its own 50-message page
@@ -488,7 +489,8 @@ a stable hand-authored surface. What is platform-different:
     completeness flag, and a duplicate-delivery join — where nearly every defect in the feature lived.
     See `src/channels/thread-participants.ts` and design/participant-model.md §3.
   - *Storage.* `thread-participants.json` records, per thread, the humans heard (capped at two — the
-    rule only asks whether a second one exists) and whether this agent has spoken. Observations only
+    rule only asks whether a second one exists) and whether this agent takes part
+    (`agentParticipates`: answered there, or authored the message the thread grew from). Observations only
     ever accumulate: no platform emits an event when someone stops taking part, and the error
     directions are asymmetric — over-counting makes the agent ask to be named, under-counting makes it
     speak into a crowd. Because nothing is fetched, acceptance stays synchronous inside the ACK
