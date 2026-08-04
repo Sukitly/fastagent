@@ -188,11 +188,20 @@ export function mountSessionControl(
  */
 export function mountAgentcore(
   routes: Routes,
-  options: { agent: Agent; stateRoot: string; schedules: LoadedSchedule[]; onStateReady?: () => void },
+  options: {
+    agent: Agent;
+    stateRoot: string;
+    schedules: LoadedSchedule[];
+    onStateReady?: () => void;
+    /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
+     *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
+     *  `routes` is the dispatch target — for wirings whose state root is already authoritative. */
+    lazyChannels?: () => Promise<Routes>;
+  },
 ): Routes {
-  const { agent, stateRoot, schedules, onStateReady } = options;
+  const { agent, stateRoot, schedules, onStateReady, lazyChannels } = options;
   const mounted = agentcoreRoutes({
-    routes,
+    routes: lazyChannels ?? routes,
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,

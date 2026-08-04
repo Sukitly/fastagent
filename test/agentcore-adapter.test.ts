@@ -29,7 +29,7 @@ function scriptedAgent(events: AgentEvent[] = [{ type: "text", delta: "hi" }, { 
 const SECRET = "ingress-s3cret";
 
 interface AdapterOverrides {
-  routes?: Routes;
+  routes?: Routes | (() => Promise<Routes> | Routes);
   agent?: Agent;
   isBusy?: () => boolean;
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
@@ -79,6 +79,150 @@ const postEnvelope = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Resp
 /** Post as ANY IAM principal holding InvokeAgentRuntime (no shared secret). */
 const postUntrusted = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Response> | Response =>
   post(routes, JSON.stringify(envelope));
+
+describe("agentcore adapter: lazy channel construction", () => {
+  const health: Routes = { "GET /health": () => new Response("ok\n") };
+  const stateUrls = { getUrl: "https://s3/get", putUrl: "https://s3/put" };
+
+  it("constructs the channels AFTER the state restore — once — and reuses them across envelopes", async () => {
+    const order: string[] = [];
+    const sync = fakeStateSync({
+      ready: async () => {
+        order.push("restore");
+      },
+    });
+    let built = 0;
+    const routes = adapter({
+      stateSync: sync,
+      routes: () => {
+        order.push("construct");
+        built += 1;
+        return health;
+      },
+    });
+    expect(built).toBe(0); // never at boot — the mount is pre-restore there
+    const env: AgentcoreEnvelope = { kind: "webhook", method: "GET", path: "/health", state: stateUrls };
+    const first = await postEnvelope(routes, env);
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as WebhookReply).status).toBe(200);
+    expect(order).toEqual(["restore", "construct"]); // construction strictly after ready()
+    await postEnvelope(routes, env);
+    expect(built).toBe(1); // memoized — the same resident channels a direct host keeps
+  });
+
+  it("a failed construction 503s EVERY envelope with the same message — one activation per process", async () => {
+    // Construction is an ACTIVATION with side effects (loadChannels builds every healthy channel —
+    // replaying its durable turn intent — before reporting another module's failure) and has no
+    // cleanup contract, so the rejection is CACHED: a retry per envelope would re-run the healthy
+    // channels' recovery concurrently. The factory must run exactly once, however many envelopes
+    // (and 3s-apart deploy probes) follow; a fresh session is the retry boundary.
+    let attempts = 0;
+    const routes = adapter({
+      routes: () => {
+        attempts += 1;
+        throw new Error("FEISHU_APP_SECRET is not set");
+      },
+    });
+    const env: AgentcoreEnvelope = { kind: "webhook", method: "GET", path: "/health" };
+    const failed = await postEnvelope(routes, env);
+    expect(failed.status).toBe(503);
+    expect(await failed.text()).toContain("FEISHU_APP_SECRET"); // named, never a silently-empty channel
+    const second = await postEnvelope(routes, env);
+    expect(second.status).toBe(503);
+    expect(await second.text()).toContain("FEISHU_APP_SECRET"); // visible every time, not one 503 then silence
+    expect(attempts).toBe(1); // the healthy channels' side effects ran once, not per envelope
+  });
+
+  it("a probe reports construction structurally over transport-200 (diagnostics must survive the forwarder)", async () => {
+    const ok = adapter({ routes: () => health });
+    const okRes = await postEnvelope(ok, { kind: "probe" });
+    expect(okRes.status).toBe(200);
+    expect(await okRes.json()).toEqual({ ok: true });
+
+    // The forwarder rewrites any non-200 transport into an opaque 502, so the failure verdict MUST
+    // ride a transport-200 body — that is the whole reason the probe kind exists.
+    const broken = adapter({
+      routes: () => {
+        throw new Error("FEISHU_APP_SECRET is not set");
+      },
+    });
+    const res = await postEnvelope(broken, { kind: "probe" });
+    expect(res.status).toBe(200);
+    const verdict = (await res.json()) as { ok: boolean; error?: string };
+    expect(verdict.ok).toBe(false);
+    expect(verdict.error).toContain("FEISHU_APP_SECRET");
+  });
+
+  it("a probe reports a FAILED RESTORE structurally too, and an unauthenticated probe is refused", async () => {
+    const sync = fakeStateSync({
+      ready: async () => {
+        throw new Error("snapshot GET failed: 403");
+      },
+    });
+    const routes = adapter({ stateSync: sync, routes: () => health });
+    const res = await postEnvelope(routes, {
+      kind: "probe",
+      state: { getUrl: "https://s3/g", putUrl: "https://s3/p" },
+    });
+    expect(res.status).toBe(200); // structured — not the plain 503 other kinds get
+    const verdict = (await res.json()) as { ok: boolean; error?: string };
+    expect(verdict.ok).toBe(false);
+    expect(verdict.error).toContain("state restore failed");
+
+    expect((await postUntrusted(adapter({ routes: () => health }), { kind: "probe" })).status).toBe(403);
+  });
+
+  it("a schedule fire initializes the channels first, and a broken channel does NOT silence the clock", async () => {
+    const order: string[] = [];
+    const fire = vi.fn(async (): Promise<ScheduleFireOutcome> => {
+      order.push("fire");
+      return { fired: true, ms: 5 };
+    });
+    const routes = adapter({
+      fire,
+      routes: () => {
+        order.push("construct");
+        return health;
+      },
+    });
+    const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", slot: "2026-07-07T10:00:00Z" };
+    expect((await postEnvelope(routes, env)).status).toBe(200);
+    expect(order).toEqual(["construct", "fire"]); // cold start woken by cron still replays turn intent
+
+    // Construction failure: logged, but the fire still runs — cron does not consume channels, and an
+    // unrelated channel misconfiguration must not turn one fault into two.
+    const fire2 = vi.fn(async (): Promise<ScheduleFireOutcome> => ({ fired: true, ms: 5 }));
+    const broken = adapter({
+      fire: fire2,
+      routes: () => {
+        throw new Error("channels/lark.ts is broken");
+      },
+    });
+    expect((await postEnvelope(broken, env)).status).toBe(200);
+    expect(fire2).toHaveBeenCalledTimes(1);
+  });
+
+  it("a wake-poke resolves construction too (the deploy probe; alarm wakes replay checkpointed turns)", async () => {
+    let built = 0;
+    const routes = adapter({
+      routes: () => {
+        built += 1;
+        return {};
+      },
+    });
+    expect((await postEnvelope(routes, { kind: "wake-poke" })).status).toBe(200);
+    expect(built).toBe(1);
+
+    const broken = adapter({
+      routes: () => {
+        throw new Error("channels/lark.ts is broken");
+      },
+    });
+    const res = await postEnvelope(broken, { kind: "wake-poke" });
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("channels/lark.ts is broken");
+  });
+});
 
 describe("agentcore adapter: /ping", () => {
   it("reports Healthy when idle and HealthyBusy while background work is in flight", async () => {

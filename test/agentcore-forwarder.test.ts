@@ -181,6 +181,44 @@ const webhookEvent = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe("agentcore forwarder: the reserved probe path", () => {
+  const probeEvent = (auth: string) => webhookEvent({ rawPath: "/__fastagent/probe", body: JSON.stringify({ auth }) });
+
+  it("answers on a schedule-only URL (WEBHOOKS_ENABLED unset) and passes the verdict body through VERBATIM", async () => {
+    // Both halves of the probe's reason to exist: it must work where ordinary public traffic 404s,
+    // and the runtime's transport-200 structured verdict — including the failure text — must reach
+    // the deploy driver unrewritten (the webhook relay would fold it into an opaque 502).
+    const f = loadForwarder({
+      env: { WEBHOOKS_ENABLED: "" },
+      containerReply: (envelope) =>
+        envelope.kind === "probe"
+          ? { body: { ok: false, error: "channel construction failed: FEISHU_APP_SECRET is not set" } }
+          : { body: {} },
+    });
+    const res = await f.handler(probeEvent("ingress-s3cret"));
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String(res.body))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("FEISHU_APP_SECRET"),
+    });
+    expect(f.envelopes).toHaveLength(1);
+    expect(f.envelopes[0]).toMatchObject({ kind: "probe", auth: "ingress-s3cret" }); // the trusted pipeline, not a webhook
+  });
+
+  it("refuses a probe without the ingress secret — the path must not become a public wake lever", async () => {
+    const f = loadForwarder();
+    const res = await f.handler(probeEvent("wrong"));
+    expect(res.statusCode).toBe(403);
+    expect(f.envelopes).toHaveLength(0); // rejected BEFORE waking AgentCore (cost/DoS)
+  });
+
+  it("a non-200 transport (old image without the probe kind, a runtime fault) is a 502, never a false verdict", async () => {
+    const f = loadForwarder({ containerReply: () => ({ statusCode: 424, body: "RuntimeClientError" }) });
+    const res = await f.handler(probeEvent("ingress-s3cret"));
+    expect(res.statusCode).toBe(502);
+  });
+});
+
 describe("agentcore forwarder (executed)", () => {
   it("a schedule-only URL rejects arbitrary HTTP before waking AgentCore", async () => {
     const f = loadForwarder({ env: { WEBHOOKS_ENABLED: "" } });
