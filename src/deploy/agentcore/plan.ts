@@ -29,6 +29,7 @@
  */
 import { createHash } from "node:crypto";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
@@ -70,6 +71,28 @@ export interface AgentcorePlan {
  *  a fast LOCAL disk only: the platform wipes it on every runtime version update (= every deploy).
  *  Durability across deploys comes from the S3 snapshot (channels/agentcore-state.ts). */
 export const MOUNT = "/mnt/state";
+
+/**
+ * FASTAGENT_SECRETS_DIR — the seeded-then-ROTATED auth.json, deliberately INSIDE the state root
+ * rather than beside it.
+ *
+ * Every other host mounts a real volume and puts the two machinery dirs side by side (`/data/.state`
+ * + `/data/.secrets`), because there the persistence boundary is the MOUNT POINT: anything under it
+ * survives. AgentCore has no volume. Its persistence boundary is `packStateRoot(stateRoot)` — the one
+ * directory tree the S3 snapshot copies out and back (channels/agentcore-state.ts) — while {@link MOUNT}
+ * itself is wiped on every runtime version update, i.e. on every deploy.
+ *
+ * So the sibling layout would put credentials INSIDE the mount but OUTSIDE the snapshot: nothing
+ * copies them out, the platform wipes them, and the next microVM re-seeds the deploy-time copy. With
+ * single-use OAuth refresh tokens that is a slow-motion outage — the box works until the seeded token
+ * is rotated away, then loses model access with only a redeploy to restore it.
+ *
+ * Nesting is what makes agentcore-state.ts's stated contract ("restores VERBATIM — including
+ * auth.json") reachable at all; `packStateRoot` walks the whole tree, so no snapshot code knows about
+ * this. Tests assert the containment, not just the two names — the sibling spelling looks tidier and
+ * reintroduces the outage silently.
+ */
+export const SECRETS_DIR = `${MOUNT}/${SECRETS_DIRNAME}`;
 
 /**
  * How long an idle session keeps its microVM. Memory is billed per second across the WHOLE session
@@ -507,6 +530,10 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
     `        FASTAGENT_STATE_DIR: ${MOUNT}`,
+    // Inside the state root on purpose — the snapshot is this host's only durable store, and it copies
+    // exactly one tree. See {@link SECRETS_DIR}: the sibling layout every other host uses would leave a
+    // rotated OAuth credential outside it, i.e. discarded with the microVM.
+    `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
   ];
   // The auth seed is chunked (env values max 2048 chars — see AUTH_SEED_CHUNK_SIZE): N parameters,
   // each riding its own env var; `start` reassembles them (collectAuthSeed). Empty defaults = unused.
@@ -1048,6 +1075,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# bucket and the agent keeps its sessions, channel state and pending wake-ups across deploys;`,
     `# delete it and the agent starts blank. (A persistent MOUNT would need EFS + VPC mode + a NAT`,
     `# gateway for model/channel egress — see the template comment.)`,
+    `# CREDENTIALS RIDE THAT SNAPSHOT TOO: FASTAGENT_SECRETS_DIR is ${SECRETS_DIR}, inside the state`,
+    `# root, so an OAuth auth.json ROTATED on the box persists (a refresh token is single-use — without`,
+    `# this the next microVM would re-seed the deploy-time copy and eventually fail to authenticate).`,
+    `# The bucket is therefore credential storage: it is created with public access blocked and`,
+    `# versioning on, and deleting it costs model access until the next deploy re-seeds.`,
   );
 
   return { artifacts, runbook, untranslatableSchedules: untranslatable };

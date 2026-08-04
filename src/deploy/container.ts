@@ -171,8 +171,10 @@ CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]
 /** Patterns are RECURSIVE (`**​/`) on purpose — dockerignore patterns are root-anchored (unlike
  *  .gitignore), and a baked workspace can hold nested projects: a bare `node_modules` would upload
  *  their build-machine deps (macOS binaries!) and a bare `.env` would bake their secrets into the
- *  image. `.secrets`/`.state` are fastagent machinery — secrets travel through the host's secret
- *  store, state lives on the volume; neither may ever enter an image. `.cache` is generic hygiene
+ *  image. `.secrets`/`.state` are fastagent machinery — credential contents travel through the host's
+ *  secret store and state lives on the volume, so neither may enter an image. The two tracked secrets
+ *  scaffolds (`.env.example` + `.gitignore`) are the narrow exception: they carry no values and must stay
+ *  beside the shipped `.git`, or the image starts with tracked deletions. `.cache` is generic hygiene
  *  (a baked project's own build cache), not a fastagent directory.
  *  `.git` is deliberately SHIPPED: the deployed agent's write-back (pull/commit/push) needs the
  *  repo's history+remote — the WYSIWYG bake's freshness/durability loop runs through git, driven by
@@ -196,12 +198,13 @@ const dockerignore = (input: ContainerInput): string =>
 
 const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).
 **/node_modules
-**/${SECRETS_DIRNAME}
+**/${SECRETS_DIRNAME}/**
 **/${STATE_DIRNAME}
 **/.cache
 **/.env
 **/.env.*
 !**/.env.example
+!**/${SECRETS_DIRNAME}/.gitignore
 **/*.log
 # .git is deliberately shipped: the agent can pull to freshen content and push its work back
 # (the generated image installs the git binary when this directory ships a .git; otherwise

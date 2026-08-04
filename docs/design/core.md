@@ -46,7 +46,7 @@ There is ONE agent shape and ONE marker. The shape:
 ├── schedules/
 ├── fastagent.config.mjs    # THE marker
 ├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .state, a stray .env
-├── .secrets/               # secrets: .env + auth.json, behind their own .gitignore (only .env.example travels)
+├── .secrets/               # secrets: .env + auth.json; only tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
@@ -109,9 +109,9 @@ there is an unfinished agent or something unrelated, and landing persona.md besi
 mix), while `--agent-dir .` is a directory being adopted — content is expected, so every existing file is
 KEPT (reported, never overwritten, never verified).
 
-The two machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret
-store (never an image), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR`
-point both at it in a container).
+The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
+store (never an image; only the tracked `.env.example` + `.gitignore` scaffolds travel), `.state/` through
+a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a container).
 
 **Git is the author's, not fastagent's — with one stated exception.** `init` scaffolds two ignore files:
 the agent's own (`node_modules`, `.state`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the
@@ -609,7 +609,20 @@ JSON object on the first ingress envelope and pushes a coalesced snapshot on the
 mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping the container AWS-SDK-free
 and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
 the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
-is first boot. `auth.json` restores absent-only — the deploy seeds a fresher copy than the snapshot's.
+is first boot.
+
+**Credentials ride that snapshot, so the secrets dir is INSIDE the state root** (`/mnt/state/.secrets`,
+`deploy/agentcore/plan.ts` `SECRETS_DIR`) — the one place AgentCore departs from the sibling layout the
+volume-backed hosts use (`/data/.state` + `/data/.secrets`). There the persistence boundary is the mount
+point; here the mount is wiped every deploy and the boundary is `packStateRoot(stateRoot)`, which copies
+a single tree. A sibling secrets dir would therefore sit inside the mount but outside the snapshot. The
+ordering is what makes this work: boot seeds `auth.json` absent-only from `FASTAGENT_AUTH_SEED`, the
+first envelope's restore overwrites it with the snapshot's copy, and only then can a model call happen
+(the auth store re-reads the file per request, so no restart is needed). The snapshot's copy must win —
+an OAuth refresh token is single-use, so the seed is the DEPLOY-TIME copy and the box's rotated one is
+the only valid credential; a deployment that keeps re-seeding loses model access once that token is
+spent. The bucket is consequently credential storage (public access blocked + versioning, converged on
+every deploy).
 Only the INGRESS session is snapshotted: a direct-invoke session runs in its own storage, which the
 platform wipes on a version update, so cross-deploy memory is a property of the ingress path and the
 docs say so. `--run` sends a `checkpoint` envelope before `stop-runtime-session` — the stop cuts an
