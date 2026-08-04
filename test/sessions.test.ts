@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { activePathEntries } from "../src/engines/pi/sessions.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -336,5 +337,35 @@ describe("jsonlSessionStore (malicious id)", () => {
       ]).invoke({ session: evil }, { text: "continue" }),
     );
     expect(JSON.stringify(turn2)).toContain("hi"); // turn 1 is still present
+  });
+});
+
+describe("activePathEntries", () => {
+  /** The two calls the walk makes — enough to stand in for a Session here. */
+  const fakeSession = (entries: { id: string; parentId?: string }[], leafId: string | null) =>
+    ({
+      getEntries: async () => entries,
+      getLeafId: async () => leafId,
+    }) as unknown as Parameters<typeof activePathEntries>[0];
+
+  it("walks the leaf's chain and leaves the abandoned branch behind", async () => {
+    const entries = [{ id: "a" }, { id: "b", parentId: "a" }, { id: "c", parentId: "a" }];
+    expect((await activePathEntries(fakeSession(entries, "c"))).map((e) => e.id)).toEqual(["a", "c"]);
+  });
+
+  it("a null leaf is the ROOT, not the whole journal", async () => {
+    const entries = [{ id: "a" }, { id: "b", parentId: "a" }, { id: "c", parentId: "a" }];
+    expect(await activePathEntries(fakeSession(entries, null))).toEqual([]);
+  });
+
+  it("a chain that is not intact throws instead of returning a path that reads like a short session", async () => {
+    const orphanParent = [{ id: "leaf", parentId: "pruned" }];
+    await expect(activePathEntries(fakeSession(orphanParent, "leaf"))).rejects.toThrow(/pruned/);
+    await expect(activePathEntries(fakeSession(orphanParent, "gone"))).rejects.toThrow(/gone/);
+    const cycle = [
+      { id: "x", parentId: "y" },
+      { id: "y", parentId: "x" },
+    ];
+    await expect(activePathEntries(fakeSession(cycle, "x"))).rejects.toThrow(/cycles/);
   });
 });
