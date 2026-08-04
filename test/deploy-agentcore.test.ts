@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AgentcorePlanInput,
   MOUNT,
+  SECRETS_DIR,
   type ScheduleFact,
   TEMPLATE_FILE,
   GENERATED_TEMPLATE_MARKER,
@@ -129,10 +130,28 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain(`SessionStorage: { MountPath: ${MOUNT} }`);
     expect(template).toContain('FASTAGENT_AGENTCORE: "1"');
     expect(template).toContain('PORT: "8080"');
+    expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}`);
+    expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`);
     expect(template).not.toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(plan.untranslatableSchedules).toEqual([]);
     expect(plan.runbook.join("\n")).not.toContain("stop-runtime-session"); // no forwarder → no ingress session
+  });
+
+  it("puts the secrets dir INSIDE the state root — the snapshot is this host's only durable store", () => {
+    // The regression this exists for looks like a tidy-up: every volume-backed host spells the two
+    // machinery dirs as siblings (`/data/.state` + `/data/.secrets`), and copying that here reads as
+    // consistency. It is not — AgentCore has no volume. Durability is packStateRoot(stateRoot), which
+    // copies ONE tree, so a sibling secrets dir sits inside the wiped mount and outside the snapshot:
+    // the rotated OAuth credential is discarded with the microVM and the box eventually cannot
+    // authenticate. Assert the CONTAINMENT, not the two spellings — only containment fails on that.
+    expect(SECRETS_DIR.startsWith(`${MOUNT}/`)).toBe(true);
+
+    const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
+    const stateDir = /FASTAGENT_STATE_DIR: (\S+)/.exec(template)?.[1];
+    const secretsDir = /FASTAGENT_SECRETS_DIR: (\S+)/.exec(template)?.[1];
+    expect(stateDir).toBe(MOUNT);
+    expect(secretsDir?.startsWith(`${stateDir}/`)).toBe(true);
   });
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
