@@ -735,6 +735,139 @@ describe("turn flow", () => {
     expect(fx.calls("/cardkit/v1/cards/c2", "PUT")).not.toHaveLength(0);
   });
 
+  it("a thread opened ON the agent's own reply admits bare messages — the agent wrote the root", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+
+    // Summon at the group's MAIN timeline: the agent answers with a reply-quoted card in the room.
+    // No thread exists yet, so no participation record is written anywhere — the answer's own
+    // message id (om_bot_1, the preview mount) is all the agent will ever know about this exchange.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_main_ask",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 review this" }),
+          mentions: BOT_MENTION,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+
+    // A human opens a thread on that answer and speaks bare: the root is the agent's own message,
+    // so the agent takes part in the new place (participant axiom §3) — one human, answer it.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_thread_followup",
+          chatType: "group",
+          threadId: "omt_on_own_reply",
+          rootId: "om_bot_1",
+          text: "review 以下 #120",
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.scope.session).toBe("feishu:oc_1:omt_on_own_reply"); // the thread is its own place
+    expect(calls[1]?.prompt.text).toContain("review 以下 #120");
+    // Answered inside the thread, and nothing was asked of the platform — the root's authorship came
+    // from the channel's own sent ring, not a getMessage read.
+    expect(fx.calls("/im/v1/messages/om_thread_followup/reply", "POST")[0]?.body?.reply_in_thread).toBe(true);
+
+    // A second human speaking there restores the mention requirement — the rule stayed in one place.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_second_voice",
+          chatType: "group",
+          threadId: "omt_on_own_reply",
+          rootId: "om_bot_1",
+          senderId: "ou_bob",
+          text: "my two cents",
+        }),
+      ),
+    );
+    await flush();
+    expect(calls).toHaveLength(2); // discussion, not an ask
+  });
+
+  it("a thread rooted on someone ELSE's message keeps the mention bootstrap — no barging into crowds", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_lunch",
+          chatType: "group",
+          threadId: "omt_lunch",
+          rootId: "om_someones_message",
+          text: "where should we eat",
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(0); // one human ≤1, but the agent does NOT take part — buffered, not answered
+  });
+
+  it("the sent ring is durable: a remount still recognises a thread rooted on its old reply", async () => {
+    const fx = feishuFetch();
+    const root = mkdtempSync(join(tmpdir(), "feishu-sent-ring-"));
+    tempRoots.push(root);
+    const build = () => {
+      const { agent, calls } = replyingAgent("the answer");
+      const routes = buildFeishuChannel({
+        appId: "app",
+        appSecret: "secret",
+        verificationToken: TOKEN,
+        apiBaseUrl: BASE,
+      })({ agent, stateRoot: root });
+      const handler = routes["POST /feishu"];
+      if (!handler) throw new Error("expected POST /feishu");
+      const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+      channelIdles.add(idle as () => Promise<void>);
+      return { handler, calls, idle };
+    };
+
+    const first = build();
+    await flush();
+    await first.handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_ask_v1",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 hello" }),
+          mentions: BOT_MENTION,
+        }),
+      ),
+    );
+    await first.idle();
+    expect(first.calls).toHaveLength(1);
+
+    // A fresh mount (restart/redeploy) on the SAME state root: the reply id om_bot_1 must have been
+    // persisted, not held in memory — scale-to-zero is this channel's normal life on AgentCore.
+    const second = build();
+    await flush();
+    await second.handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_followup_v2",
+          chatType: "group",
+          threadId: "omt_after_restart",
+          parentId: "om_bot_1", // the parent branch of the rule: an in-thread reply TO the agent's message
+          text: "and one more thing",
+        }),
+      ),
+    );
+    await second.idle();
+    expect(second.calls).toHaveLength(1);
+    expect(second.calls[0]?.scope.session).toBe("feishu:oc_1:omt_after_restart");
+    expect(fx.calls("/im/v1/messages/om_followup_v2/reply", "POST").length).toBeGreaterThan(0);
+  });
+
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();

@@ -331,11 +331,21 @@ Two consequences worth stating rather than papering over:
   and survives restarts with no state whatsoever. The other two ended up in the same epistemic
   position (§3) with a state file, because they have no equivalent primitive; the weakest-claim channel
   turned out to be the simplest and the least buggy, which is the argument that removed the read.
-- **Feishu/Lark cannot borrow it.** Its event carries `parent_id` as a bare id with no sender, so
-  recognising a quote-reply to the agent would need a platform read per message or a durable record of
-  every message the agent has sent. Neither is worth it while the thread rule covers the same flow: a
-  quote-reply to the agent in a group's main timeline is buffered rather than answered, and the user
-  either mentions it or opens a thread.
+- **Feishu/Lark approximates it with its own memory.** Its event carries `parent_id`/`root_id` as bare
+  ids with no sender, so recognising a reply to the agent needs either a platform read per message or a
+  durable record of the agent's own sends. The read is rejected for the reasons in §3. The record was
+  originally rejected too, on the claim that the thread rule covers the same flow ("the user either
+  mentions it or opens a thread") — field use disproved the second half: a thread opened ON the agent's
+  own answer had no participation record, because the answer predates the thread it later rooted, so
+  the most natural follow-up gesture in the platform hit the mention bootstrap. The channel therefore
+  keeps a bounded durable ring of its own sent message ids (`sent.json`, the delivery ring's shape) and
+  treats a group-thread message whose `root_id`/`parent_id` is one of them as proof the agent takes
+  part in that thread — merged as `agentSpoke`, so the second-human rule is untouched. Observation
+  stays the epistemic boundary: the channel records what it SAID as well as what it heard, and still
+  never reads the platform back. A quote-reply to the agent at the group's main timeline remains
+  buffered rather than answered (the room stays mention-only); the ring only widens what counts as the
+  agent's own thread. Its loss modes are the §3 kind — an id evicted or predating the ring costs one
+  mention bootstrap in that thread, visible and self-healing in one message.
 
 ## 12. Migration
 

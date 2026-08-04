@@ -217,7 +217,32 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
-    const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
+    const transport: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
+    // Every message id the platform mints for OUR sends feeds the sent ring (bound below, once the
+    // state home exists): a thread later opened on one of those messages is a place the agent takes
+    // part in (participant model §3/§11). Telegram gets this fact embedded in its updates
+    // (`reply_to_message.from`); this platform's events carry bare ids only, so the channel remembers
+    // its own voice instead of reading messages back. sendText records its FIRST chunk's id —
+    // continuation chunks are unrecorded (a thread rooted on one costs the ordinary mention bootstrap).
+    let recordSentId: (id: string | undefined) => void = () => {};
+    const api: FeishuApi = {
+      ...transport,
+      async sendMessage(chatId, msgType, content) {
+        const id = await transport.sendMessage(chatId, msgType, content);
+        recordSentId(id);
+        return id;
+      },
+      async replyMessage(messageId, msgType, content, replyOpts) {
+        const id = await transport.replyMessage(messageId, msgType, content, replyOpts);
+        recordSentId(id);
+        return id;
+      },
+      async sendText(target, msgText) {
+        const id = await transport.sendText(target, msgText);
+        recordSentId(id);
+        return id;
+      },
+    };
 
     // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
     // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. A
@@ -244,7 +269,7 @@ function createFeishuRuntimeFactory(
           // is pending — the only bootstrap left is social, one mention inside a thread. The read scope
           // is a separate, softer dependency, so it is reported separately rather than folded in.
           log.info(
-            `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
+            `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in threads the agent takes part in (mentioned there, or rooted on its own message)`,
           );
         } else {
           log.warn(
@@ -289,6 +314,13 @@ function createFeishuRuntimeFactory(
       order: (a, b) => a.seq - b.seq,
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    // Messages this channel sent, by platform id — the input to the own-thread participation rule in
+    // acceptEvent. Bounded + durable like the delivery ring; losing an id costs one mention bootstrap
+    // in a thread opened on an old message — the same self-healing cost as a lost participation record.
+    const sent = createSeenRing(join(stateHome, "sent.json"), label);
+    recordSentId = (id) => {
+      if (id !== undefined) sent.add(id);
+    };
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker();
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
@@ -512,6 +544,19 @@ function createFeishuRuntimeFactory(
       // second human speaking is exactly what makes addressing ambiguous again.
       const heard = heardIn(m, event.sender);
       if (heard) threadParticipants.merge(heard.key, { humans: [heard.speaker] });
+      // A thread rooted on (or replying to) one of the AGENT'S OWN messages is a place the agent
+      // takes part in — it wrote the entry the thread grew from — so the participant axiom's first
+      // condition holds before any turn ever ran here (§3). Known from the channel's own sends
+      // (sent.json), never from a platform read-back. Merging `agentSpoke` rather than
+      // short-circuiting keeps the summon rule in ONE place: a second human heard in the thread
+      // still restores the mention requirement.
+      if (
+        isHumanGroup &&
+        m.thread_id !== undefined &&
+        ((m.root_id !== undefined && sent.has(m.root_id)) || (m.parent_id !== undefined && sent.has(m.parent_id)))
+      ) {
+        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentSpoke: true });
+      }
 
       if (
         !r &&
