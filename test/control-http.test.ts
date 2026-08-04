@@ -23,9 +23,10 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const TOKEN = "test-token";
 
-/** A served control plane over a real HTTP server + the agent driving it. */
+/** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
+ *  thinking levels are per model, and the default faux supports only "off". */
 async function serveControl() {
-  const { faux, models } = makeFaux();
+  const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses([fauxAssistantMessage("hello over the wire")]);
   const sessions = inMemorySessionStore();
   const lease = inProcessLease();
@@ -49,7 +50,12 @@ async function serveControl() {
   });
   const { control, observer } = createPiSessionControl({
     sessions,
-    boundary: () => ({ lease, models, harnessFactory: factory }),
+    boundary: () => ({
+      lease,
+      models,
+      harnessFactory: factory,
+      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+    }),
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
@@ -106,6 +112,11 @@ describe("session control over HTTP (Phase 3)", () => {
       const applied = await remote.dispatch("sW", { type: "set_thinking", level: "low" });
       expect(applied).toEqual({ ok: true });
       expect((await remote.state("sW")).thinkingLevel).toBe("low");
+      // navigate carries a field of its own, so its wire shape needs a POSITIVE round trip: a typo
+      // in the field name would otherwise ship green behind the malformed-command assertions.
+      const target = localEntries.entries.find((e) => e.kind === "user")?.id as string;
+      expect(await remote.dispatch("sW", { type: "navigate", targetId: target })).toEqual({ ok: true });
+      expect((await remote.state("sW")).leafEntryId).toBe(target);
     } finally {
       served.close();
     }
@@ -208,6 +219,7 @@ describe("session control over HTTP (Phase 3)", () => {
         { type: "compact", instructions: 42 }, // instructions not a string
         { type: "set_model", model: 42 }, // model not a string
         { type: "set_thinking", level: 42 }, // level not a string
+        { type: "navigate", targetId: 42 }, // targetId not a string
       ];
       for (const command of malformed) {
         const rejected = await post(command);
@@ -541,6 +553,22 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("activePathSlice: the replay renders the active branch, not the tree", async () => {
+    const { activePathSlice } = await import("../src/cli/commands/attach.ts");
+    const entry = (id: string, parentId?: string) => ({ id, parentId, timestamp: 0, kind: "user", data: {} });
+    // b is the abandoned branch after a navigate back to a; c hangs off a and holds the leaf.
+    const slice = [entry("a"), entry("b", "a"), entry("c", "a")];
+    expect(activePathSlice(slice, "c").map((e) => e.id)).toEqual(["a", "c"]);
+    // Nothing to reduce against: no leaf reported, or a leaf that predates the slice (its ancestors
+    // were rendered in an earlier round) — the slice stands rather than being emptied.
+    // An engine that reports no leaf says nothing about branches — "unknown" must not read as
+    // "off-path", or such a client would see an empty replay.
+    expect(activePathSlice(slice, undefined)).toEqual(slice);
+    // A leaf BEHIND the slice (navigate backwards, no turn since): everything here was appended and
+    // then abandoned, so there is nothing on the active path to replay.
+    expect(activePathSlice(slice, "older")).toEqual([]);
+  });
+
   it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {
     const { decideRound } = await import("../src/cli/commands/attach.ts");
     const err = (over: Partial<Parameters<typeof decideRound>[0] & { type: "error" }> = {}) =>
@@ -673,7 +701,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const entriesPage = {
       entries: [
         { id: "e2", timestamp: 1, kind: "user", data: { text: "question" } },
-        { id: "e3", timestamp: 2, kind: "assistant", data: { text: "answer" } },
+        { id: "e3", parentId: "e2", timestamp: 2, kind: "assistant", data: { text: "answer" } },
       ],
       leafEntryId: "e3",
     };

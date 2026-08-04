@@ -481,13 +481,30 @@ await control.dispatch("s1", { type: "set_thinking", level: "high" });
 await control.dispatch("s1", { type: "compact", instructions: "keep the decisions" }); // accept-fast: ok on
 // admission; the outcome arrives as compaction_finished{summary|error|aborted} (emitted after the
 // lease frees; aborted = a deliberate stop via dispatch(abort) — not a failure)
+await control.dispatch("s1", { type: "navigate", targetId: entryId }); // move the leaf; state_changed{leafEntryId}
 ```
 
+`navigate` is the write verb for the tree `entries()` publishes: it moves the session's active leaf,
+so the next turn hangs off `targetId` instead of the old leaf — which is also how sibling branches
+come to exist. A `targetId` that is not one of the ids `entries()` published rejects
+`invalid_command`; gate on `capabilities().navigate`.
+
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
-serving path, channels included. Boundary mutations require an EXISTING session (`no_such_session`
+serving path, channels included. One exception: a recorded thinking level the session's CURRENT
+model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. `set_model`
+re-records the clamped level at the boundary, so `state()` and the execution agree and the client gets
+it in the same `state_changed`; the resolve keeps clamping as a BACKSTOP for what the boundary cannot
+see (a deployment whose CONFIGURED model changed between restarts), and there it warns server-side
+while `state()` reports the recorded level. Note the clamp's direction: it takes the lowest supported
+level at or above the recorded one and only falls back downward if nothing above exists — a gap
+resolves upward, which costs more, not less. Boundary mutations require an EXISTING session (`no_such_session`
 otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
 `invalid_command` before acceptance;
-`capabilities()` lists `allowedModels`/`allowedLevels`. Boundary commands require the wiring the
+`capabilities()` lists `allowedModels` (the deployment's registry — a static fact) and reports
+`thinkingLevel` as a plain boolean: WHICH levels exist depends on the model a session is running, so
+they ride `state().availableThinkingLevels`. `set_thinking` validates against that same set and
+rejects anything outside it with `invalid_command`
+rather than recording an override the run would ignore. Boundary commands require the wiring the
 agent opener provides (`sessionControl: true`); a hub without it reports them off and rejects
 with `unsupported_capability`.
 

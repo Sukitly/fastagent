@@ -457,6 +457,30 @@ export interface AttachIo {
 }
 
 /**
+ * The backfill slice REDUCED TO THE ACTIVE PATH — a session is a tree (a `navigate`, or a
+ * compaction, leaves sibling branches behind), and printing the slice raw renders the abandoned
+ * branch interleaved with the live one as if it were one conversation. Reachability is computed
+ * backwards from the leaf; an entry whose parent lies BEFORE the slice is path-connected by
+ * construction (its ancestors were rendered in an earlier round), so only what the walk cannot
+ * reach is dropped. An engine that reports NO leaf says nothing about branches, so its slice stands
+ * whole — the one case where "unknown" must not read as "off-path".
+ */
+export function activePathSlice(entries: SessionEntry[], leafEntryId: string | undefined): SessionEntry[] {
+  if (leafEntryId === undefined) return entries;
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  // An append always moves the leaf, so a leaf BEHIND the slice means every entry in it was
+  // appended and then abandoned — a navigate backwards with no new turn since. Nothing here is on
+  // the active path.
+  if (!byId.has(leafEntryId)) return [];
+  const onPath = new Set<string>();
+  for (let cur = byId.get(leafEntryId); cur; cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
+    if (onPath.has(cur.id)) break;
+    onPath.add(cur.id);
+  }
+  return entries.filter((e) => onPath.has(e.id));
+}
+
+/**
  * ONE attach round: subscribe → backfill (render the durable record since `cursor`) → drain live
  * until the stream drops. Returns the advanced cursor. Subscribing first + the server's eager
  * registration (subscribed before response headers) covers the cursor→subscription window in the
@@ -527,9 +551,11 @@ export async function attachRound(
     // append-position cursor (design §7), and a leaf that sits before later appends (abandoned
     // branches) would make every reconnect permanently replay the same tail.
     next = backfill.entries.at(-1)?.id ?? cursor;
-    if (backfill.entries.length > 0) {
+    // Cursor advancement is APPEND ORDER over the whole slice; RENDERING is the active path only.
+    const replay = activePathSlice(backfill.entries, backfill.leafEntryId);
+    if (replay.length > 0) {
       io.println("[replaying the record since the last sync (may overlap what you saw live)]");
-      for (const entry of backfill.entries) {
+      for (const entry of replay) {
         let line: string | undefined;
         try {
           line = renderEntry(entry);
