@@ -614,7 +614,15 @@ JSON object on the first ingress envelope and pushes a coalesced snapshot on the
 mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping the container AWS-SDK-free
 and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
 the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
-is first boot.
+is first boot. Channel construction is deferred to that same moment (`start` hands the adapter a LAZY
+channel surface, resolved memoized on the first envelope after `ready()`): channels load their state
+files and replay durable turn intent at construction, so building them at boot — against the
+pre-restore mount — would cache emptiness (thread participation, delivery dedup, pending turns) and
+then clobber the restored files with it. A construction failure 503s the envelope with its message and
+is retried on the next one; the deploy driver's post-deploy health probe (`deploy/agentcore/run.ts`)
+warms one session through the forwarder BEFORE webhook registration, so a bad credential or broken
+`channels/` module gates the deploy with its error text — the boot-time `failStartup` this host cannot
+have, restored at deploy time.
 
 **Credentials ride that snapshot, so the secrets dir is INSIDE the state root** (`/mnt/state/.secrets`,
 `deploy/agentcore/plan.ts` `SECRETS_DIR`) — the one place AgentCore departs from the sibling layout the

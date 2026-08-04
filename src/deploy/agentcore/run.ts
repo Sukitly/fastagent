@@ -57,6 +57,40 @@ export interface AgentcoreRunPlan {
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
+/** How long the post-deploy health probe waits for the fresh session (image pull + microVM boot +
+ *  snapshot restore + channel construction) before gating with the last answer. */
+const PROBE_TIMEOUT_MS = 120_000;
+const PROBE_INTERVAL_MS = 3_000;
+
+/**
+ * Poll the forwarder-relayed `/health` until it answers 200 or the deadline passes; report the LAST
+ * failing answer (status + first body line). Every non-200 is retried until the deadline — the
+ * budget's job is to absorb cold-start provisioning, and a deterministic failure (the 503 whose body
+ * names a bad credential or broken channels/ module) simply holds until the deadline and then gates
+ * with that text. Network errors keep whatever answer was last seen.
+ */
+async function probeForwarderHealth(
+  healthUrl: string,
+  fetchImpl: typeof fetch,
+  timeoutMs = PROBE_TIMEOUT_MS,
+  intervalMs = PROBE_INTERVAL_MS,
+): Promise<{ ok: boolean; last?: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last: string | undefined;
+  for (;;) {
+    try {
+      const res = await fetchImpl(healthUrl, { signal: AbortSignal.timeout(65_000) });
+      if (res.ok) return { ok: true };
+      const body = (await res.text()).trim().split("\n")[0] ?? "";
+      last = `${res.status}${body ? ` ${body}` : ""}`;
+    } catch {
+      /* not routable yet (Function URL DNS, cold start) — keep polling until the deadline */
+    }
+    if (Date.now() >= deadline) return { ok: false, last };
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 /** Stack outputs (`describe-stacks --query "Stacks[0].Outputs"`) → { OutputKey: OutputValue }. */
 export function parseStackOutputs(stdout: string): Record<string, string> {
   try {
@@ -135,6 +169,8 @@ export async function deployAgentcoreRun(
   registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
   registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
   registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
+  /** Injected in tests; the probe itself stays inside the run so no deploy can skip it. */
+  probe: { fetchImpl?: typeof fetch; timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<AgentcoreRunOutcome> {
   const gate = (g: string): AgentcoreRunOutcome => ({ ok: false, gate: g });
   const stack = `fastagent-${plan.name}`;
@@ -460,6 +496,31 @@ export async function deployAgentcoreRun(
         if (firstLine) log(`warn: ${firstLine}`);
       }
     }
+  }
+
+  // 8c. Warm + verify the NEW serving path end to end, BEFORE registration: one GET /health through
+  //     the forwarder wakes a fresh session on the new image, which restores the state snapshot and
+  //     then constructs the channels — construction is deferred to exactly that moment
+  //     (channels/agentcore.ts), so this probe is where a bad credential, a broken channels/ module,
+  //     or an unrestorable snapshot surfaces AT DEPLOY TIME with its error text. There is no
+  //     boot-time failStartup on this host to catch those: construction must wait for the restore,
+  //     whose presigned URLs only an envelope carries.
+  if (url) {
+    log("warming the ingress session (state restore + channel construction)…");
+    const warmed = await probeForwarderHealth(
+      `${url}/health`,
+      probe.fetchImpl ?? fetch,
+      probe.timeoutMs,
+      probe.intervalMs,
+    );
+    if (!warmed.ok) {
+      return gate(
+        warmed.last
+          ? `the deployed runtime failed its health probe: ${warmed.last} — fix and re-run`
+          : "the forwarder URL never answered the health probe — check the Function URL / runtime logs and re-run",
+      );
+    }
+    log("ingress session warmed (state restored, channels constructed)");
   }
 
   // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the

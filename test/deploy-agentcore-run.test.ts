@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { AUTH_SEED_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
@@ -49,6 +49,18 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
 
 const writeParams = vi.fn(async (_content: string) => "/tmp/params.json");
 const writeZip = vi.fn(async (_bytes: Uint8Array) => "/tmp/forwarder.zip");
+
+// The post-deploy health probe rides the global fetch by default; answer 200 so every existing flow
+// proceeds — the probe's own describe overrides this per test.
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("ok\n", { status: 200 })),
+  );
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const run = (
   p: AgentcoreRunPlan,
@@ -525,5 +537,95 @@ describe("deploy/agentcore/run: helpers", () => {
     for (const invalid of ["not json", "{}", '{"written":"true"}', "null"]) {
       expect(parseCheckpointReply(invalid)).toBeUndefined();
     }
+  });
+});
+
+describe("the post-deploy health probe (warm + verify the new serving path before registration)", () => {
+  it("probes /health through the forwarder BEFORE registration and proceeds on 200", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: string | URL) => {
+        urls.push(String(u));
+        return new Response("ok\n", { status: 200 });
+      }),
+    );
+    const logs: string[] = [];
+    const registered: string[] = [];
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      registered.push("telegram");
+      return "registered";
+    });
+    const out = await deployAgentcoreRun(
+      plan({ channels: ["telegram"], needsForwarder: true }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      tg,
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(urls[0]).toBe("https://xyz.lambda-url.us-west-2.on.aws/health");
+    // The probe ran BEFORE the registrar: registration verifies the URL, so the container must
+    // already be restored + constructed when the platform's challenge arrives.
+    expect(logs.findIndex((l) => l.includes("warming"))).toBeLessThan(
+      logs.findIndex((l) => l.includes("registering telegram")),
+    );
+    expect(registered).toEqual(["telegram"]);
+  });
+
+  it("gates with the runtime's OWN error text when the probe keeps answering non-200", async () => {
+    // The lazy channel construction's 503 body (channels/agentcore.ts) rides back verbatim through
+    // the forwarder — the deploy fails AT DEPLOY TIME with the misconfiguration named.
+    const fetchImpl = vi.fn(
+      async () => new Response("channel construction failed: FEISHU_APP_SECRET is not set\n", { status: 503 }),
+    );
+    const out = await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      async () => "registered",
+      undefined,
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
+    );
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("FEISHU_APP_SECRET is not set") });
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1); // non-200 is retried until the deadline
+  });
+
+  it("a forwarder URL that never answers gates with the reachability message", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND");
+    });
+    const out = await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      async () => "registered",
+      undefined,
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
+    );
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("never answered") });
+  });
+
+  it("a pure-invoke deployment (no ForwarderUrl) skips the probe — nothing to warm through", async () => {
+    const probe = vi.fn();
+    vi.stubGlobal("fetch", probe);
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks"
+        ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+        : happyAws(a),
+    );
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true });
+    expect(probe).not.toHaveBeenCalled();
   });
 });
