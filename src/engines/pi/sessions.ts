@@ -10,7 +10,7 @@
  * jsonl survives process restarts (disk is the truth).
  */
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
-import type { AgentMessage, Session } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, Session, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { log } from "../../log.ts";
 
@@ -23,13 +23,18 @@ export interface PiSessionStore {
  * OPEN-EXISTING sibling of {@link PiSessionStore} (session-control.ts): an unknown session answers
  * `undefined`, never creates one — sessions are the data plane's monopoly. Two consumers:
  * - the OBSERVATION plane (`state()`/`entries()`), strictly read-only (design §16 invariant 4);
- * - the control plane's BOUNDARY writers (`set_model`/`set_thinking`), which append override
- *   records to the returned handle after an existence check, under the run lease.
+ * - the control plane's BOUNDARY writers (`set_model`/`set_thinking` append override records to the
+ *   returned handle; `navigate` moves its leaf) after an existence check, under the run lease.
  * `openIfExists` skips the open-time crash reconciliation (that appends repair entries — a write
- * the observation plane must not perform). The boundary writers are safe WITHOUT it only because
- * override records are not messages — they cannot create or interact with a dangling tool_use
- * pair. Writing MESSAGE-class records through this handle would bypass that repair: use
- * `openOrCreate` for anything that enters the transcript.
+ * the observation plane must not perform). The boundary writers are safe WITHOUT it for two
+ * different reasons: an override record is not a message, so it cannot create or pair with a
+ * dangling tool_use; a `navigate` writes no message either, but it CAN expose one — parking the
+ * leaf on an assistant entry whose tool results are now off-path is the dangling-pair state
+ * {@link reconcileInterruptedToolCalls} exists for. That is repaired at the next `openOrCreate`,
+ * which repairs AT THE LEAF — exactly where a move puts it.
+ *
+ * Writing MESSAGE-class records through this handle would bypass that repair: use `openOrCreate`
+ * for anything that enters the transcript.
  */
 export interface PiSessionReader {
   openIfExists(sessionId: string): Promise<Session | undefined>;
@@ -110,6 +115,45 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
     };
     await session.appendMessage(result);
   }
+}
+
+/**
+ * The entries on the session's ACTIVE path, root→leaf — what every last-wins read must walk.
+ * `getEntries()` is the whole TREE: once `navigate` can move the leaf, the journal still carries
+ * the abandoned branch, and reading it flat would run the session on a setting it moved away from.
+ * Deliberately NOT `Session.getBranch()`: that walk is bounded by the last compaction's retained
+ * window, which is the right bound for MODEL CONTEXT and the wrong one for settings — an override
+ * recorded before a compaction is a preference, and it still governs the session after one.
+ */
+export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
+  // LEAF FIRST, then the journal — the order is load-bearing, not incidental: `getEntries()` is a
+  // SNAPSHOT, so reading it first would let any concurrent append (i.e. any turn in progress) leave
+  // a leaf the snapshot cannot contain, and the integrity throw below would fire on a live session
+  // instead of a corrupt one. This way the snapshot is always a superset of the leaf's chain.
+  const leafId = await session.getLeafId();
+  const entries = await session.getEntries();
+  // A null leaf is pi's ROOT position (what `moveTo(null)` sets), so the active path is EMPTY — not
+  // "the whole journal", which on a branched session would mean every abandoned branch at once.
+  if (leafId === null) return [];
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  // A chain that is not intact THROWS: any other disposition returns a short path that reads like a
+  // short session (every override and activation above the gap gone, the next turn silently on
+  // assembly defaults). pi's storages already reject a leaf outside the journal in `getLeafId()`,
+  // but the port is swappable — so the walk names it here rather than dying on `undefined.parentId`.
+  const start = byId.get(leafId);
+  if (!start) throw new Error(`session leaf "${leafId}" is missing from the journal`);
+  const path: SessionTreeEntry[] = [];
+  for (let cur = start; ; ) {
+    path.push(cur);
+    // A path cannot be longer than the journal it walks; anything more is a parentId cycle, which
+    // would otherwise hang the turn with no `failed` event at all.
+    if (path.length > entries.length) throw new Error(`session entry "${cur.id}" cycles through its parents`);
+    if (!cur.parentId) break;
+    const parent = byId.get(cur.parentId);
+    if (!parent) throw new Error(`session entry "${cur.parentId}" is missing from the journal (parent of "${cur.id}")`);
+    cur = parent;
+  }
+  return path.reverse(); // walked leaf→root; every consumer reads it root→leaf
 }
 
 /** In-process store (pi InMemorySessionRepo). Continuity lives and dies with the instance. */

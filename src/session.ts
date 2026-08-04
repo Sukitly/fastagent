@@ -24,7 +24,8 @@ export interface SessionControl {
 
 /**
  * STATIC support declaration — sessionless, so nothing here may depend on a session. Two kinds of flag:
- * - COMMAND GATES (`steering`, `followUp`, `manualCompaction`, `modelSelection`, `thinkingLevel`):
+ * - COMMAND GATES (`steering`, `followUp`, `manualCompaction`, `modelSelection`, `thinkingLevel`,
+ *   `navigate`):
  *   clients MUST gate dispatch on them; an unsupported command is rejected before acceptance with
  *   {@link UNSUPPORTED_CAPABILITY_CODE}.
  * - OBSERVATION-QUALITY flags (`toolProgress`, `usage`): whether those events/state fields appear
@@ -43,6 +44,12 @@ export interface SessionCapabilities {
   /** Whether `set_thinking` is servable at all. WHICH levels is per-session — see
    *  {@link SessionState.availableThinkingLevels}. */
   thinkingLevel: boolean;
+  /** Whether `navigate` is servable at all — `false` both when the engine's sessions are linear and
+   *  when this deployment has no write path for them; either way the tree the contract publishes
+   *  (`SessionEntry.parentId` + `SessionEntries.leafEntryId`) is read-only here. Named after its COMMAND, unlike the older gates (`manualCompaction` gates
+   *  `compact`, `thinkingLevel` gates `set_thinking`): those already force a client to translate,
+   *  and a gate keyed by the command literal is the only naming a derived map could ever produce. */
+  navigate: boolean;
   toolProgress: boolean;
   usage: boolean;
 }
@@ -93,14 +100,19 @@ export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
 // ── Commands (control plane) ─────────────────────────────────────────────────
 
-/** Six commands; deliberately NO `prompt` — starting work is the data plane's definition. */
+/** Seven commands; deliberately NO `prompt` — starting work is the data plane's definition. */
 export type SessionCommand =
   | { type: "steer"; prompt: Prompt }
   | { type: "follow_up"; prompt: Prompt }
   | { type: "abort" }
   | { type: "compact"; instructions?: string }
   | { type: "set_model"; model: string }
-  | { type: "set_thinking"; level: string };
+  | { type: "set_thinking"; level: string }
+  /** Move the session's active leaf to `targetId`, an existing entry — the write verb for the tree
+   *  `entries()` already publishes (and how sibling branches come to exist: the next turn hangs off
+   *  the new leaf). Every entry `entries()` publishes is a legal target; a `targetId` that is not
+   *  one rejects `invalid_command`. A boundary mutation otherwise: same lease as a run. */
+  | { type: "navigate"; targetId: string };
 
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately
@@ -203,8 +215,13 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
 };
 
 /** A boundary mutation changed durable session state (L2; no runId — boundary mutations happen
- *  between runs). */
-export type StateChangedEvent = SessionEvent<"state_changed", { model?: string; thinkingLevel?: string }>;
+ *  between runs). `leafEntryId` reports a `navigate` — a deliberate move of the branch head, which
+ *  a second attached client would otherwise have no signal for. It is NOT a general leaf feed:
+ *  every turn advances the leaf too, and that is read from `entries()`/`state()` after the run. */
+export type StateChangedEvent = SessionEvent<
+  "state_changed",
+  { model?: string; thinkingLevel?: string; leafEntryId?: string }
+>;
 
 /** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one
  *  `compaction_finished` — `summary` on success, `error` on failure, `aborted: true` on a
