@@ -27,9 +27,15 @@ import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
 import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../text.ts";
 
-/** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
- *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
-const MARKDOWN_INSTRUCTION = "\n\n(Format your reply in standard Markdown — it is rendered in a Feishu/Lark card.)";
+/** The per-turn REPLY CONTRACT, appended to the prompt (not the system prompt). Two halves, one
+ *  concept — what happens to the reply: its FORMAT (rendered in a card whose markdown element is the
+ *  natural fit for LLM output — steer away from HTML/plain) and its DELIVERY OWNERSHIP (the channel
+ *  itself delivers it; answering through a send TOOL instead is the observed failure — the channel
+ *  then settles an empty turn as "(no reply)" next to the tool's un-threaded duplicate). */
+const REPLY_INSTRUCTION =
+  "\n\n(Format your reply in standard Markdown — it is rendered in a Feishu/Lark card. This reply is " +
+  "delivered to the current chat by the channel itself: do not call a send tool to answer the " +
+  "current chat.)";
 
 /** Everything the transport needs to fetch a turn's attachments. */
 export interface FeishuTurnTransport {
@@ -194,6 +200,6 @@ export async function* invokeFeishuTurn(
     yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
-  const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
+  const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };
   yield* streamTurnWithBusyRetry(agent, session, prompt, { label: transport.label, onCompleted, busyRetry });
 }

@@ -353,6 +353,9 @@ describe("turn flow", () => {
     expect(encodeURIComponent(worstCase).length).toBeLessThan(255);
     expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
     expect(calls[0]?.prompt.text).toContain("hello there");
+    // The reply contract rides every chat prompt: the channel owns delivery — no send-tool answering.
+    expect(calls[0]?.prompt.text).toContain("delivered to the current chat by the channel itself");
+    expect(calls[0]?.prompt.text).toContain("do not call a send tool");
     // Rule 2 (answer where asked): a plain send, neither quoted nor pushed into a thread.
     const mount = fx.calls("receive_id_type=chat_id", "POST").find((call) => call.body?.msg_type === "interactive");
     expect(mount).toBeDefined();
@@ -1782,6 +1785,8 @@ describe("the Lark compatibility profile", () => {
     expect(res.status).toBe(200);
     await maybeIdle?.();
     expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p)");
+    // The lark-branded assembly path carries the same reply contract as canonical feishu.
+    expect(calls[0]?.prompt.text).toContain("delivered to the current chat by the channel itself");
     expect(calls[0]?.scope.session).toBe("lark:oc_1"); // branded per channel, not per engine
     // A direct message is answered in place: a plain send, not a quoted thread reply.
     const mount = fx.calls("receive_id_type=chat_id", "POST").find((call) => call.body?.msg_type === "interactive");
