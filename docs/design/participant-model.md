@@ -347,8 +347,10 @@ Two consequences worth stating rather than papering over:
   remains buffered rather than answered (the room stays mention-only); the ring only widens what
   counts as the agent's own thread. Its loss modes are the §3 kind — an id evicted or predating the
   ring, or a message sent OUTSIDE the channel's own client (the scaffold send tool speaks the Open API
-  directly and its ids are not recorded), costs one mention bootstrap in that thread, visible and
-  self-healing in one message.
+  directly and its ids are not recorded — deliberately: the ring is one process's atomically-rewritten
+  file, so a second writer would clobber it, and the safe alternative is a cross-module reporting seam
+  that costs more than the one-mention bootstrap it would remove), costs one mention bootstrap in that
+  thread, visible and self-healing in one message.
 
 ## 12. Migration
 

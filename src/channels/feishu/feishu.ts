@@ -222,9 +222,12 @@ function createFeishuRuntimeFactory(
     // part in (participant model §3/§11). Telegram gets this fact embedded in its updates
     // (`reply_to_message.from`); this platform's events carry bare ids only, so the channel remembers
     // its own voice instead of reading messages back. Reported by the TRANSPORT (the one place all
-    // sends pass — sendText's continuation chunks included); messages sent outside this client (the
-    // scaffold send tool's own fetch) are not recorded — a thread on one costs the ordinary mention
-    // bootstrap (docs/feishu.md).
+    // sends pass — a facade wrapper above the api would miss sendText's continuation chunks, which
+    // ride sendMessage/replyMessage internally). Messages sent OUTSIDE this client (the scaffold send
+    // tool speaks the Open API with its own fetch) are deliberately not recorded: the ring is a
+    // whole-file atomic rewrite held in this process's memory, so a second writer would clobber it —
+    // wiring the tool in safely needs a real cross-module reporting seam, and the gap it would close
+    // is a §3-class self-healing cost (one mention bootstrap in such a thread; docs/feishu.md).
     let recordSentId: (id: string) => void = () => {};
     const api: FeishuApi = createFeishuApi({
       kind,
@@ -540,9 +543,13 @@ function createFeishuRuntimeFactory(
       // A thread rooted on (or replying to) one of the AGENT'S OWN messages is a place the agent
       // takes part in — it wrote the entry the thread grew from — so the participant axiom's first
       // condition holds before any turn ever ran here (§3). Known from the channel's own sends
-      // (sent.json), never from a platform read-back. Merging `agentParticipates` rather than
-      // short-circuiting keeps the summon rule in ONE place: a second human heard in the thread
-      // still restores the mention requirement.
+      // (sent.json), never from a platform read-back. BOTH ids are checked because they answer
+      // different shapes of the same fact: `root_id` catches a thread OPENED on the agent's message
+      // (the field-observed case), `parent_id` catches an in-thread reply TO one of its messages — a
+      // later reply's root may be someone else's message while the parent is the agent's. Merging
+      // `agentParticipates` rather than short-circuiting keeps the summon rule in ONE place: a
+      // second human heard in the thread still restores the mention requirement, and a thread rooted
+      // on a stranger's message stays mention-only.
       if (
         isHumanGroup &&
         m.thread_id !== undefined &&
