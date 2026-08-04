@@ -56,12 +56,14 @@ async function tenantToken(): Promise<string> {
 
 export default defineTool({
   description:
-    "Send a message to a Lark chat: plain `text`, or `markdown` (rendered as a card — headings, " +
-    "bold, code blocks, links). Exactly one of the two. Use it for a turn NO channel is carrying — a " +
-    "scheduled or self-scheduled (wake) turn — or to reach a chat OTHER than the one you are " +
-    "answering. In a normal chat turn the channel already delivers your reply, so do NOT call this to " +
-    "answer (it would post the message twice). chatId comes from the [lark: chat …] context line in a " +
-    "chat turn; a scheduled/woken turn has no context line, so name the destination in your instruction.",
+    "Send a message to a Lark chat, OUTSIDE the normal reply path. Call it only for a turn NO " +
+    "channel is carrying — a scheduled or self-scheduled (wake) turn, whose plain reply goes " +
+    "nowhere — or to reach a chat OTHER than the one you are answering. In a normal chat turn the " +
+    "channel streams and delivers your reply itself, so do NOT call this to answer the current " +
+    "chat: it would post the message twice, outside the conversation thread. `chatId` (oc_…) comes " +
+    "from the [lark: chat …] context line in a chat turn; a scheduled/woken turn has no context " +
+    "line, so the destination must be named in your instructions. Pass exactly ONE of `text` " +
+    "(plain) or `markdown` (rendered as a card: headings, bold, code blocks, links).",
   input: z.object({
     chatId: z.string().describe("target chat id (oc_…)"),
     text: z.string().optional().describe("plain text message to send"),

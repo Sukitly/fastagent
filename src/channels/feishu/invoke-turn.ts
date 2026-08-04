@@ -28,8 +28,13 @@ import { type FeishuMention, parseContent } from "./parse.ts";
 import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../text.ts";
 
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
- *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
-const MARKDOWN_INSTRUCTION = "\n\n(Format your reply in standard Markdown — it is rendered in a Feishu/Lark card.)";
+ *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. The
+ *  second sentence heads off the observed failure of answering through a send TOOL instead: the
+ *  channel then settles an empty turn as "(no reply)" next to the tool's un-threaded duplicate. */
+const MARKDOWN_INSTRUCTION =
+  "\n\n(Format your reply in standard Markdown — it is rendered in a Feishu/Lark card. This reply is " +
+  "delivered to the current chat by the channel itself: do not call a send tool to answer the " +
+  "current chat.)";
 
 /** Everything the transport needs to fetch a turn's attachments. */
 export interface FeishuTurnTransport {
