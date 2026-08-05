@@ -30,7 +30,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { StateSync, StateUrls } from "./agentcore-state.ts";
 import { beginWork, onIdle } from "./busy.ts";
-import type { Routes } from "../host/node.ts";
+import type { ChannelHandler, Routes } from "../host/node.ts";
 import { router } from "../host/node.ts";
 import { log } from "../log.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
@@ -87,6 +87,13 @@ export type AgentcoreEnvelope = {
    *  channel — lives on a mount the version update is about to erase. Flushing first is what makes
    *  "channels with replay re-run it" true rather than aspirational. */
   | { kind: "checkpoint" }
+  /** The deploy driver's post-deploy verification (relayed by the forwarder's reserved
+   *  `/__fastagent/probe` path, which answers on EVERY forwarder topology — schedule-only URLs
+   *  refuse ordinary public traffic). Runs restore + channel construction end to end and answers a
+   *  TRANSPORT-200 structured verdict `{ ok, error? }`: the ordinary webhook path folds a non-200
+   *  transport into an opaque 502 at the forwarder, which would strip exactly the diagnostics this
+   *  probe exists to carry. */
+  | { kind: "probe" }
 );
 
 /** The webhook envelope's reply: the channel's real HTTP response, ridden inside a transport-200
@@ -98,8 +105,13 @@ export interface WebhookReply {
 }
 
 export interface AgentcoreAdapterOptions {
-  /** The serving routes a direct deployment would mount (channels or the builtin invoke + health). */
-  routes: Routes;
+  /** The serving routes a direct deployment would mount (channels or the builtin invoke + health).
+   *  The serving path passes a LAZY factory: channel construction loads channel state and replays
+   *  durable turn intent, so on AgentCore it must not run until the state root is authoritative —
+   *  which happens at the first envelope's `stateSync.ready()` (the restore URLs only an envelope
+   *  carries), never at boot, where the mount is pre-restore (empty after every version update).
+   *  An eager `Routes` value remains supported for wirings whose state root is already durable. */
+  routes: Routes | (() => Promise<Routes> | Routes);
   agent: Agent;
   /** Where the forwarder URL from envelopes is persisted for the wake-alarm sink (the state root). */
   stateRoot: string;
@@ -144,7 +156,28 @@ function secretMatches(actual: unknown, expected: string | undefined): boolean {
  */
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
   const { routes, agent, stateRoot, isBusy, fire, stateSync, ingressSecret, onStateReady } = options;
-  const dispatch = router(routes);
+  // Lazy channel construction (see AgentcoreAdapterOptions.routes) — resolved ONCE per process, on
+  // the first trusted envelope after the state root is authoritative, and the outcome is cached
+  // EITHER WAY. Success: the same resident channels a direct host keeps. Failure too: construction
+  // is an ACTIVATION with side effects — loadChannels builds every healthy channel (starting its
+  // queues and replaying durable turn intent) before reporting another module's failure — and there
+  // is no cleanup contract to unwind it, so re-running it per envelope could replay the same
+  // recovered turn concurrently. The first rejection is therefore the process's answer: every later
+  // envelope fails with the same message (visible each time), the retry boundary is a fresh session
+  // (which scale-to-zero provides naturally), and the deploy driver's probe catches deterministic
+  // failures at deploy time.
+  let dispatchP: Promise<ChannelHandler> | undefined;
+  const resolveDispatch = (): Promise<ChannelHandler> => {
+    if (!dispatchP) {
+      // The factory runs INSIDE the chain: a synchronous throw must land in the cached rejection,
+      // not escape before `dispatchP` is assigned (which would silently re-run the activation).
+      dispatchP = Promise.resolve()
+        .then(() => (typeof routes === "function" ? routes() : routes))
+        .then(router);
+      dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
+    }
+    return dispatchP;
+  };
   const invokeHandler = createInvokeHandler(agent);
   // Snapshot on the 0-in-flight edge: webhook channels ACK fast and finish the turn in the
   // background, so "the request returned" is NOT when the state root settles.
@@ -162,7 +195,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       return text("invalid json\n", 400);
     }
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
-      return text('need { "kind": "webhook" | "schedule-fire" | "invoke" | "wake-poke" | "checkpoint", ... }\n', 400);
+      return text(
+        'need { "kind": "webhook" | "schedule-fire" | "invoke" | "wake-poke" | "checkpoint" | "probe", ... }\n',
+        400,
+      );
     }
     // AUTHENTICATION BOUNDARY. `InvokeAgentRuntime` is an ordinary IAM action, so "reached this
     // handler" proves nothing about the sender. Only an envelope carrying the shared secret is the
@@ -197,7 +233,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       if (envelope.state && typeof envelope.state.getUrl === "string" && typeof envelope.state.putUrl === "string") {
         stateSync.use(envelope.state);
       } else if (envelope.kind !== "invoke" && !stateSync.configured() && !warnedUnsnapshotted) {
-        // webhook/schedule-fire/wake-poke reach us ONLY through the forwarder, which always mints the
+        // webhook/schedule-fire/wake-poke/probe reach us ONLY through the forwarder, which mints the
         // pair. Missing = a broken/stale topology whose state dies at the next deploy: say so, loudly,
         // once per process (a direct `invoke` legitimately has none — its session storage is its own).
         warnedUnsnapshotted = true;
@@ -207,6 +243,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         await stateSync.ready();
       } catch (e) {
         log.error(`[agentcore] state restore failed: ${String(e)}`);
+        // The probe is the deploy driver's verification channel: its diagnostics must survive the
+        // forwarder, which folds a non-200 transport into an opaque 502 — so for it the failure
+        // rides a transport-200 structured verdict; every other kind keeps the plain 503.
+        if (envelope.kind === "probe") return json({ ok: false, error: `state restore failed: ${String(e)}` }, 200);
         return text(`state restore failed: ${String(e)}\n`, 503);
       }
     }
@@ -216,6 +256,25 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     if (onStateReady && !stateReadyFired) {
       stateReadyFired = true;
       onStateReady();
+    }
+    // PROCESS INITIALIZATION, kind-independent: the (lazy) channels are constructed on the first
+    // trusted ingress after the state root became authoritative — whichever kind carries it, so a
+    // cold start woken by a schedule fire or an alarm poke still replays checkpointed turn intent.
+    // Two deliberate exceptions: `checkpoint` must push state even when a channel is broken, and a
+    // public `invoke` runs in its own isolated storage — constructing against THAT root would cache
+    // pre-restore emptiness for the ingress session. Failure policy is per kind below: webhook and
+    // wake-poke fail their request (503), the probe reports it structurally, and a schedule fire
+    // proceeds — cron does not consume channels, and letting an unrelated channel misconfiguration
+    // silence the clock would turn one fault into two (the error is logged here either way).
+    let constructionError: string | undefined;
+    let dispatch: ChannelHandler | undefined;
+    if (trusted && envelope.kind !== "checkpoint" && envelope.kind !== "invoke") {
+      try {
+        dispatch = await resolveDispatch();
+      } catch (e) {
+        constructionError = String(e);
+        log.error(`[agentcore] channel construction failed: ${constructionError}`);
+      }
     }
 
     switch (envelope.kind) {
@@ -245,6 +304,9 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
                 : undefined,
           },
         );
+        // A construction failure is the request's failure (503 through the forwarder, so the
+        // platform retries and the operator sees the message), never a silently-empty channel.
+        if (!dispatch) return text(`channel construction failed: ${constructionError ?? "unavailable"}\n`, 503);
         const response = await dispatch(inner);
         // Buffer the channel's ACK (webhook ACKs are small by design — the turn itself runs
         // fire-and-forget) and ride it inside the transport reply, byte-exact.
@@ -303,8 +365,22 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       }
       case "wake-poke": {
         // The poke's job is DONE by arriving: the invocation woke (or kept awake) the container, and
-        // the wake pump (boot drain + 30s poll) fires whatever is due. Nothing to dispatch.
+        // the wake pump (boot drain + 30s poll) fires whatever is due. Nothing to dispatch — the
+        // initialization above already resolved construction (replaying checkpointed turn intent),
+        // and its failure is this request's failure so the alarm's log line names it.
+        if (constructionError !== undefined) return text(`channel construction failed: ${constructionError}\n`, 503);
         return json({ ok: true }, 200);
+      }
+      case "probe": {
+        // The structured verdict (transport-200 — see the envelope doc): the deploy driver reads it
+        // through the forwarder's reserved path, so the error text survives the hop that turns any
+        // non-200 transport into an opaque 502.
+        return json(
+          constructionError === undefined
+            ? { ok: true }
+            : { ok: false, error: `channel construction failed: ${constructionError}` },
+          200,
+        );
       }
       case "invoke": {
         // Reuse the HTTP channel's handler wholesale (SSE, cancellation, backpressure) by handing it

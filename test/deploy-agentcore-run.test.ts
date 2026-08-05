@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { AUTH_SEED_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
@@ -49,6 +49,18 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
 
 const writeParams = vi.fn(async (_content: string) => "/tmp/params.json");
 const writeZip = vi.fn(async (_bytes: Uint8Array) => "/tmp/forwarder.zip");
+
+// The post-deploy probe rides the global fetch by default; answer the ok verdict so every existing
+// flow proceeds — the probe's own describe overrides this per test.
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ ok: true })),
+  );
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const run = (
   p: AgentcoreRunPlan,
@@ -429,8 +441,12 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(logs.join("\n")).not.toContain("PREVIOUS");
   });
 
-  it("any OTHER stop failure warns loudly with the manual command — the old image may keep serving", async () => {
-    const logs: string[] = [];
+  it("any OTHER stop failure GATES — the probe would otherwise 'verify' the old image still serving", async () => {
+    // The probe reaches the same fixed ingress session id; if the stop cannot be confirmed, a
+    // session still running the previous image would answer it and the deploy would claim a
+    // verification it never performed. Unable to guarantee freshness = unable to verify = gate.
+    const probe = vi.fn();
+    vi.stubGlobal("fetch", probe);
     const { cli: aws } = fakeCli((a) =>
       a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
         ? { code: 254, stderr: "An error occurred (AccessDeniedException): not authorized" }
@@ -440,16 +456,14 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       plan({ needsForwarder: true }),
       aws,
       fakeCli().cli,
-      (m) => logs.push(m),
+      () => {},
       writeParams,
       writeZip,
       async () => "registered",
     );
-    expect(out).toMatchObject({ ok: true }); // still not a gate — the deploy itself succeeded
-    const joined = logs.join("\n");
-    expect(joined).toContain("PREVIOUS");
-    expect(joined).toContain("stop-runtime-session");
-    expect(joined).toContain("AccessDeniedException");
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("stop-runtime-session") });
+    expect((out as { gate: string }).gate).toContain("AccessDeniedException");
+    expect(probe).not.toHaveBeenCalled(); // no probe against a session of unknown vintage
   });
 
   it("a pure-invoke deployment (no ForwarderUrl output) stops no session", async () => {
@@ -525,5 +539,132 @@ describe("deploy/agentcore/run: helpers", () => {
     for (const invalid of ["not json", "{}", '{"written":"true"}', "null"]) {
       expect(parseCheckpointReply(invalid)).toBeUndefined();
     }
+  });
+});
+
+describe("the post-deploy probe (verify restore + construction before registration)", () => {
+  it("POSTs the reserved probe path with the ingress secret BEFORE registration and proceeds on ok:true", async () => {
+    const requests: { url: string; body: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: string | URL, init?: RequestInit) => {
+        requests.push({ url: String(u), body: String(init?.body) });
+        return Response.json({ ok: true });
+      }),
+    );
+    const logs: string[] = [];
+    const registered: string[] = [];
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      registered.push("telegram");
+      return "registered";
+    });
+    const out = await deployAgentcoreRun(
+      plan({ channels: ["telegram"], needsForwarder: true, secrets: { FASTAGENT_INGRESS_SECRET: "s3cret" } }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      tg,
+    );
+    expect(out).toMatchObject({ ok: true });
+    // The reserved path (works on EVERY forwarder topology — a schedule-only URL 404s /health), with
+    // the deploy's own credential in the body, never argv.
+    expect(requests[0]?.url).toBe("https://xyz.lambda-url.us-west-2.on.aws/__fastagent/probe");
+    expect(JSON.parse(requests[0]?.body ?? "{}")).toEqual({ auth: "s3cret" });
+    // The probe ran BEFORE the registrar: registration verifies the URL, so the container must
+    // already be restored + constructed when the platform's challenge arrives.
+    expect(logs.findIndex((l) => l.includes("probing"))).toBeLessThan(
+      logs.findIndex((l) => l.includes("registering telegram")),
+    );
+    expect(registered).toEqual(["telegram"]);
+  });
+
+  it("gates IMMEDIATELY with the runtime's OWN error text on an ok:false verdict", async () => {
+    // The verdict rides a transport-200 structured reply (channels/agentcore.ts) precisely because
+    // the forwarder rewrites non-200 transports into an opaque 502 — and construction rejections are
+    // cached per session, so polling cannot change the answer: one round trip, one gate.
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ ok: false, error: "channel construction failed: FEISHU_APP_SECRET is not set" }),
+    );
+    const out = await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      async () => "registered",
+      undefined,
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 5_000, intervalMs: 1_000 },
+    );
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("FEISHU_APP_SECRET is not set") });
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // deterministic — no pointless polling
+  });
+
+  it("retries a non-200 forwarder answer to the deadline, then gates with the LAST answer", async () => {
+    const fetchImpl = vi.fn(async () => new Response("forbidden\n", { status: 403 }));
+    const out = await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      async () => "registered",
+      undefined,
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
+    );
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("403 forbidden") });
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("a forwarder URL that never answers gates with the reachability message", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND");
+    });
+    const out = await deployAgentcoreRun(
+      plan({ needsForwarder: true }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      async () => "registered",
+      undefined,
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
+    );
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("never answered") });
+  });
+
+  it("a forwarder topology whose stack LOST the ForwarderUrl output gates — even with no channels", async () => {
+    // schedule-only / selfSchedule-only: needsForwarder without first-party channels. The probe is
+    // their ONLY construction check, so a missing URL must be a gate, not a silent skip + success.
+    const probe = vi.fn();
+    vi.stubGlobal("fetch", probe);
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks"
+        ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+        : happyAws(a),
+    );
+    const out = await run(plan({ needsForwarder: true }), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("a pure-invoke deployment (no forwarder) legitimately has no URL and skips the probe", async () => {
+    const probe = vi.fn();
+    vi.stubGlobal("fetch", probe);
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks"
+        ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+        : happyAws(a),
+    );
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true });
+    expect(probe).not.toHaveBeenCalled();
   });
 });

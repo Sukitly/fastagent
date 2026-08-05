@@ -18,6 +18,7 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
+import { type Routes, parseRouteKey } from "../../host/node.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
   assertTunnelBindable,
@@ -130,15 +131,21 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
-  const routed = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: !agentcore }).catch(
-    failStartup,
-  );
+  // On AgentCore the channels are constructed LAZILY (mountAgentcore's lazyChannels, resolved on the
+  // first envelope after the state-snapshot restore): construction loads channel state and replays
+  // turn intent, and at boot the state mount is PRE-RESTORE — empty after every version update — so
+  // an eager build would cache that emptiness (thread participation, delivery dedup, pending turns)
+  // and then clobber the restored files with it. Everywhere else the state root is durable at boot,
+  // so channels mount eagerly and a broken channel fails startup.
+  const routed = agentcore
+    ? undefined
+    : await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: true }).catch(failStartup);
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
   const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
-  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
+  const withControl = mountSessionControl(routed?.routes ?? {}, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced,
     host,
@@ -170,19 +177,48 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   });
   let routes = withControl.routes;
   if (agentcore) {
+    // The lazy channel surface the adapter resolves post-restore. Control routes ride along so a
+    // forwarder-relayed /control/* request dispatches the same as on a direct host. Long-connection
+    // channels cannot serve here — scale-to-zero severs a resident connection and nothing
+    // re-establishes it — so their presence is a configuration error, surfaced per envelope and by
+    // the deploy driver's health probe (there is no boot to fail on this host).
+    const lazyChannels = async (): Promise<Routes> => {
+      const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
+      if (surface.longConnections.length > 0) {
+        throw new Error(
+          `long-connection channel(s) ${surface.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
+            `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
+        );
+      }
+      // mountSessionControl's PATH-level collision rule, re-asserted here: with no channels at boot
+      // its own check ran against an empty base, and a spread merge would silently let control win —
+      // but a channel on /control/* is the same configuration error it is on every other host.
+      const controlPaths = new Set(Object.keys(withControl.routes).map((key) => parseRouteKey(key).path));
+      const collisions = Object.keys(surface.routes).filter((key) => controlPaths.has(parseRouteKey(key).path));
+      if (collisions.length > 0) {
+        throw new Error(
+          `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control ` +
+            `plane — rename the channel route or disable sessionControl in fastagent.config`,
+        );
+      }
+      return { ...surface.routes, ...withControl.routes };
+    };
     try {
-      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules, onStateReady });
+      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules, onStateReady, lazyChannels });
     } catch (e) {
       failStartup(e);
     }
     log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
   }
   serve(
-    { ...routed, routes },
+    {
+      ...(routed ?? { longConnections: [], routeChannels: [], builtinInvoke: false, markReady() {} }),
+      routes,
+    },
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
     (p) => {
       withControl.announce(p);
-      maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);
+      maybeTunnel(agentDir, routed?.routeChannels ?? [], p, opts.tunnel ?? false, stateRoot);
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
