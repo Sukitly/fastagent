@@ -616,7 +616,22 @@ JSON object on the first ingress envelope and pushes a coalesced snapshot on the
 mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping the container AWS-SDK-free
 and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
 the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
-is first boot.
+is first boot. Channel construction is deferred to that same moment (`start` hands the adapter a LAZY
+channel surface, resolved on the first trusted ingress — webhook, schedule fire, wake poke, or probe —
+after `ready()`): channels load their state files and replay durable turn intent at construction, so
+building them at boot — against the pre-restore mount — would cache emptiness (thread participation,
+delivery dedup, pending turns) and then clobber the restored files with it. The outcome is cached
+EITHER WAY, one activation per process: construction has side effects (healthy channels start and
+replay before another module's failure is reported) and no cleanup contract, so a retry could replay
+the same recovered turn concurrently — the retry boundary is a fresh session. A construction failure
+fails webhook/wake-poke requests (503) but not a schedule fire (cron does not consume channels; the
+error is logged). Verification moved to deploy time — the boot-time `failStartup` this host cannot
+have: `deploy agentcore --run` gates on a failed ingress-session stop (the probe must not "verify"
+the previous image), then drives the forwarder's reserved `/__fastagent/probe` path (answers on every
+forwarder topology; schedule-only URLs refuse ordinary public traffic), which relays a trusted
+`probe` envelope and passes back the runtime's transport-200 structured verdict `{ ok, error? }` —
+transport-200 because the ordinary webhook relay folds a non-200 into an opaque 502, which would
+strip exactly these diagnostics.
 
 **Credentials ride that snapshot, so the secrets dir is INSIDE the state root** (`/mnt/state/.secrets`,
 `deploy/agentcore/plan.ts` `SECRETS_DIR`) — the one place AgentCore departs from the sibling layout the

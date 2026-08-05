@@ -57,6 +57,71 @@ export interface AgentcoreRunPlan {
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
+/** How long the post-deploy probe waits for the fresh session (image pull + microVM boot + snapshot
+ *  restore + channel construction) before gating with the last answer. */
+const PROBE_TIMEOUT_MS = 120_000;
+const PROBE_INTERVAL_MS = 3_000;
+
+/**
+ * Drive the forwarder's reserved `/__fastagent/probe` path until it answers, and read the runtime's
+ * STRUCTURED verdict. The path answers on every forwarder topology (a schedule-only URL refuses
+ * ordinary public traffic, so a plain `GET /health` would 404 there), and the verdict rides a
+ * transport-200 JSON body `{ ok, error? }` — the ordinary webhook relay folds a non-200 transport
+ * into an opaque 502, which would strip the very diagnostics this probe exists to carry.
+ *
+ * Outcome policy: `ok:true` verifies the deploy; `ok:false` gates IMMEDIATELY with the runtime's own
+ * error text (construction rejections are cached per session, so polling cannot change the answer);
+ * anything else (unroutable URL, forwarder 4xx/5xx, malformed body) is retried to the deadline —
+ * that budget's job is absorbing cold-start provisioning — and then gates with the last answer seen.
+ */
+async function probeRuntime(
+  probeUrl: string,
+  auth: string,
+  fetchImpl: typeof fetch,
+  timeoutMs = PROBE_TIMEOUT_MS,
+  intervalMs = PROBE_INTERVAL_MS,
+): Promise<{ ok: true } | { ok: false; gate: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last: string | undefined;
+  for (;;) {
+    try {
+      const res = await fetchImpl(probeUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ auth }),
+        signal: AbortSignal.timeout(65_000),
+      });
+      const bodyText = await res.text();
+      if (res.status === 200) {
+        let verdict: { ok?: unknown; error?: unknown } | undefined;
+        try {
+          verdict = JSON.parse(bodyText) as { ok?: unknown; error?: unknown };
+        } catch {
+          /* malformed — fall through to retry with it as the last answer */
+        }
+        if (verdict?.ok === true) return { ok: true };
+        if (verdict?.ok === false) {
+          const error = typeof verdict.error === "string" ? verdict.error : "unknown error";
+          return { ok: false, gate: `the deployed runtime failed its probe: ${error} — fix and re-run` };
+        }
+      }
+      const firstLine = bodyText.trim().split("\n")[0] ?? "";
+      last = `${res.status}${firstLine ? ` ${firstLine}` : ""}`;
+    } catch {
+      /* not routable yet (Function URL DNS, cold start) — keep polling until the deadline */
+    }
+    if (Date.now() >= deadline) {
+      return {
+        ok: false,
+        gate: last
+          ? `the forwarder probe never verified the deployment (last answer: ${last}) — check the runtime logs and re-run`
+          : "the forwarder URL never answered the probe — check the Function URL / runtime logs and re-run",
+      };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 /** Stack outputs (`describe-stacks --query "Stacks[0].Outputs"`) → { OutputKey: OutputValue }. */
 export function parseStackOutputs(stdout: string): Record<string, string> {
   try {
@@ -135,6 +200,8 @@ export async function deployAgentcoreRun(
   registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
   registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
   registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
+  /** Injected in tests; the probe itself stays inside the run so no deploy can skip it. */
+  probe: { fetchImpl?: typeof fetch; timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<AgentcoreRunOutcome> {
   const gate = (g: string): AgentcoreRunOutcome => ({ ok: false, gate: g });
   const stack = `fastagent-${plan.name}`;
@@ -452,23 +519,54 @@ export async function deployAgentcoreRun(
       if (/ResourceNotFound|not\s*found|does not exist/i.test(stderr)) {
         log("note: no ingress session to stop (first deploy, or already reclaimed)");
       } else {
-        log(
-          `warn: could not stop the ingress session — an ACTIVE session may keep serving the PREVIOUS ` +
-            `image until reclaimed (idle timeout / 8 h ceiling). Stop it manually: aws ${stopCommand.join(" ")}`,
-        );
+        // A GATE, not a warning: the probe below reaches the SAME fixed session id, so a session
+        // still running the previous image would answer it and the deploy would claim to have
+        // verified a serving path it never touched. Unable to guarantee the session is fresh =
+        // unable to verify = stop.
         const firstLine = stderr.trim().split("\n")[0];
-        if (firstLine) log(`warn: ${firstLine}`);
+        return gate(
+          `could not stop the ingress session — it may still be serving the PREVIOUS image, so the ` +
+            `deploy cannot verify the new one${firstLine ? ` (${firstLine})` : ""}. ` +
+            `Stop it manually (aws ${stopCommand.join(" ")}) and re-run`,
+        );
       }
     }
   }
 
-  // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the
-  //    forwarder's Function URL. Gate policy is the shared registration-gate kernel.
-  if (plan.channels.length > 0 && !url) {
+  // 8c. Every forwarder topology MUST carry the ForwarderUrl output — schedule-only and
+  //     selfSchedule-only deployments included, since the probe below is their only construction
+  //     check (there is no boot-time failStartup on this host). A missing output means an edited
+  //     template; skipping the probe silently would let such a deploy report success unverified.
+  //     Only a pure-invoke deployment (no forwarder) legitimately has no URL and nothing to probe.
+  //     `channels.length` is belt-and-braces: the planner derives needsForwarder FROM the channel
+  //     list, but this gate must not silently trust that invariant across callers.
+  if ((plan.needsForwarder || plan.channels.length > 0) && !url) {
     return gate(
-      "channels are declared but the stack has no ForwarderUrl output — regenerate the template with --force",
+      "this deployment needs the forwarder but the stack has no ForwarderUrl output — regenerate the " +
+        "template with --force",
     );
   }
+
+  // 8d. Warm + verify the NEW serving path end to end, BEFORE registration: the probe wakes a fresh
+  //     session on the new image through the forwarder's reserved path, which restores the state
+  //     snapshot and constructs the channels — construction is deferred to exactly that moment
+  //     (channels/agentcore.ts), so this is where a bad credential, a broken channels/ module, or an
+  //     unrestorable snapshot surfaces AT DEPLOY TIME with the runtime's own error text.
+  if (url) {
+    log("probing the deployed runtime (state restore + channel construction)…");
+    const verdict = await probeRuntime(
+      `${url}/__fastagent/probe`,
+      plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
+      probe.fetchImpl ?? fetch,
+      probe.timeoutMs,
+      probe.intervalMs,
+    );
+    if (!verdict.ok) return gate(verdict.gate);
+    log("runtime verified (state restored, channels constructed)");
+  }
+
+  // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the
+  //    forwarder's Function URL. Gate policy is the shared registration-gate kernel.
   const reg = registrationGate(log, "re-run to retry registration (steps already done are skipped)");
   if (url) {
     if (plan.channels.includes("telegram")) {

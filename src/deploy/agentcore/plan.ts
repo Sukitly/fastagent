@@ -450,6 +450,23 @@ exports.handler = async (event, ctx) => {
     if (failed > 0) return { statusCode: 500, body: \`\${failed} alarm(s) failed\\n\` };
     return { statusCode: 200, body: "ok\\n" };
   }
+  // The deploy driver's probe (reserved path, ingress secret): wake the runtime through the SAME
+  // trusted envelope pipeline (state URLs included — a direct InvokeAgentRuntime call could not mint
+  // them, and would make the runtime construct against a pre-restore mount) and pass its structured
+  // transport-200 verdict back VERBATIM. The ordinary webhook path below folds a non-200 transport
+  // into an opaque 502, which would strip exactly the diagnostics the probe exists to carry — and it
+  // sits BEFORE the WEBHOOKS_ENABLED gate so schedule-only topologies (whose URLs refuse ordinary
+  // public traffic) are probeable too.
+  if (event.rawPath === "/__fastagent/probe") {
+    const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
+    if (!process.env.INGRESS_SECRET || req.auth !== process.env.INGRESS_SECRET) return { statusCode: 403, body: "forbidden\\n" };
+    const r = await invoke({ kind: "probe" });
+    if (r.status !== 200) {
+      console.log(\`probe transport error \${r.status}: \${r.body}\`);
+      return { statusCode: 502, body: "upstream error\\n" };
+    }
+    return { statusCode: 200, headers: { "content-type": "application/json" }, body: r.body.toString() };
+  }
   // Enforce the advertised ORIGINAL-body ceiling before base64 adds another 4/3 inside the runtime
   // envelope. This also leaves deterministic room for headers/query/JSON under Lambda's 6 MB cap.
   const webhookBytes = event.body === undefined ? 0
