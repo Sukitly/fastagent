@@ -269,12 +269,17 @@ export async function preflightDeploy(input: {
     const rel = relative(workspace, p);
     return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? undefined : rel.split(sep).join("/");
   };
-  // The secrets DIR is the unit, not the two filenames we happen to know: an atomic-write temp beside
-  // auth.json, a second key file, an editor backup of `.env` — all of it must stay out of the image, and
-  // `resolveSecretsDir` says as much ("everything fastagent manages that must never leave the machine").
-  // The auth path adds an entry only when an override puts it OUTSIDE that dir. An external secrets dir
-  // (the deployed posture: a mounted volume) is outside the context — nothing to check, nothing to
-  // exclude.
+  // The secrets DIR is the unit of RESPONSIBILITY, but never the unit of the leak QUESTION below: the
+  // generated ignore excludes the dir's CONTENTS (`**/.secrets/**`) so its two value-free tracked
+  // scaffolds can be re-included, and a directory-level question reads that correct file as "not
+  // excluded" — the generator's own default output gated its own deploy (field-hit: a fresh
+  // kit-layout workspace without --force; --force skips checking our own file, which is why the
+  // combination stayed invisible). What leaks is a FILE, so files are what the gate asks about — see
+  // secretDirFiles below, which enumerates what is actually inside (an atomic-write temp beside
+  // auth.json, a second key file, an editor backup of `.env`: the dir-as-unit worry, covered per
+  // file). The auth path adds an entry only when an override puts it OUTSIDE that dir. An external
+  // secrets dir (the deployed posture: a mounted volume) is outside the context — nothing to check,
+  // nothing to exclude.
   const secretsRel = inContext(resolveSecretsDir(agentDir));
   const authRel = inContext(authPath);
   const authElsewhere = authRel !== undefined && (secretsRel === undefined || !authRel.startsWith(`${secretsRel}/`));
@@ -318,7 +323,26 @@ export async function preflightDeploy(input: {
       .map((n) => join(relDir, n).split(sep).join("/"));
   };
   const envFiles = (await Promise.all([...new Set(["", agentPrefix])].map(dotEnvFiles))).flat();
-  const leakCandidates = [...(await present(secretPaths)), ...envFiles];
+  // Everything ACTUALLY inside the secrets dir, minus the two tracked scaffolds the image ships on
+  // purpose (they carry no values; the generated ignore re-includes them by name). Existence is the
+  // enumeration itself — readdir lists exactly what could be baked — and a hand-written ignore that
+  // misses the dir now gates NAMING the leaking file, a better diagnostic than pointing at a
+  // directory. Recurses: a subdirectory inside .secrets is unusual but its files leak all the same.
+  const secretDirFiles = async (dirRel: string): Promise<string[]> => {
+    const entries = await readdir(join(workspace, dirRel), { withFileTypes: true }).catch(() => []);
+    const files: string[] = [];
+    for (const entry of entries) {
+      if (entry.name === ".gitignore" || entry.name === ".env.example") continue;
+      if (entry.isDirectory()) files.push(...(await secretDirFiles(`${dirRel}/${entry.name}`)));
+      else files.push(`${dirRel}/${entry.name}`);
+    }
+    return files;
+  };
+  const leakCandidates = [
+    ...(secretsRel ? await secretDirFiles(secretsRel) : []),
+    ...(await present(authElsewhere && authRel !== undefined ? [authRel] : [])),
+    ...envFiles,
+  ];
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present([...new Set([`${agentPrefix}node_modules`, "node_modules"])]);
   const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : [])];
