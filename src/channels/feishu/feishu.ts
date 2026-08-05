@@ -232,6 +232,7 @@ function createFeishuRuntimeFactory(
     // behavior: unmatched mentions buffer as context — delayed, never lost.
     let botOpenId: string | undefined;
     let persistBotIdentity: (openId: string) => void = () => {}; // bound once the state home exists
+    let invalidateBotIdentity: () => void = () => {}; // likewise
     void api.botInfo().then(
       (me) => {
         if (me.openId) {
@@ -240,11 +241,23 @@ function createFeishuRuntimeFactory(
           }
           botOpenId = me.openId;
           persistBotIdentity(me.openId);
-        } else if (botOpenId === undefined) {
-          log.warn(`${label} bot/v3/info returned no open_id — group @mention summon stays off`);
+        } else {
+          // The call SUCCEEDED and the platform reported no identity — an affirmative "there is no
+          // bot here" (capability off, app reconfigured), not transport weather. This is the one
+          // answer that must also INVALIDATE the cache: keeping a summon identity the platform just
+          // declined to confirm would quietly turn fail-closed into fail-open.
+          log.warn(
+            botOpenId === undefined
+              ? `${label} bot/v3/info returned no open_id — group @mention summon stays off`
+              : `${label} bot/v3/info returned no open_id — cached identity cleared; group @mention summon stays off`,
+          );
+          botOpenId = undefined;
+          invalidateBotIdentity();
         }
       },
       (e) =>
+        // A FAILED call is transport weather (network, rate limit): the platform said nothing about
+        // the identity, so a cached one keeps serving — the degradation this cache exists for.
         log.warn(
           botOpenId === undefined
             ? `${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`
@@ -299,24 +312,43 @@ function createFeishuRuntimeFactory(
     // The cached bot identity (rationale at the botInfo block above): seed synchronously — the
     // factory runs to completion before any promise resolves, so botOpenId is still unset here and
     // the seed is what the first envelope's dispatch sees. Refresh keeps the file current.
+    //
+    // BOUND TO THE APP: the state home is per channel KIND, and an operator can point kept state at
+    // a different app (a recreated app, a tenant migration). A cached identity from another app
+    // would make THIS bot treat mentions of the OLD bot as its own summons — identity impersonation,
+    // strictly worse than the race the cache removes — so the cache counts only when it names the
+    // current appId. A mismatch is not noise worth warning about: the next persist IS the migration.
     const botFile = join(stateHome, "bot.json");
-    const storedBot = loadStateFile(botFile);
+    const storedBot = loadStateFile(botFile) as { appId?: unknown; openId?: unknown } | undefined;
     let cachedOpenId: string | undefined;
     if (storedBot !== undefined) {
-      const openId = (storedBot as { openId?: unknown }).openId;
-      if (typeof openId === "string") cachedOpenId = openId;
-      else log.warn(`${label} unexpected shape in ${botFile} — ignoring the cached bot identity`);
+      if (typeof storedBot.appId !== "string") {
+        log.warn(`${label} unexpected shape in ${botFile} — ignoring the cached bot identity`);
+      } else if (storedBot.appId === appId && typeof storedBot.openId === "string") {
+        cachedOpenId = storedBot.openId;
+      }
     }
     botOpenId ??= cachedOpenId;
     persistBotIdentity = (openId) => {
       if (openId === cachedOpenId) return;
       cachedOpenId = openId;
       try {
-        saveStateFile(botFile, { openId });
+        saveStateFile(botFile, { appId, openId });
       } catch (e) {
         log.warn(
           `${label} could not persist the bot identity to ${botFile} — the next cold start races bot/v3/info again: ${String(e)}`,
         );
+      }
+    };
+    invalidateBotIdentity = () => {
+      if (cachedOpenId === undefined) return;
+      cachedOpenId = undefined;
+      try {
+        // `{ appId }` with no openId reads as "no cache" at the loader — the atomic write is reused
+        // instead of introducing a deletion path.
+        saveStateFile(botFile, { appId });
+      } catch (e) {
+        log.warn(`${label} could not clear the cached bot identity ${botFile}: ${String(e)}`);
       }
     };
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);

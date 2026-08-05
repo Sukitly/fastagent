@@ -206,6 +206,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
     build(root);
     await flush();
     expect(JSON.parse(readFileSync(join(root, "channels", "feishu", "bot.json"), "utf8"))).toEqual({
+      appId: "app", // bound to the app: kept state must not hand this identity to a different appId
       openId: "ou_bot",
     });
 
@@ -230,23 +231,102 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
     expect(second.calls[0]?.prompt.text).toContain("出来");
   });
 
-  it("with no cache and an unresolved bot/v3/info, a group mention still fails closed (buffered, not lost)", async () => {
+  it("with no cache and an unresolved bot/v3/info, a mention is BUFFERED — folded into the next turn, never lost", async () => {
     const root = mkdtempSync(join(tmpdir(), "feishu-bot-nocache-"));
     tempRoots.push(root);
-    feishuFetch({ "/bot/v3/info": () => new Promise<Response>(() => {}) });
+    // A controllable identity: mention #1 arrives while bot/v3/info is still pending.
+    let releaseBotInfo!: (r: Response) => void;
+    const gate = new Promise<Response>((r) => {
+      releaseBotInfo = r;
+    });
+    feishuFetch({ "/bot/v3/info": () => gate });
     const { handler, calls, idle } = build(root);
     await handler(
       feishuRequest(
         messageEvent({
           id: "om_prelaunch",
           chatType: "group",
-          content: JSON.stringify({ text: "@_user_1 hi" }),
+          content: JSON.stringify({ text: "@_user_1 早于身份的提问" }),
           mentions: MENTION,
         }),
       ),
     );
     await idle();
-    expect(calls).toHaveLength(0); // unchanged fail-closed tier — the deploy probe is the only envelope this should ever be
+    expect(calls).toHaveLength(0); // fail-closed: not answered while the identity is unknown…
+
+    releaseBotInfo(Response.json({ code: 0, msg: "ok", bot: { open_id: "ou_bot", app_name: "Bot" } }));
+    await flush();
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_after_identity",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 现在呢" }),
+          mentions: MENTION,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+    // …and "delayed, never lost" is a claim about the BUFFER, so prove it: the eaten mention rides
+    // the next answered turn as context. Asserting only "not answered" would also pass for a drop.
+    expect(calls[0]?.prompt.text).toContain("recent group discussion");
+    expect(calls[0]?.prompt.text).toContain("早于身份的提问");
+  });
+
+  it("a cache written by a DIFFERENT app is ignored — kept state must not let a new app impersonate the old bot", async () => {
+    const root = mkdtempSync(join(tmpdir(), "feishu-bot-otherapp-"));
+    tempRoots.push(root);
+    mkdirSync(join(root, "channels", "feishu"), { recursive: true });
+    // The operator swapped FEISHU_APP_ID but kept the state dir: the file names the OLD app.
+    writeFileSync(
+      join(root, "channels", "feishu", "bot.json"),
+      JSON.stringify({ appId: "some_previous_app", openId: "ou_bot" }),
+    );
+    feishuFetch({ "/bot/v3/info": () => new Promise<Response>(() => {}) });
+    const { handler, calls, idle } = build(root);
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_old_bot_mention",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 老bot在吗" }),
+          mentions: MENTION, // mentions ou_bot — the OLD app's identity
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(0); // fail-closed, not an answer under a borrowed identity
+  });
+
+  it("a successful bot/v3/info WITHOUT an open_id invalidates the cache — fail-closed is restored, not papered over", async () => {
+    const root = mkdtempSync(join(tmpdir(), "feishu-bot-invalidate-"));
+    tempRoots.push(root);
+    // Mount 1: identity resolves and lands on disk.
+    feishuFetch();
+    build(root);
+    await flush();
+    expect(JSON.parse(readFileSync(join(root, "channels", "feishu", "bot.json"), "utf8")).openId).toBe("ou_bot");
+
+    // Mount 2: the platform AFFIRMATIVELY reports no identity (bot capability off) — unlike a failed
+    // call, this must clear the cache, or a summon identity the platform declined to confirm keeps
+    // routing (fail-open).
+    feishuFetch({ "/bot/v3/info": () => Response.json({ code: 0, msg: "ok", bot: {} }) });
+    const second = build(root);
+    await flush();
+    await second.handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_after_invalidate",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 还在吗" }),
+          mentions: MENTION,
+        }),
+      ),
+    );
+    await second.idle();
+    expect(second.calls).toHaveLength(0); // no borrowed identity
+    expect(JSON.parse(readFileSync(join(root, "channels", "feishu", "bot.json"), "utf8")).openId).toBeUndefined(); // disk cleared too
   });
 });
 
