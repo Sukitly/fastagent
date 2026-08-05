@@ -15,7 +15,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createIdRing, createSeenRing } from "../seen.ts";
 import { createTaskTracker } from "../tasks.ts";
-import { ensureStateHome, removeRetiredStateFile } from "../state.ts";
+import { ensureStateHome, loadStateFile, removeRetiredStateFile, saveStateFile } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
@@ -237,17 +237,50 @@ function createFeishuRuntimeFactory(
       onMessageSent: (id) => recordSentId(id),
     });
 
-    // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
-    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. A
-    // mention landing in that first moment is buffered as context rather than answered; it is folded
-    // into the next answered turn in that place, so the ask is delayed, never lost.
+    // One bot/v3/info per process refreshes the bot's own open_id — the identity the default route
+    // matches group @mentions against. The CACHED copy (bot.json, seeded synchronously once the state
+    // home exists below) is what makes the first envelope safe: this fetch is fire-and-forget, and
+    // under the AgentCore posture channel construction happens INSIDE the first envelope
+    // (channels/agentcore.ts lazy construction), so a network round trip can never beat that same
+    // envelope's own dispatch — without the seed, every cold start's FIRST group mention raced this
+    // fetch and lost (field-observed: an explicit @ buffered as bystander context). The open_id is a
+    // stable property of the app, so disk beats network; the only envelope a deployment ever serves
+    // without the file is its first one, which is the deploy driver's probe — it carries no mention.
+    // No identity at all (fresh dir, no cache, fetch pending/failed) keeps today's fail-closed
+    // behavior: unmatched mentions buffer as context — delayed, never lost.
     let botOpenId: string | undefined;
+    let persistBotIdentity: (openId: string) => void = () => {}; // bound once the state home exists
+    let invalidateBotIdentity: () => void = () => {}; // likewise
     void api.botInfo().then(
       (me) => {
-        botOpenId = me.openId;
-        if (!botOpenId) log.warn(`${label} bot/v3/info returned no open_id — group @mention summon stays off`);
+        if (me.openId) {
+          if (botOpenId !== undefined && botOpenId !== me.openId) {
+            log.info(`${label} bot open_id changed (${botOpenId} → ${me.openId}) — updating the cached identity`);
+          }
+          botOpenId = me.openId;
+          persistBotIdentity(me.openId);
+        } else {
+          // The call SUCCEEDED and the platform reported no identity — an affirmative "there is no
+          // bot here" (capability off, app reconfigured), not transport weather. This is the one
+          // answer that must also INVALIDATE the cache: keeping a summon identity the platform just
+          // declined to confirm would quietly turn fail-closed into fail-open.
+          log.warn(
+            botOpenId === undefined
+              ? `${label} bot/v3/info returned no open_id — group @mention summon stays off`
+              : `${label} bot/v3/info returned no open_id — cached identity cleared; group @mention summon stays off`,
+          );
+          botOpenId = undefined;
+          invalidateBotIdentity();
+        }
       },
-      (e) => log.warn(`${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`),
+      (e) =>
+        // A FAILED call is transport weather (network, rate limit): the platform said nothing about
+        // the identity, so a cached one keeps serving — the degradation this cache exists for.
+        log.warn(
+          botOpenId === undefined
+            ? `${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`
+            : `${label} bot/v3/info failed; running on the cached identity (bot.json): ${String(e)}`,
+        ),
     );
     void api.listAppScopes().then(
       (scopes) => {
@@ -294,6 +327,48 @@ function createFeishuRuntimeFactory(
     // after the release following the participant model ships — by then no live deployment can still
     // be carrying the file. test/migration-deadline.test.ts fails when due.
     removeRetiredStateFile(stateHome, "owned-threads.json", label);
+    // The cached bot identity (rationale at the botInfo block above): seed synchronously — the
+    // factory runs to completion before any promise resolves, so botOpenId is still unset here and
+    // the seed is what the first envelope's dispatch sees. Refresh keeps the file current.
+    //
+    // BOUND TO THE APP: the state home is per channel KIND, and an operator can point kept state at
+    // a different app (a recreated app, a tenant migration). A cached identity from another app
+    // would make THIS bot treat mentions of the OLD bot as its own summons — identity impersonation,
+    // strictly worse than the race the cache removes — so the cache counts only when it names the
+    // current appId. A mismatch is not noise worth warning about: the next persist IS the migration.
+    const botFile = join(stateHome, "bot.json");
+    const storedBot = loadStateFile(botFile) as { appId?: unknown; openId?: unknown } | undefined;
+    let cachedOpenId: string | undefined;
+    if (storedBot !== undefined) {
+      if (typeof storedBot.appId !== "string") {
+        log.warn(`${label} unexpected shape in ${botFile} — ignoring the cached bot identity`);
+      } else if (storedBot.appId === appId && typeof storedBot.openId === "string") {
+        cachedOpenId = storedBot.openId;
+      }
+    }
+    botOpenId ??= cachedOpenId;
+    persistBotIdentity = (openId) => {
+      if (openId === cachedOpenId) return;
+      cachedOpenId = openId;
+      try {
+        saveStateFile(botFile, { appId, openId });
+      } catch (e) {
+        log.warn(
+          `${label} could not persist the bot identity to ${botFile} — the next cold start races bot/v3/info again: ${String(e)}`,
+        );
+      }
+    };
+    invalidateBotIdentity = () => {
+      if (cachedOpenId === undefined) return;
+      cachedOpenId = undefined;
+      try {
+        // `{ appId }` with no openId reads as "no cache" at the loader — the atomic write is reused
+        // instead of introducing a deletion path.
+        saveStateFile(botFile, { appId });
+      } catch (e) {
+        log.warn(`${label} could not clear the cached bot identity ${botFile}: ${String(e)}`);
+      }
+    };
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /** This channel's place key for a thread (the shared store is key-agnostic). */
     // The SAME identity the session uses (`placeKey`) — a thread's place. Defining it twice would let a
