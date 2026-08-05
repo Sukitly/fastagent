@@ -55,7 +55,9 @@ afterEach(async () => {
  * Open-platform fetch mock: token/botInfo/cards/messages/resources all answer; every request is
  * recorded as { url, method, body } for assertions.
  */
-function feishuFetch(overrides: Partial<Record<string, (url: string, init: RequestInit) => Response>> = {}) {
+function feishuFetch(
+  overrides: Partial<Record<string, (url: string, init: RequestInit) => Response | Promise<Response>>> = {},
+) {
   const seen: { url: string; method: string; body?: Record<string, unknown> }[] = [];
   let msgId = 0;
   let cardId = 0;
@@ -175,6 +177,78 @@ function messageEvent(over: {
     },
   };
 }
+
+describe("bot identity cache (the lazy-construction mention race)", () => {
+  const MENTION = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+  const build = (root: string) => {
+    const { agent, calls } = replyingAgent("the answer");
+    const routes = buildFeishuChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      apiBaseUrl: BASE,
+    })({
+      agent,
+      stateRoot: root,
+    });
+    const handler = routes["POST /feishu"];
+    if (!handler) throw new Error("expected POST /feishu");
+    const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+    channelIdles.add(idle as () => Promise<void>);
+    return { handler, calls, idle };
+  };
+
+  it("persists the resolved identity, and the NEXT mount answers a mention BEFORE bot/v3/info returns", async () => {
+    const root = mkdtempSync(join(tmpdir(), "feishu-bot-cache-"));
+    tempRoots.push(root);
+    // Mount 1: bot/v3/info resolves normally → the identity lands in bot.json.
+    feishuFetch();
+    build(root);
+    await flush();
+    expect(JSON.parse(readFileSync(join(root, "channels", "feishu", "bot.json"), "utf8"))).toEqual({
+      openId: "ou_bot",
+    });
+
+    // Mount 2 (a cold start): bot/v3/info HANGS — under AgentCore's lazy construction the first
+    // envelope dispatches in the same tick as construction, so a network answer can never arrive in
+    // time. The cached identity must carry the summon: without it this explicit @ is buffered as
+    // bystander context (the field-observed regression).
+    feishuFetch({ "/bot/v3/info": () => new Promise<Response>(() => {}) });
+    const second = build(root);
+    await second.handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_first_after_cold_start",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 出来" }),
+          mentions: MENTION,
+        }),
+      ),
+    );
+    await second.idle();
+    expect(second.calls).toHaveLength(1);
+    expect(second.calls[0]?.prompt.text).toContain("出来");
+  });
+
+  it("with no cache and an unresolved bot/v3/info, a group mention still fails closed (buffered, not lost)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "feishu-bot-nocache-"));
+    tempRoots.push(root);
+    feishuFetch({ "/bot/v3/info": () => new Promise<Response>(() => {}) });
+    const { handler, calls, idle } = build(root);
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_prelaunch",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 hi" }),
+          mentions: MENTION,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(0); // unchanged fail-closed tier — the deploy probe is the only envelope this should ever be
+  });
+});
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
