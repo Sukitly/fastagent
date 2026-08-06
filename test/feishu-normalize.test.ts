@@ -72,7 +72,7 @@ describe("card (interactive) decoding — the shape the agent's OWN answers come
     ],
   };
 
-  it("reads a card's text and resources instead of the bare type marker", () => {
+  it("reads a card's text instead of the bare type marker", () => {
     const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) });
 
     expect(decoded.text).toContain("需要先确认两项"); // the title
@@ -80,7 +80,29 @@ describe("card (interactive) decoding — the shape the agent's OWN answers come
     expect(decoded.text).toContain("PR (https://example.test/pr/1)");
     expect(decoded.text).toContain("备注"); // `note` nests its own elements
     expect(decoded.text).not.toBe("[interactive message]");
-    expect(decoded.resources).toEqual([{ kind: "image", key: "img_card_1" }]);
+  });
+
+  it("collects NO resources from a card — the platform cannot serve them, so a key here would only fail", () => {
+    // `im/v1/messages/:id/resources/:key` answers 234043 ("Unsupported message type") for a card
+    // message id: a documented limitation, not a permission gap, so the download can never succeed.
+    // A collected key becomes a PRIMARY turn input, and primary loads are fail-fast — so collecting
+    // would turn a card that merely read as a marker into a turn that ERRORS OUT. Strictly worse than
+    // the gap this branch closes.
+    const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) });
+
+    expect(decoded.resources).toEqual([]);
+    expect(decoded.text).toContain("[image]"); // the model still learns the image is there
+  });
+
+  it("still collects resources from a POST — the restriction is the card's, not the walker's", () => {
+    // The same node walker backs both branches, so pinning this here keeps a future "just don't
+    // collect" simplification from silently disarming rich-text attachments, which DO download.
+    const post = {
+      content: [[{ tag: "img", image_key: "img_post_1" }]],
+    };
+    expect(decodeFeishuContent({ message_type: "post", content: JSON.stringify(post) }).resources).toEqual([
+      { kind: "image", key: "img_post_1" },
+    ]);
   });
 
   it("accepts BOTH spellings — the platform's docs disagree with themselves (`interactive` vs `card`)", () => {
