@@ -196,6 +196,26 @@ describe("thread participation (shared)", () => {
     expect(stored(path)["oc_1:omt_old"]).toEqual({ humans: ["ou_alex"], agentParticipates: true }); // …migrated
   });
 
+  it("rejects a corrupt new key even when the legacy one is valid — no laundering into the migrated shape", () => {
+    const path = join(stateDir(), "p.json");
+    // Validating the two keys as one "either is a boolean" test would accept this: the legacy key is
+    // sound, so the record passes, the loader's `??` chain carries the non-boolean into memory, and the
+    // next full-map write persists it as if it were the migrated shape. Each key must stand on its own.
+    writeFileSync(
+      path,
+      JSON.stringify({ "oc_1:omt_a": { humans: ["ou_alex"], agentParticipates: "bad", agentSpoke: true } }),
+    );
+    const warnings: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
+
+    const store = createThreadParticipants(path, "[feishu]");
+
+    expect(store.admitsBareMessage("oc_1:omt_a")).toBe(false);
+    expect(warnings.some((message) => message.includes("starting with no thread participation"))).toBe(true);
+    store.merge("oc_1:omt_b", { humans: ["ou_bob"] }); // the rewrite must not carry the corrupt value back
+    expect(stored(path)["oc_1:omt_a"]).toBeUndefined();
+  });
+
   it("warns and starts empty when valid JSON has the wrong shape", () => {
     const path = join(stateDir(), "p.json");
     writeFileSync(path, JSON.stringify({ "oc_1:omt_a": { humans: "nope", agentParticipates: true } }));

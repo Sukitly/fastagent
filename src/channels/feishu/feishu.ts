@@ -746,15 +746,21 @@ function createFeishuRuntimeFactory(
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
       // bare message address it without a mention (§3).
       //
-      // `r.session === undefined` is what makes this fact mean what its reader assumes. Participation
+      // `r.session === undefined` is what makes THIS source mean what its reader assumes. Participation
       // is keyed by THREAD while the memory it stands in for is keyed by SESSION, and those agree only
       // when the session is derived from the place. A route supplying its own (the scaffold's
       // `session: user:<open_id>` example) can put two people's turns in one thread into different
-      // sessions — recording `agentParticipates` from one of them would tell the summon rule the agent took
-      // part in a conversation it cannot remember. So the flag records "the agent answered into THIS
-      // THREAD'S session". Such a thread keeps a bystander record and needs the ordinary mention to
-      // bootstrap if the route is later dropped. `group` matches the observation above so the record is
-      // never half-written.
+      // sessions — recording `agentParticipates` from one of them would claim the agent answered into a
+      // conversation this thread's session never held. Such a thread keeps a bystander record and needs
+      // the ordinary mention to bootstrap if the route is later dropped. `group` matches the observation
+      // above so the record is never half-written.
+      //
+      // SCOPE OF THAT NARROWING: it constrains this "answered here" source, NOT the field. The
+      // own-authorship source (acceptEvent, above) establishes participation before any turn ran in the
+      // thread, so it carries no memory claim at all — and cannot, since a thread opened on a room-level
+      // answer starts with an EMPTY session under every configuration, exactly as one bootstrapped by a
+      // mention does. `agentParticipates` therefore reads "the agent takes part in this place", and only
+      // the source below additionally guarantees the place's own session holds a turn.
       //
       // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
       // the thread as the agent has actually left it. A later delivery failure does not undo it —

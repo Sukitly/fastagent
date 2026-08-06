@@ -86,11 +86,17 @@ interface StoredParticipation {
 
 function isStoredParticipation(value: unknown): value is StoredParticipation {
   const record = value as StoredParticipation;
-  return (
-    Array.isArray(record?.humans) &&
-    record.humans.every((human) => typeof human === "string") &&
-    (typeof record.agentParticipates === "boolean" || typeof record.agentSpoke === "boolean")
-  );
+  if (!Array.isArray(record?.humans) || !record.humans.every((human) => typeof human === "string")) return false;
+  // Each key is validated on its OWN, then at least one must be present. A single "either is a boolean"
+  // test would accept a record whose new key holds a non-boolean as long as the legacy key is valid —
+  // and the loader's `??` chain would then carry that value into memory and rewrite it to disk on the
+  // next full-map write, laundering corrupt input into the migrated shape.
+  const present = (key: "agentParticipates" | "agentSpoke"): boolean | undefined =>
+    record[key] === undefined ? undefined : typeof record[key] === "boolean";
+  const newKey = present("agentParticipates");
+  const legacyKey = present("agentSpoke");
+  if (newKey === false || legacyKey === false) return false;
+  return newKey === true || legacyKey === true;
 }
 
 export function createThreadParticipants(path: string, label: string): ThreadParticipants {
