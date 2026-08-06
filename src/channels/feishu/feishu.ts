@@ -468,7 +468,7 @@ function createFeishuRuntimeFactory(
               agent,
               rec.session,
               prompt,
-              { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label },
+              { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label, appId },
               { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
               () => {
                 // Drop intent first: a crash between these writes may re-fold answered context later,

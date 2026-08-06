@@ -43,6 +43,10 @@ export interface FeishuTurnTransport {
   chatId: string;
   filesDir: string;
   label: string;
+  /** THIS app's own id (`cli_…`) — the identity a fetched message's `sender.id` carries when the
+   *  sender is an app. Needed to tell the agent's OWN messages from any other bot's in the same chat:
+   *  `sender_type` alone says "some app", which is not the question the referent path asks. */
+  appId: string;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
@@ -111,9 +115,46 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
       // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
       // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
-      const senderId = (parent.sender as { id?: string } | undefined)?.id;
-      const from = senderId ? `user ${senderId}` : undefined;
+      //
+      // OWN means THIS app, not "an app". A group can hold several bots, and `sender_type === "app"`
+      // is true for every one of them — matching on it alone would tell the model it wrote another
+      // bot's message and would walk that bot's reply chain (below). The identity to compare is the
+      // app id, because an app sender carries `id_type: "app_id"`: the cached bot open_id answers a
+      // different question (who was @mentioned) and would never match here. A missing or unexpected
+      // id fails CLOSED — not own, no extra hop — which is the pre-existing behaviour.
+      const appSender = parent.sender?.sender_type === "app";
+      const senderId = parent.sender?.id;
+      const ownMessage = appSender && senderId === t.appId;
+      // An app is not a person: labelling another bot's message "user cli_…" is the same misattribution
+      // in a quieter form, so the noun follows the sender type.
+      const from = ownMessage ? "you, the agent" : senderId ? `${appSender ? "app" : "user"} ${senderId}` : undefined;
       referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
+      // ONE further hop, and only through the agent's OWN message: quoting an answer means pointing at
+      // an exchange, and the half that says what was ASKED is the message that answer was replying to.
+      // This is the thread-bootstrap case — a topic opened on a room-level answer starts with an empty
+      // session, so without this the model gets its own reply with no idea what prompted it.
+      //
+      // Bounded deliberately: one hop, text only. Never through a human's message (there the quote IS
+      // what the user pointed at, and walking further would drag in messages nobody referenced), and
+      // no resources — an attachment two hops away was not pointed at by anyone in this turn, and
+      // loading it is a primary failure that could cost the answer.
+      if (ownMessage && parent.parent_id !== undefined) {
+        const askId = parent.parent_id;
+        const ask = await t.api.getMessage(askId).catch(() => undefined);
+        if (ask) {
+          const askText = truncateCodePointPrefix(
+            parseContent({
+              message_type: ask.msg_type ?? "unknown",
+              content: ask.body?.content ?? "",
+              mentions: ask.mentions as FeishuMention[] | undefined,
+            }).text,
+            REFERENT_MAX_CODE_POINTS,
+          );
+          // Silence beats a marker here: unlike the referent itself, nobody pointed at this message, so
+          // an empty or unreadable one is not a loss the model needs to be told about.
+          if (askText) referentBlock += `\n[which answered (msg ${askId}): ${askText}]`;
+        }
+      }
     }
   }
 
