@@ -160,11 +160,20 @@ export interface FeishuApi {
   editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
-  /** Fetch one message (the reply-referent path). Undefined when the API returns no item. */
-  getMessage(
-    messageId: string,
-  ): Promise<
-    | { message_id?: string; msg_type?: string; body?: { content?: string }; mentions?: unknown[]; sender?: unknown }
+  /** Fetch one message (the reply-referent path). Undefined when the API returns no item.
+   *
+   *  `sender` is typed rather than `unknown` because the referent path READS it: an app-sent message
+   *  whose id is THIS app's is the agent's own, which the prompt must say instead of attributing it to
+   *  "user cli_…". The message object carries more (`parent_id`, `root_id`, `thread_id`); they stay
+   *  unnamed until something reads them — this type is the surface in use, not a mirror of the wire. */
+  getMessage(messageId: string): Promise<
+    | {
+        message_id?: string;
+        msg_type?: string;
+        body?: { content?: string };
+        mentions?: unknown[];
+        sender?: { id?: string; id_type?: string; sender_type?: string };
+      }
     | undefined
   >;
   /** Download a message resource (image/file bytes). Caps at {@link MAX_DOWNLOAD_BYTES}. */

@@ -43,6 +43,10 @@ export interface FeishuTurnTransport {
   chatId: string;
   filesDir: string;
   label: string;
+  /** THIS app's own id (`cli_…`) — the identity a fetched message's `sender.id` carries when the
+   *  sender is an app. Needed to tell the agent's OWN messages from any other bot's in the same chat:
+   *  `sender_type` alone says "some app", which is not the question the referent path asks. */
+  appId: string;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
@@ -111,9 +115,30 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
       // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
       // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
-      const senderId = (parent.sender as { id?: string } | undefined)?.id;
-      const from = senderId ? `user ${senderId}` : undefined;
+      //
+      // OWN means THIS app, not "an app". A group can hold several bots, and `sender_type === "app"`
+      // is true for every one of them — matching on it alone would tell the model it wrote another
+      // bot's message. The identity to compare is the app id, because an app sender carries
+      // `id_type: "app_id"`: the cached bot open_id answers a different question (who was @mentioned)
+      // and would never match here. A missing or unexpected id fails CLOSED — labelled by id, never
+      // claimed as the agent's own.
+      const appSender = parent.sender?.sender_type === "app";
+      const senderId = parent.sender?.id;
+      const ownMessage = appSender && senderId === t.appId;
+      // An app is not a person: labelling another bot's message "user cli_…" is the same misattribution
+      // in a quieter form, so the noun follows the sender type.
+      const from = ownMessage ? "you, the agent" : senderId ? `${appSender ? "app" : "user"} ${senderId}` : undefined;
       referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
+      // The chain STOPS here, at the one message the user pointed at. Walking further — to what that
+      // message was itself replying to — was built and removed: it reconstructs HISTORY out of reply
+      // pointers, and history is the session's job. That framing has no non-arbitrary answers (how
+      // many levels? what about the level above that? how is it deduplicated against what the session
+      // already holds? how does an IMAGE two levels up become prompt text at all?), and every one of
+      // those questions is a symptom of solving a session-layer problem in the prompt layer. The real
+      // gap it was papering over — a thread opened on a room answer starts with an EMPTY session while
+      // the room's session holds the exchange — belongs to memory inheritance (design/participant-
+      // model.md §8, rungs 3-4), where images and tool results come along for free because they are
+      // already in the history rather than being re-serialised into a prompt string.
     }
   }
 
