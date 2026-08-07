@@ -1684,11 +1684,15 @@ describe("turn flow", () => {
     expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
   });
 
-  it("a thread opened on the agent's own card reads that card AND the ask it answered", async () => {
-    // The thread-bootstrap case. A topic opened on a room-level answer starts with an EMPTY session,
-    // so everything the model knows about the exchange has to arrive through the referent. Two things
-    // used to be lost at once: the card decoded to the bare `[interactive message]` marker, and
-    // nothing said what the card was answering.
+  it("a thread opened on the agent's own card reads that card, and stops at it", async () => {
+    // Two halves. The card is READ (its own answers are cards, so a follow-up on one used to quote a
+    // bare `[interactive message]` marker), and it is attributed to the agent itself.
+    //
+    // The second half is the boundary: the referent's own `parent_id` is NOT followed. Walking it
+    // reconstructs history out of reply pointers, which is the session's job — and the question has no
+    // non-arbitrary answer (how many levels? deduplicated against the session how? an image two levels
+    // up serialised into prompt text how?). A thread starting with an empty session is a memory-
+    // inheritance gap (§8), not a referent-depth one.
     const fx = feishuFetch({
       "/im/v1/messages/om_bot_card": () =>
         Response.json({
@@ -1699,7 +1703,7 @@ describe("turn flow", () => {
               {
                 message_id: "om_bot_card",
                 msg_type: "interactive",
-                parent_id: "om_original_ask", // what the agent was answering, in the room
+                parent_id: "om_original_ask", // present, and deliberately NOT followed
                 body: {
                   content: JSON.stringify({
                     elements: [[{ tag: "text", text: "确认后我会给出方案；批准后再实现 SVG 足球页面。" }]],
@@ -1745,15 +1749,14 @@ describe("turn flow", () => {
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("SVG 足球页面"); // the card is READ, not reported as unreadable
     expect(prompt).not.toContain("[interactive message]");
-    expect(prompt).toContain("from you, the agent"); // its own message, not "user cli_app"
-    expect(prompt).toContain("[which answered (msg om_original_ask): 加一个新的页面"); // the room's ask
-    expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1); // exactly ONE extra hop
+    expect(prompt).toContain("from you, the agent"); // its own message, not "user cli_self"
+    expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(0); // the chain is not walked
   });
 
-  it("another BOT's message is not the agent's own: no self-attribution, no reply-chain walk", async () => {
+  it("another BOT's message is not the agent's own: no self-attribution", async () => {
     // A group can hold several bots, so `sender_type === "app"` answers "some app", not "this app".
-    // Matching on it alone would tell the model it wrote a message it never sent — and would walk a
-    // stranger's reply chain into the prompt. The identity compared is the app id the sender carries.
+    // Matching on it alone would tell the model it wrote a message it never sent. The identity
+    // compared is the app id the sender carries.
     const fx = feishuFetch({
       "/im/v1/messages/om_other_bot": () =>
         Response.json({
@@ -1781,33 +1784,6 @@ describe("turn flow", () => {
     expect(prompt).not.toContain("you, the agent"); // …but not claimed as its own
     expect(prompt).toContain("from app cli_someone_else"); // an app is not a person either
     expect(fx.calls("/im/v1/messages/om_other_bots_ask", "GET")).toHaveLength(0);
-  });
-
-  it("stops at one hop: a HUMAN referent is what the user pointed at, so its own parent is not walked", async () => {
-    const fx = feishuFetch({
-      "/im/v1/messages/om_human_quote": () =>
-        Response.json({
-          code: 0,
-          msg: "ok",
-          data: {
-            items: [
-              {
-                message_id: "om_human_quote",
-                msg_type: "text",
-                parent_id: "om_further_back", // present, and deliberately NOT followed
-                body: { content: JSON.stringify({ text: "the quoted line" }) },
-                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
-              },
-            ],
-          },
-        }),
-    });
-    const { handler, calls, idle } = buildChannel();
-    await handler(feishuRequest(messageEvent({ id: "om_h1", text: "about that", parentId: "om_human_quote" })));
-    await idle();
-
-    expect(calls[0]?.prompt.text).toContain("the quoted line");
-    expect(fx.calls("/im/v1/messages/om_further_back", "GET")).toHaveLength(0);
   });
 
   it("a custom route's null remains a full ignore and does not enter the default context buffer", async () => {

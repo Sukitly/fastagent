@@ -118,10 +118,10 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       //
       // OWN means THIS app, not "an app". A group can hold several bots, and `sender_type === "app"`
       // is true for every one of them — matching on it alone would tell the model it wrote another
-      // bot's message and would walk that bot's reply chain (below). The identity to compare is the
-      // app id, because an app sender carries `id_type: "app_id"`: the cached bot open_id answers a
-      // different question (who was @mentioned) and would never match here. A missing or unexpected
-      // id fails CLOSED — not own, no extra hop — which is the pre-existing behaviour.
+      // bot's message. The identity to compare is the app id, because an app sender carries
+      // `id_type: "app_id"`: the cached bot open_id answers a different question (who was @mentioned)
+      // and would never match here. A missing or unexpected id fails CLOSED — labelled by id, never
+      // claimed as the agent's own.
       const appSender = parent.sender?.sender_type === "app";
       const senderId = parent.sender?.id;
       const ownMessage = appSender && senderId === t.appId;
@@ -129,32 +129,16 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       // in a quieter form, so the noun follows the sender type.
       const from = ownMessage ? "you, the agent" : senderId ? `${appSender ? "app" : "user"} ${senderId}` : undefined;
       referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
-      // ONE further hop, and only through the agent's OWN message: quoting an answer means pointing at
-      // an exchange, and the half that says what was ASKED is the message that answer was replying to.
-      // This is the thread-bootstrap case — a topic opened on a room-level answer starts with an empty
-      // session, so without this the model gets its own reply with no idea what prompted it.
-      //
-      // Bounded deliberately: one hop, text only. Never through a human's message (there the quote IS
-      // what the user pointed at, and walking further would drag in messages nobody referenced), and
-      // no resources — an attachment two hops away was not pointed at by anyone in this turn, and
-      // loading it is a primary failure that could cost the answer.
-      if (ownMessage && parent.parent_id !== undefined) {
-        const askId = parent.parent_id;
-        const ask = await t.api.getMessage(askId).catch(() => undefined);
-        if (ask) {
-          const askText = truncateCodePointPrefix(
-            parseContent({
-              message_type: ask.msg_type ?? "unknown",
-              content: ask.body?.content ?? "",
-              mentions: ask.mentions as FeishuMention[] | undefined,
-            }).text,
-            REFERENT_MAX_CODE_POINTS,
-          );
-          // Silence beats a marker here: unlike the referent itself, nobody pointed at this message, so
-          // an empty or unreadable one is not a loss the model needs to be told about.
-          if (askText) referentBlock += `\n[which answered (msg ${askId}): ${askText}]`;
-        }
-      }
+      // The chain STOPS here, at the one message the user pointed at. Walking further — to what that
+      // message was itself replying to — was built and removed: it reconstructs HISTORY out of reply
+      // pointers, and history is the session's job. That framing has no non-arbitrary answers (how
+      // many levels? what about the level above that? how is it deduplicated against what the session
+      // already holds? how does an IMAGE two levels up become prompt text at all?), and every one of
+      // those questions is a symptom of solving a session-layer problem in the prompt layer. The real
+      // gap it was papering over — a thread opened on a room answer starts with an EMPTY session while
+      // the room's session holds the exchange — belongs to memory inheritance (design/participant-
+      // model.md §8, rungs 3-4), where images and tool results come along for free because they are
+      // already in the history rather than being re-serialised into a prompt string.
     }
   }
 
